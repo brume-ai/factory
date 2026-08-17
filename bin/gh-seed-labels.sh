@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# gh-seed-labels.sh : cree les labels factory:* sur le depot. Idempotent.
+#
+# La file est opt-out : les labels ne servent qu'a declarer l'EXCEPTION (pris,
+# livre, bloque, arbitrage humain, epopee, priorite). Les couleurs distinguent
+# d'un coup d'oeil ce qui travaille (bleu), ce qui attend un humain (orange),
+# ce qui est parque (gris).
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
+. "$HERE/lib.sh"
+conf_require GH_REPO
+GH_REPO="$(conf_get GH_REPO)"
+if [ -n "${FACTORY_TOKEN:-}" ]; then TOKEN="$FACTORY_TOKEN"
+else TOKEN="$(bash "$HERE/gh-app-token.sh")" || exit $?
+fi
+
+seed() {  # <nom> <couleur> <description>
+  local code
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+    -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\":\"$1\",\"color\":\"$2\",\"description\":\"$3\"}" \
+    "https://api.github.com/repos/$GH_REPO/labels")"
+  case "$code" in
+    2*)  echo "gh-seed-labels: $1 cree" >&2 ;;
+    422) echo "gh-seed-labels: $1 existe deja" >&2 ;;
+    *)   echo "gh-seed-labels: HTTP $code sur $1" >&2; exit 3 ;;
+  esac
+}
+
+seed "factory:in-progress" "1d76db" "Un agent tient cette carte en ce moment"
+seed "factory:delivered"   "0e8a16" "PR livree, en attente d'une review humaine"
+seed "factory:blocked"     "d4c5f9" "Bloquee par une autre carte (voir le corps)"
+seed "factory:needs-human" "d93f0b" "Attend un arbitrage humain, hors file"
+seed "factory:epic"        "5319e7" "Chapeau d'epopee : un fil, pas du travail"
+seed "factory:priority"    "b60205" "Passe devant la file"
