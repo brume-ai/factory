@@ -56,14 +56,18 @@ conf_require() {  # <nom>... : sort en 3 si une valeur manque
 # transport exotique) de remplacer ssh sans toucher aux appelants.
 factory_ssh() {
   if [ -n "${FACTORY_SSH_BIN:-}" ]; then "$FACTORY_SSH_BIN" "$@"; return $?; fi
-  local host key
+  local host key opts
   host="$(conf_get FACTORY_HOST)"; key="$(conf_get FACTORY_KEY)"
+  opts="$(conf_get FACTORY_SSH_OPTS)"
   [ -n "$host" ] && [ -n "$key" ] || {
     echo "factory: FACTORY_HOST / FACTORY_KEY absents (factory.conf ou .env)" >&2
     return 3
   }
-  ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      -o LogLevel=ERROR -o ConnectTimeout=10 -i "$key" \
+  # accept-new memorise la cle au premier contact et refuse ensuite un
+  # changement silencieux ; c'est le minimum pour un canal qui transporte
+  # push-env.
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+      -o LogLevel=ERROR -o ConnectTimeout=10 -i "$key" $opts \
       "factory@$host" "$@"
 }
 

@@ -28,9 +28,11 @@ seed() {  # <nom> <couleur> <description>
   esac
 }
 
-seed "factory:in-progress" "1d76db" "Un agent tient cette carte en ce moment"
-seed "factory:delivered"   "0e8a16" "PR livree, en attente d'une review humaine"
-seed "factory:blocked"     "d4c5f9" "Bloquee par une autre carte (voir le corps)"
-seed "factory:needs-human" "d93f0b" "Attend un arbitrage humain, hors file"
-seed "factory:epic"        "5319e7" "Chapeau d'epopee : un fil, pas du travail"
-seed "factory:priority"    "b60205" "Passe devant la file"
+# LES SIX NOMS SONT LUS, PAS CODES EN DUR : un depot qui a renomme un label
+# (FACTORY_*_LABEL) doit le voir seme sous SON nom, pas sous le defaut Brume.
+seed "$(conf_get FACTORY_BUSY_LABEL     factory:in-progress)" "1d76db" "Un agent tient cette carte en ce moment"
+seed "$(conf_get FACTORY_DONE_LABEL     factory:delivered)"   "0e8a16" "PR livree, en attente d'une review humaine"
+seed "$(conf_get FACTORY_BLOCKED_LABEL  factory:blocked)"     "d4c5f9" "Bloquee par une autre carte (voir le corps)"
+seed "$(conf_get FACTORY_HUMAN_LABEL    factory:needs-human)" "d93f0b" "Attend un arbitrage humain, hors file"
+seed "$(conf_get FACTORY_EPIC_LABEL     factory:epic)"        "5319e7" "Chapeau d'epopee : un fil, pas du travail"
+seed "$(conf_get FACTORY_PRIORITY_LABEL factory:priority)"    "b60205" "Passe devant la file"

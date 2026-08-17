@@ -58,6 +58,10 @@ HUMAN_LABEL="${FACTORY_HUMAN_LABEL:-factory:needs-human}"
 # affichait alors deux cartes « en cours » pour un seul agent au travail, et
 # personne ne pouvait dire laquelle était vivante. La livraison a son propre mot.
 DONE_LABEL="${FACTORY_DONE_LABEL:-factory:delivered}"
+# LE LABEL DE PRIORITE, lui aussi lu directement dans l'environnement (au lieu
+# de conf_get) pour rester coherent avec les cinq labels ci-dessus : le
+# renommer suppose de l'exporter, pas seulement de le poser dans factory.conf.
+PRIO_LABEL="${FACTORY_PRIORITY_LABEL:-factory:priority}"
 
 # Le code du frappeur est PROPAGÉ, pas écrasé : 4 (réseau) doit rester 4.
 # FACTORY_TOKEN court-circuite la frappe : tests hors ligne, ou usage a la main
@@ -128,7 +132,7 @@ api() {  # <chemin> — imprime le corps · 3 = refus de l'API · 4 = raté pass
 # UNE seule requête, partition côté client. L'API n'a pas de « sans ce label »,
 # et deux requêtes exposeraient à une carte qui change d'état entre les deux.
 choose() {  # lit du JSON d'issues sur stdin ; imprime "<busy|ready> <numéro>" ou rien
-  BUSY="$BUSY_LABEL" HUMAN="$HUMAN_LABEL" DONE="$DONE_LABEL" BLOCKED="$BLOCKED_LABEL" EPIC="$EPIC_LABEL" DELIVERED="$delivered" python3 -c '
+  BUSY="$BUSY_LABEL" HUMAN="$HUMAN_LABEL" DONE="$DONE_LABEL" BLOCKED="$BLOCKED_LABEL" EPIC="$EPIC_LABEL" DELIVERED="$delivered" PRIO="$PRIO_LABEL" python3 -c '
 import json, os, sys
 busy_label = os.environ["BUSY"]
 # L endpoint /issues renvoie AUSSI les pull requests — elles portent une clé
@@ -205,7 +209,7 @@ print(min(issues, key=rank)["number"] if issues else "", end="")
 }
 
 busy_raw="$(api "repos/$GH_REPO/issues?state=open&labels=$BUSY_LABEL&per_page=100")" || exit $?
-busy="$(printf '%s' "$busy_raw" | HUMAN="$HUMAN_LABEL" DONE="$DONE_LABEL" BLOCKED="$BLOCKED_LABEL" EPIC="$EPIC_LABEL" choose_first)"
+busy="$(printf '%s' "$busy_raw" | HUMAN="$HUMAN_LABEL" DONE="$DONE_LABEL" BLOCKED="$BLOCKED_LABEL" EPIC="$EPIC_LABEL" PRIO="$PRIO_LABEL" choose_first)"
 if [[ -n "$busy" ]]; then
   # `factory:in-progress` seul recouvre DEUX états très différents : un tour tué
   # en route (à reprendre) et une carte LIVRÉE qui attend sa review (à laisser

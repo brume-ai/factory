@@ -216,6 +216,18 @@ fi
 cd ".worktrees/card-$N"
 ```
 
+**Le submodule de l'usine est VIDE dans un worktree neuf** (git worktree ne
+clone pas les submodules), et le `.env` (gitignore) n'y existe pas non plus.
+Initialisez l'outillage et pointez la configuration sur l'arbre principal :
+
+```bash
+git submodule update --init tools/factory
+export FACTORY_ROOT="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
+```
+
+(`FACTORY_ROOT` est lu par `conf_get` avant toute lecture de fichier, donc
+`factory.conf`/`.env` se résolvent depuis l'arbre principal.)
+
 Si le dépôt porte un hook `worktree-up`, c'est qu'un `git worktree add` nu ne
 suffit pas ici (il faut une base, une pile, une route) : utilisez le hook,
 jamais un contournement.

@@ -43,14 +43,20 @@ FACTORY_GIT_NAME = mon-usine[bot]
 FACTORY_GIT_EMAIL = 123456+mon-usine[bot]@users.noreply.github.com
 FACTORY_HUMAN_LOGIN = mon-login
 EOF
+# Secrets (gitignores) : GH_APP_ID, GH_APP_INSTALL_ID, GH_APP_KEY (chemin du
+# .pem de votre App GitHub). AVANT gh-seed-labels.sh : il frappe un jeton
+# d'App pour poser les labels, et sans ces trois cles la frappe echoue.
+cat > .env <<'EOF'
+GH_APP_ID=123456
+GH_APP_INSTALL_ID=987654
+GH_APP_KEY=/chemin/vers/votre-app.pem
+EOF
+mkdir -p .claude/skills
 ln -s ../../tools/factory/skill/github-loop .claude/skills/github-loop
 bash tools/factory/bin/gh-seed-labels.sh
 echo "make verify est le contrat." > VERIFY.md
 make loop
 ```
-
-Secrets (gitignores, dans `.env` a la racine) : `GH_APP_ID`, `GH_APP_INSTALL_ID`,
-`GH_APP_KEY` (chemin du `.pem` de votre App GitHub).
 
 `factory.conf` est **versionne** (pas de secret dedans) : c'est la
 configuration du produit, la meme pour toute l'equipe. `.env` est
@@ -105,6 +111,7 @@ pour couvrir les deux.
 | `FACTORY_IMAGE_TAG` | `factory:dev` | `conf_get` | `run-loop.sh` : tag de l'image devcontainer lancee par `docker run` |
 | `FACTORY_HOST` | *(requise avec `FACTORY_KEY`)* | `conf_get`/`conf_require` | `bin/lib.sh` (`factory_ssh`), `status.sh`, `deploy.sh`, `bin/factory log`/`ssh` |
 | `FACTORY_KEY` | *(requise avec `FACTORY_HOST`)* | `conf_get`/`conf_require` | idem : chemin de la cle privee SSH vers l'usine |
+| `FACTORY_SSH_OPTS` | *(vide)* | `conf_get`, expansion non quotee dans la commande `ssh` | `bin/lib.sh` (`factory_ssh`), `bin/factory log`/`ssh` : options `ssh` supplementaires (ex. `-o ProxyJump=...`) |
 | `FACTORY_NAME` | `usine` | `conf_get` | `status.sh`, `deploy.sh` : nom affiche dans les messages |
 | `FACTORY_ENV_DENY` | *(vide)* | `conf_get` | `push-env.sh` : liste blanc-separee de variables du `.env` racine qui NE traversent PAS vers l'usine (en plus du motif universel `^(PROD_|.*_SUDO_)`) |
 | `FACTORY_ENV_DENY_PATTERN` | *(vide)* | `conf_get` | `push-env.sh` : motif regex etendu supplementaire, propre au consommateur |
@@ -116,7 +123,7 @@ pour couvrir les deux.
 | `MAIN` | `claude` | variable Make | `factory.mk` : `claude` ou `codex`, choisit l'agent principal de la boucle |
 | `VERBOSE` | *(vide = silencieux)* | variable Make / ligne de commande | `factory.mk` : `make loop VERBOSE=1` fait passer par `claude-stream.sh` pour suivre le tour en direct |
 | `FACTORY_BIN` | `$(FACTORY_DIR)/bin` (le `bin/` du submodule lui-meme) | variable Make (`?=`) | `factory.mk` : chemin des scripts appeles par la boucle, a surcharger si l'usine est vendorisee ailleurs |
-| `FACTORY_TOKEN` | *(vide = un jeton est frappe via `gh-app-token.sh`)* | environnement direct | court-circuite la frappe de jeton dans `wt-cleanup.sh`, `gh-seed-labels.sh`, `gh-next-issue.sh`, `gh-unblock.sh`, `gh-security-triage.py` ; utilise par les tests hors ligne (`tests/helpers.sh`) et pour travailler a la main avec un jeton deja frappe |
+| `FACTORY_TOKEN` | *(vide = un jeton est frappe via `gh-app-token.sh`)* | environnement direct | court-circuite la frappe de jeton dans `wt-cleanup.sh`, `gh-seed-labels.sh`, `gh-next-issue.sh`, `gh-unblock.sh`, `gh-security-triage.py`, `gh-stack.sh`, `gh-pr-attention.sh` ; utilise par les tests hors ligne (`tests/helpers.sh`) et pour travailler a la main avec un jeton deja frappe |
 | `FACTORY_SSH_BIN` | *(vide = `ssh` reel)* | environnement direct | `bin/lib.sh` (`factory_ssh`) : remplace le binaire `ssh`, utilise par les tests et par un transport exotique |
 | `GH_APP_ID` | *(requise)* | `conf_get` | `gh-app-token.sh` : identifiant numerique de l'App GitHub |
 | `GH_APP_INSTALL_ID` | *(requise)* | `conf_get` | `gh-app-token.sh` : identifiant d'installation de l'App sur le depot |
@@ -282,6 +289,13 @@ defaut). Sans fixture, le faux `curl` rend `404` avec un corps `{}`. Chaque
 appel est aussi journalise dans `$FAKE_HTTP_DIR/calls.log`
 (`<methode> <chemin> <donnees>`), ce qui permet aux tests d'asserter QUELS
 appels ont ete faits, pas seulement leur resultat.
+
+**`SHELL := bash` dans `factory.mk`** s'applique a TOUT le Makefile
+consommateur qui l'inclut, pas seulement a la recette `loop` : `include`
+importe des variables et regles dans un seul et meme Makefile, `SHELL` n'est
+donc pas scope au fichier qui la definit. Si le Makefile consommateur a besoin
+d'un `/bin/sh` different pour ses propres recettes, definissez `SHELL` a
+nouveau APRES le `include`.
 
 **`.SHELLFLAGS` dans `factory.mk`.** Un commentaire de la recette `loop`
 mentionne que `.SHELLFLAGS` porte `-e` (« `.SHELLFLAGS` porte `-e`, donc une

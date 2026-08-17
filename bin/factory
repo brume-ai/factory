@@ -22,6 +22,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 . "$HERE/lib.sh"
 FACTORY_HOST="$(conf_get FACTORY_HOST)"; FACTORY_KEY="$(conf_get FACTORY_KEY)"
+FACTORY_SSH_OPTS="$(conf_get FACTORY_SSH_OPTS)"
 
 case "${1:-status}" in
   status)
@@ -32,8 +33,8 @@ case "${1:-status}" in
     # `-f` suit le flux ; un nombre remonte d'autant de lignes. Le suivi part des
     # 40 dernières pour qu'on voie où l'on atterrit au lieu d'un écran vide.
     if [[ "${1:-}" == "-f" ]]; then args="-f -n 40"; else args="-n ${1:-200}"; fi
-    exec ssh -t -i "$FACTORY_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      -o LogLevel=ERROR "factory@$FACTORY_HOST" \
+    exec ssh -t -i "$FACTORY_KEY" -o StrictHostKeyChecking=accept-new \
+      -o LogLevel=ERROR $FACTORY_SSH_OPTS "factory@$FACTORY_HOST" \
       "journalctl -u factory-loop -q --no-pager -o short-iso $args"
     ;;
   deploy)
@@ -48,8 +49,8 @@ case "${1:-status}" in
     shift
     # `-t` force un pseudo-terminal : sans lui, `factory ssh` ouvre un shell sans
     # invite ni historique, et un `docker run -it` lancé depuis là échoue.
-    exec ssh -t -i "$FACTORY_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      -o LogLevel=ERROR "factory@$FACTORY_HOST" "$@"
+    exec ssh -t -i "$FACTORY_KEY" -o StrictHostKeyChecking=accept-new \
+      -o LogLevel=ERROR $FACTORY_SSH_OPTS "factory@$FACTORY_HOST" "$@"
     ;;
   -h|--help|help)
     sed -n '/^#   factory /,/^#   factory ssh/p' "$(readlink -f "${BASH_SOURCE[0]}")" | sed 's/^# *//'
