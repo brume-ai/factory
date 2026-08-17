@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Faux curl pour les tests : repond depuis $FAKE_HTTP_DIR, journalise l'appel.
+# Voir le contrat dans tests/helpers.sh (tache 2 du plan d'extraction).
+set -euo pipefail
+out=""; wfmt=""; method="GET"; url=""; data=""
+args=("$@")
+i=0
+while [ $i -lt ${#args[@]} ]; do
+  a="${args[$i]}"
+  case "$a" in
+    -o) i=$((i+1)); out="${args[$i]}" ;;
+    -w) i=$((i+1)); wfmt="${args[$i]}" ;;
+    -X) i=$((i+1)); method="${args[$i]}" ;;
+    -d) i=$((i+1)); data="${args[$i]}" ;;
+    -H|--retry|--retry-delay|--connect-timeout|--max-time) i=$((i+1)) ;;
+    https://*) url="$a" ;;
+  esac
+  i=$((i+1))
+done
+[ -n "$url" ] || { echo "fake-curl: aucune URL" >&2; exit 2; }
+path="${url#https://api.github.com/}"
+slug="$(printf '%s' "$path" | tr '/?&=%:' '______')"
+printf '%s %s %s\n' "$method" "$path" "$data" >> "${FAKE_HTTP_DIR:?}/calls.log"
+body="{}"; code=404
+if [ -f "$FAKE_HTTP_DIR/$slug.json" ]; then
+  body="$(cat "$FAKE_HTTP_DIR/$slug.json")"; code=200
+fi
+[ -f "$FAKE_HTTP_DIR/$slug.code" ] && code="$(cat "$FAKE_HTTP_DIR/$slug.code")"
+if [ -n "$out" ]; then printf '%s' "$body" > "$out"; else printf '%s' "$body"; fi
+[ -n "$wfmt" ] && printf '%s' "$code"
+exit 0

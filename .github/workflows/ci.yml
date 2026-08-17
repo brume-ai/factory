@@ -1,0 +1,24 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck jq
+      # -S error : les scripts portes de Brume gardent leur style ; seuls les
+      # vrais defauts bloquent.
+      - run: |
+          files="$(ls bin/*.sh bin/factory 2>/dev/null || true)"
+          [ -z "$files" ] || shellcheck -S error $files
+      - run: |
+          [ ! -f bin/gh-security-triage.py ] || python3 -m py_compile bin/gh-security-triage.py
+      - run: bash tests/run.sh
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v27
+      - run: |
+          [ ! -f nix/flake.nix ] || nix eval \
+            ./nix#nixosConfigurations.template.config.system.build.toplevel.drvPath
