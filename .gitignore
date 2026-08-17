@@ -1,3 +1,6 @@
 # Artefacts de test locaux
 tests/tmp/
 result
+
+# Scratch SDD (superpowers), paquets de revue
+.superpowers/
