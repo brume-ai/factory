@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Extrait de Brume (tools/factory/factory) au SHA 12ac9e92 ; generalise ici.
+# factory — l'usine en une commande, depuis n'importe où.
+#
+# Posé sur le PATH par `.devcontainer/post-create.sh` (lien vers ce fichier),
+# comme `browse` : aucun consommateur n'a de chemin en dur à connaître, et taper
+# la commande ne demande plus d'être dans le dépôt.
+#
+# CE FICHIER NE CONTIENT AUCUNE LOGIQUE, et c'est le but. Il aiguille vers les
+# scripts qui font le travail — ceux-là mêmes que les cibles `make factory-*`
+# appellent. Deux portes, une seule pièce : une commande qui réimplémenterait le
+# statut finirait par en donner un autre que celui du Makefile, et c'est celui
+# qu'on ne lit pas qui aurait raison.
+#
+#   factory                 état de l'usine
+#   factory log [-f|N]      journal — en direct, ou les N dernières lignes
+#   factory deploy          met son dépôt au niveau de origin/main
+#   factory stop            lui demande de finir sa carte puis de s'arrêter
+#   factory ssh [commande]  un shell dessus, ou une commande
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+. "$HERE/lib.sh"
+FACTORY_HOST="$(conf_get FACTORY_HOST)"; FACTORY_KEY="$(conf_get FACTORY_KEY)"
+
+case "${1:-status}" in
+  status)
+    exec bash "$HERE/status.sh"
+    ;;
+  log)
+    shift
+    # `-f` suit le flux ; un nombre remonte d'autant de lignes. Le suivi part des
+    # 40 dernières pour qu'on voie où l'on atterrit au lieu d'un écran vide.
+    if [[ "${1:-}" == "-f" ]]; then args="-f -n 40"; else args="-n ${1:-200}"; fi
+    exec ssh -t -i "$FACTORY_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      -o LogLevel=ERROR "factory@$FACTORY_HOST" \
+      "journalctl -u factory-loop -q --no-pager -o short-iso $args"
+    ;;
+  deploy)
+    exec bash "$HERE/deploy.sh"
+    ;;
+  stop)
+    conf_require GH_REPO
+    REPO_DIR="$(conf_get FACTORY_REPO_DIR "$(conf_get FACTORY_STATE /srv/factory)/workspace/$(basename "$(conf_get GH_REPO)")")"
+    exec factory_ssh "cd '$REPO_DIR' && make loop-stop"
+    ;;
+  ssh)
+    shift
+    # `-t` force un pseudo-terminal : sans lui, `factory ssh` ouvre un shell sans
+    # invite ni historique, et un `docker run -it` lancé depuis là échoue.
+    exec ssh -t -i "$FACTORY_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      -o LogLevel=ERROR "factory@$FACTORY_HOST" "$@"
+    ;;
+  -h|--help|help)
+    sed -n '/^#   factory /,/^#   factory ssh/p' "$(readlink -f "${BASH_SOURCE[0]}")" | sed 's/^# *//'
+    ;;
+  *)
+    echo "factory: « $1 » inconnu. « factory --help » liste les commandes." >&2
+    exit 2
+    ;;
+esac
