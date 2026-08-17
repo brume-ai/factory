@@ -220,9 +220,10 @@ Si le dépôt porte un hook `worktree-up`, c'est qu'un `git worktree add` nu ne
 suffit pas ici (il faut une base, une pile, une route) : utilisez le hook,
 jamais un contournement.
 
-`WT_BASE` vaut le **tronc**, sauf si votre carte DÉPEND d'une PR encore ouverte —
-c'est-à-dire si son corps porte « Bloquée par #M » et que la PR de #M n'est pas
-mergée. Dans ce seul cas, elle se pose sur `card/M`.
+La base (le `$base` ci-dessus, calculé par `gh-stack.sh base`) vaut le
+**tronc**, sauf si votre carte DÉPEND d'une PR encore ouverte — c'est-à-dire si
+son corps porte « Bloquée par #M » et que la PR de #M n'est pas mergée. Dans ce
+seul cas, elle se pose sur `card/M`.
 
 Vous ne vous empilez donc **jamais sur la carte précédente par simple
 chronologie**. Deux cartes indépendantes partent toutes les deux de `main` et se
@@ -275,10 +276,10 @@ Le corps de la PR porte, dans cet ordre :
 2. **Chaque critère d'acceptation en face de sa preuve** : la spec qui le couvre,
    la capture, la vidéo. Une suite verte qui ne touche pas le critère ne prouve
    rien.
-3. **Pas de lien de préview.** La pile est détruite en partant (voir plus haut :
-   le plafond de la machine est d'une seule), donc l'adresse serait morte à la
-   seconde où le relecteur clique. Ne l'écrivez pas. Les captures embarquées
-   sont la preuve ; un lien mort en est le contraire.
+3. **Pas de lien de préview.** La pile est détruite en partant (voir plus haut),
+   donc l'adresse serait morte à la seconde où le relecteur clique. Ne
+   l'écrivez pas. Les captures embarquées sont la preuve ; un lien mort en est
+   le contraire.
 4. Ce qui a été **supprimé**, et ce qui reste **non couvert**, dit explicitement.
 
 **Les captures voyagent DANS la branche de la PR**, sous `.evidence/<n>/`, en
