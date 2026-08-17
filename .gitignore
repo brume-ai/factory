@@ -4,3 +4,4 @@ result
 
 # Scratch SDD (superpowers), paquets de revue
 .superpowers/
+__pycache__/
