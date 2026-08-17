@@ -162,7 +162,17 @@ in
       after = [ (if cfg.buildImage then "factory-image.service" else "factory-repo.service") ];
       requires = [ (if cfg.buildImage then "factory-image.service" else "factory-repo.service") ];
       wantedBy = [ "multi-user.target" ];
-      environment.FACTORY_ROOT = cfg.repoDir;
+      # LES OPTIONS DU MODULE DOIVENT PARVENIR AUX SCRIPTS, sinon deux verites
+      # divergent (defaut nix workspace/repo vs defaut shell workspace/<nom du
+      # depot>). conf_get lit l'environnement AVANT tout fichier, donc ces
+      # valeurs deviennent autoritaires pour run-loop.sh comme pour le reste.
+      environment = {
+        FACTORY_ROOT = cfg.repoDir;
+        FACTORY_REPO_DIR = cfg.repoDir;
+        FACTORY_STATE = cfg.stateDir;
+        FACTORY_IMAGE_TAG = cfg.imageTag;
+        FACTORY_TRUNK = cfg.trunk;
+      };
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
