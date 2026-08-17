@@ -5,6 +5,14 @@
 # commande make. Extrait de Brume (Makefile, section github-loop) au SHA
 # 12ac9e92 ; les commentaires dates sont les lecons payees la-bas.
 
+# La recette de `loop` utilise des substitutions bash (`${var//motif/remplacement}`)
+# pour injecter @ISSUE@/@WHY@/@PR@ dans les prompts. `/bin/sh` pointe vers `dash`
+# sur Debian/Ubuntu (donc sur les runners `ubuntu-latest`) : sans cette ligne, la
+# recette y echoue en « Bad substitution » alors qu'elle marche partout ou `/bin/sh`
+# se trouve deja etre bash (Fedora, par exemple). GNU Make resout un SHELL sans
+# slash via le PATH, donc ce nom nu suffit.
+SHELL := bash
+
 FACTORY_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 FACTORY_BIN ?= $(FACTORY_DIR)/bin
 
