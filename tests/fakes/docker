@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Faux docker pour les tests : journalise "docker run" dans $FAKE_DOCKER_LOG,
+# ne lance rien de reel. "ps" repond vide (aucun conteneur factory-loop en
+# cours), pour ne pas declencher le "docker rm -f" de run-loop.sh.
+set -euo pipefail
+sub="${1:-}"
+case "$sub" in
+  ps) exit 0 ;;
+  run)
+    shift
+    printf 'run %s\n' "$*" >> "${FAKE_DOCKER_LOG:?}"
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
