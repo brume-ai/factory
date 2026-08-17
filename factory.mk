@@ -216,7 +216,10 @@ loop:
 			issue="pr$$pr" ; \
 			prompt="$(LOOP_PROMPT_PR)" ; prompt="$${prompt//@PR@/$$pr}" ; prompt="$${prompt//@WHY@/$$why}" ; \
 			echo "$(FACTORY_CYAN)— entretien : PR #$$pr ($$why) —$(FACTORY_RST)" ; \
-		else \
+		elif [ "$$prc" != 9 ]; then \
+		# prc=9 (reprise) saute CE bloc ET le sondage de carte neuve ci-dessous : \
+		# le prc=9 etait avale par le else, la boucle annoncait une reprise puis \
+		# envoyait un prompt de zero — defaut herite de Brume, corrige ici. \
 		issue="$$(GH_REPO=$(GH_REPO) bash "$(FACTORY_BIN)/gh-next-issue.sh")" && rc=0 || rc=$$? ; \
 		case "$$rc" in \
 			3) echo "$(FACTORY_CYAN)— sondage impossible : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ;; \

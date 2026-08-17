@@ -49,4 +49,46 @@ rc=$?
 set -e
 [ "$rc" -ne 0 ] || { echo "assert: sans GH_REPO, la boucle aurait du refuser (code 0 obtenu)" >&2; exit 1; }
 assert_contains "$TESTTMP/conf.out" "GH_REPO absent" "sans GH_REPO, message explicite"
+
+# Reprise vivante (C3) : prc=9 ne doit plus etre avale par le "else" qui
+# sondait une carte neuve et ecrasait le prompt de reprise. Consommateur
+# frais, wt-resume.sh reussit UNE fois (motif "state-file", comme le stub
+# gh-next-issue.sh), gh-pr-attention echoue (pas d'entretien de PR en cours).
+R2="$TESTTMP/stubs-resume"; mkdir -p "$R2"
+cp "$REPO"/tests/stubs/*.sh "$R2/"
+cp "$REPO"/tests/stubs/*.py "$R2/"
+cat > "$R2/wt-resume.sh" <<'EOF'
+#!/usr/bin/env bash
+# Rend une reprise une seule fois, puis rien : un tour exactement.
+marker="${LOOP_TEST_DIR:?}/deja-repris"
+if [ -f "$marker" ]; then exit 1; fi
+touch "$marker"; printf '7\t2 fichier(s) modifie(s)'
+EOF
+chmod +x "$R2/wt-resume.sh"
+
+C2="$TESTTMP/conso2"; mkdir -p "$C2"
+git -C "$C2" init -qb main
+git -C "$C2" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+cat > "$C2/factory.conf" <<'EOF'
+GH_REPO = o/r
+FACTORY_GIT_NAME = usine-test[bot]
+FACTORY_GIT_EMAIL = usine-test@example.invalid
+LOOP_SLEEP = 1
+EOF
+cat > "$C2/Makefile" <<EOF
+include $REPO/factory.mk
+EOF
+rm -f "$TESTTMP/agent.log"
+( cd "$C2" && make loop \
+    FACTORY_BIN="$R2" \
+    CLAUDE_LAUNCH="bash $REPO/tests/stubs/agent.sh" \
+    LOOP_MAIN_BIN=bash ) > "$TESTTMP/resume.out" 2>&1
+rc=$?
+assert_rc 0 "$rc" "la boucle de reprise se termine proprement sur loop-stop"
+assert_contains "$TESTTMP/agent.log" "ENVIRONNEMENT existe déjà" "le prompt de reprise est celui de la resume, pas celui d'une carte neuve"
+assert_contains "$TESTTMP/agent.log" "card-7" "le prompt de reprise nomme le worktree de la carte 7"
+case "$(cat "$TESTTMP/agent.log")" in
+  *"Travaille l'issue \\#7"*)
+    echo "assert: le prompt de carte neuve pour #7 n'aurait pas du etre envoye" >&2; exit 1 ;;
+esac
 echo ok
