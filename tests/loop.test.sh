@@ -14,9 +14,12 @@ EOF
 cat > "$C/Makefile" <<EOF
 include $REPO/factory.mk
 EOF
+# LOOP_MAIN_BIN=bash : evite que la garde "command -v claude" fasse echouer la
+# suite sur un runner CI sans CLI claude installee (bash, lui, est toujours la).
 ( cd "$C" && make loop \
     FACTORY_BIN="$REPO/tests/stubs" \
-    CLAUDE_LAUNCH="bash $REPO/tests/stubs/agent.sh" ) > "$TESTTMP/loop.out" 2>&1
+    CLAUDE_LAUNCH="bash $REPO/tests/stubs/agent.sh" \
+    LOOP_MAIN_BIN=bash ) > "$TESTTMP/loop.out" 2>&1
 rc=$?
 assert_rc 0 "$rc" "la boucle se termine proprement sur loop-stop"
 assert_contains "$TESTTMP/agent.log" "issue #12" "le prompt porte le numero de la carte"
@@ -30,7 +33,7 @@ assert_contains "$TESTTMP/loop.out" "issue #12" "la boucle annonce la carte"
 # et pas la valeur 5 elle-meme (qui, elle, reste dans la source pour les logs).
 git -C "$C" checkout -qb autre
 set +e
-( cd "$C" && make loop FACTORY_BIN="$REPO/tests/stubs" ) > "$TESTTMP/branch.out" 2>&1
+( cd "$C" && make loop FACTORY_BIN="$REPO/tests/stubs" LOOP_MAIN_BIN=bash ) > "$TESTTMP/branch.out" 2>&1
 rc=$?
 set -e
 [ "$rc" -ne 0 ] || { echo "assert: hors du tronc, la boucle aurait du refuser (code 0 obtenu)" >&2; exit 1; }
@@ -41,7 +44,7 @@ assert_contains "$TESTTMP/branch.out" "tournerait avec un outillage périmé" "h
 git -C "$C" checkout -q main
 : > "$C/factory.conf"
 set +e
-( cd "$C" && make loop FACTORY_BIN="$REPO/tests/stubs" ) > "$TESTTMP/conf.out" 2>&1
+( cd "$C" && make loop FACTORY_BIN="$REPO/tests/stubs" LOOP_MAIN_BIN=bash ) > "$TESTTMP/conf.out" 2>&1
 rc=$?
 set -e
 [ "$rc" -ne 0 ] || { echo "assert: sans GH_REPO, la boucle aurait du refuser (code 0 obtenu)" >&2; exit 1; }

@@ -11,8 +11,22 @@ FACTORY_BIN ?= $(FACTORY_DIR)/bin
 -include $(CURDIR)/factory.conf
 
 FACTORY_TRUNK  ?= main
+# Attente entre deux SONDAGES quand la file est vide. Le sondage coûte une requête
+# HTTP, pas un agent : on peut donc attendre peu sans rien gaspiller. Une usine
+# n'a pas à s'arrêter quand la file se vide — elle attend du travail.
 LOOP_SLEEP     ?= 60
+# Garde anti-tourniquet. Un agent qui rend la main sans faire avancer sa carte —
+# typiquement parce qu'il a lancé une vérification EN FOND puis terminé son tour —
+# la voit revenir au sondage suivant, et un agent NEUF repart de zéro. Observé le
+# 2 août : quatre tours sur la même carte, quatre suites e2e complètes payées
+# pour rien. Au-delà de ce compte, la boucle s'arrête et le DIT.
 LOOP_MAX_RETRY ?= 3
+# `make loop` lance en YOLO (--dangerously-skip-permissions, sans surveillance) sur
+# Opus 5 à effort LOW, via CLAUDE_LAUNCH (surchargeable). Les prompts restent
+# COURTS À DESSEIN : toute la procédure vit dans le skill `github-loop` — un fait,
+# un endroit. La redire ici donnerait à l'agent deux copies concurrentes des mêmes
+# ordres, ce qui est ce qui le fait argumenter et s'arrêter trop tôt. Modifiez le
+# skill, pas ce prompt.
 # PAS FABLE 5 : voir la lecon du 7 aout dans l'historique Brume (pot de credits
 # distinct, tours qui meurent en 4 s en ressemblant a une usine occupee).
 CLAUDE_LAUNCH  ?= claude --dangerously-skip-permissions --model claude-opus-5 --effort low
@@ -49,6 +63,16 @@ endif
 loop:
 	@command -v $(LOOP_MAIN_BIN) >/dev/null 2>&1 || { echo "$(LOOP_MAIN_BIN) CLI introuvable dans le PATH"; exit 1; }
 	@[ -n "$(GH_REPO)" ] || { echo "factory.mk: GH_REPO absent (factory.conf a la racine du depot)"; exit 3; }
+	@# IDENTITÉ DE COMMIT DE L'USINE. Une CI de dépôt consommateur qui vérifie
+	@# l'auteur des commits (allowlist bot, check CLA...) refuse tout auteur
+	@# qu'elle ne reconnaît pas. Sans identité explicite, l'agent signe avec
+	@# l'identité git de son environnement d'exécution — un compte non lié à
+	@# GitHub — la CI passe au rouge, et le tour SUIVANT paie un cycle complet
+	@# pour réécrire le commit. Payé deux fois de suite chez Brume (cartes
+	@# #33 puis #34) : ~25 min de CI et deux tours d'agent brûlés pour un
+	@# champ d'auteur. Git lit GIT_AUTHOR_*/GIT_COMMITTER_* AVANT `user.name`,
+	@# donc l'identité est bonne dès le premier commit, sans que l'agent ait
+	@# à y penser.
 	@[ -n "$(FACTORY_GIT_NAME)" ] && [ -n "$(FACTORY_GIT_EMAIL)" ] || { echo "factory.mk: FACTORY_GIT_NAME / FACTORY_GIT_EMAIL absents (factory.conf)"; exit 3; }
 	@# GARDE : la boucle ne tourne QUE depuis le tronc. Son outillage (Makefile,
 	@# skills, tools/factory) est versionné avec le produit : sur une branche de
