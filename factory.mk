@@ -195,6 +195,15 @@ loop:
 		GH_REPO=$(GH_REPO) bash "$(FACTORY_BIN)/wt-cleanup.sh" || true ; \
 		GH_REPO=$(GH_REPO) bash "$(FACTORY_BIN)/gh-unblock.sh" || true ; \
 		command -v python3 >/dev/null && GH_REPO=$(GH_REPO) python3 "$(FACTORY_BIN)/gh-security-triage.py" || true ; \
+		# LE MÉNAGE DU CONSOMMATEUR, s'il en a. Un projet a des alertes que \
+		# l'usine ne connaît pas — les erreurs de production de SON schéma \
+		# d'événements, ses files à lui — et qui doivent devenir des cartes au \
+		# même moment que les autres. Sans ce crochet il n'a que deux mauvaises \
+		# options : les câbler hors de la boucle, où elles ne tournent jamais, \
+		# ou forker `factory.mk`. Comme le reste du ménage, un échec ne tue pas \
+		# le tour : `|| true`. \
+		[ -x "$(CURDIR)/tools/factory-hooks/housekeeping" ] \
+		  && GH_REPO=$(GH_REPO) "$(CURDIR)/tools/factory-hooks/housekeeping" || true ; \
 		prompt="" ; \
 		pr="$$(GH_REPO=$(GH_REPO) bash "$(FACTORY_BIN)/gh-pr-attention.sh")" && prc=0 || prc=$$? ; \
 		if [ "$$prc" = 4 ]; then \
