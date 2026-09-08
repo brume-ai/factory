@@ -41,6 +41,7 @@ pour couvrir les deux.
 | `FACTORY_GIT_NAME` | *(requise)* | variable Make (`-include factory.conf`), verifiee au demarrage de `make loop` | `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` exportes par `factory.mk` avant chaque tour |
 | `FACTORY_GIT_EMAIL` | *(requise)* | idem | `GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_EMAIL` idem |
 | `FACTORY_HUMAN_LOGIN` | *(requise)* | `conf_get`/`conf_require` | `gh-pr-attention.sh` (qui traite une review comme une instruction) et le canal de confiance du skill `github-loop` |
+| `FACTORY_BOT_LOGIN` | *(requise)* | `conf_require`/`conf_get` | `gh-pr-attention.sh` : le login sous lequel l'usine PARLE. C'est sa réponse qui marque un retour du relecteur comme traité — sans défaut possible, une valeur fausse rendrait chaque PR soit muette, soit éternellement réveillée |
 | `FACTORY_HUMAN_LABEL` | `factory:needs-human` | `conf_get` dans `gh-pr-attention.sh` ; environnement direct dans `gh-next-issue.sh` | label « decision humaine requise, hors file » |
 | `FACTORY_BLOCKED_LABEL` | `factory:blocked` | environnement direct | `gh-next-issue.sh` (exclu de la file), `gh-unblock.sh` (retire quand le bloqueur tombe) |
 | `FACTORY_EPIC_LABEL` | `factory:epic` | environnement direct | `gh-next-issue.sh` (exclu de la file : chapeau d'epopee, pas du travail) |
