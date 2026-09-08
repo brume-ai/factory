@@ -100,7 +100,7 @@ ordre** :
 | Le besoin | La réponse |
 |---|---|
 | varie d'un déploiement à l'autre | une clé dans `factory.conf` |
-| c'est de la politique — l'ordre de la file, la façon de livrer, une PR de promotion | un crochet dans `.factory/hooks/` |
+| c'est de la politique — l'ordre de la file, la façon de livrer, une PR de promotion, des alertes propres au projet | un crochet dans `tools/factory-hooks/` |
 | c'est du mécanisme | ça remonte ici, et tout le monde en profite |
 
 Si aucune des trois ne convient, la frontière est mal placée : ouvrez une carte

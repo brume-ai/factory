@@ -92,3 +92,16 @@ case "$(cat "$TESTTMP/agent.log")" in
     echo "assert: le prompt de carte neuve pour #7 n'aurait pas du etre envoye" >&2; exit 1 ;;
 esac
 echo ok
+
+# --- le crochet de menage du consommateur -----------------------------------
+# Un projet doit pouvoir carver SES alertes dans le meme tour que les notres,
+# sinon il les cable hors de la boucle (ou elles ne tournent jamais) ou il forke
+# factory.mk. Le crochet est appele s'il est executable, ignore sinon.
+grep -q 'tools/factory-hooks/housekeeping' "$REPO/factory.mk" \
+  || { echo "factory.mk n'appelle pas le crochet de menage" >&2; exit 1; }
+grep -q 'x "$(CURDIR)/tools/factory-hooks/housekeeping"' "$REPO/factory.mk" \
+  || { echo "le crochet doit etre teste executable avant d'etre appele" >&2; exit 1; }
+sec="$(grep -n 'gh-security-triage' "$REPO/factory.mk" | tail -1 | cut -d: -f1)"
+hk="$(grep -n 'tools/factory-hooks/housekeeping' "$REPO/factory.mk" | tail -1 | cut -d: -f1)"
+[ "$hk" -gt "$sec" ] || { echo "le crochet doit venir APRES le triage de securite" >&2; exit 1; }
+echo ok

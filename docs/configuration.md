@@ -71,3 +71,16 @@ pour couvrir les deux.
 | `GH_APP_INSTALL_ID` | *(requise)* | `conf_get` | `gh-app-token.sh` : identifiant d'installation de l'App sur le depot |
 | `GH_APP_KEY` | `$FACTORY_STATE/secrets/gh-app.pem` | `conf_get` | `gh-app-token.sh` : chemin de la cle privee `.pem` de l'App |
 
+
+## Crochets
+
+Des exécutables lus dans `tools/factory-hooks/` du dépôt consommateur, appelés
+s'ils existent et ignorés sinon. C'est la surface qui remplace le fork.
+
+| Crochet | Quand | Ce qu'il fait |
+|---|---|---|
+| `worktree-up <nom> <base>` | à la prise d'une carte | fabrique l'environnement complet, quand un `git worktree` nu ne suffit pas |
+| `worktree-down <nom>` | au nettoyage | démonte ce que `worktree-up` a monté |
+| `housekeeping` | à chaque tour, après le triage de sécurité | carve les alertes propres au projet ; un échec ne tue pas le tour |
+| `run-loop-args` | au lancement du conteneur | une ligne par argument `docker run` supplémentaire |
+| `env-overrides` | à la projection du `.env` | des lignes `CLÉ=VALEUR`, lues **littéralement**, sans expansion |
