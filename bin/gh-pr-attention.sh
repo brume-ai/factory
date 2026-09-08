@@ -30,9 +30,13 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 . "$HERE/lib.sh"
-conf_require GH_REPO FACTORY_HUMAN_LOGIN
+conf_require GH_REPO FACTORY_HUMAN_LOGIN FACTORY_BOT_LOGIN
 GH_REPO="$(conf_get GH_REPO)"
 HUMAN="$(conf_get FACTORY_HUMAN_LOGIN)"
+# Le login sous lequel l'usine PARLE — c'est sa réponse qui marque un retour
+# comme traité. Requis et sans défaut, comme le login humain : un défaut faux
+# rendrait chaque PR soit muette, soit éternellement réveillée, sans rien dire.
+BOT="$(conf_get FACTORY_BOT_LOGIN)"
 
 # Le code du frappeur est PROPAGÉ, pas écrasé : 4 (réseau) doit rester 4.
 # FACTORY_TOKEN court-circuite la frappe : tests hors ligne, ou usage a la main
@@ -124,36 +128,52 @@ else: print("ok")
   rev="$(api "repos/$GH_REPO/pulls/$n/reviews?per_page=100")" || exit $?
   con="$(api "repos/$GH_REPO/issues/$n/comments?per_page=100")" || exit $?
   lin="$(api "repos/$GH_REPO/pulls/$n/comments?per_page=100")" || exit $?
-  said="$(printf '[%s,%s,%s]' "$rev" "$con" "$lin" \
-    | HUMAN="$HUMAN" python3 -c '
+  #
+  # CE QUI RÉPOND À CE MOT EST UN MOT DE L'USINE, JAMAIS UN COMMIT. On comparait
+  # la parole de l'humain à la date de committer de la pointe de branche, et on
+  # tenait pour traité tout mot plus ancien que la pointe. Or un rebase RÉÉCRIT
+  # toutes les dates de committer : n'importe quelle poussée — un restack sur une
+  # base qui a bougé, un correctif pour un gate rouge sans rapport — enterrait la
+  # parole sous une pointe qui ne la concernait pas, en silence et pour de bon.
+  # Observé le 2026-09-08 : « Le message de la modal n'est pas clair » à 08:10:42,
+  # restack à 08:17:29, jamais traité et jamais répondu.
+  # L'accusé de réception est donc quelque chose que l'usine DIT. Une réponse
+  # survit à un rebase, elle ne coûte aucun appel de plus — les trois corps sont
+  # déjà là, et la pointe n'est plus lue du tout — et elle laisse à l'humain une
+  # réponse plutôt qu'un silence. Le skill `github-loop` rend cette réponse
+  # obligatoire ; faute de quoi la PR revient au tour suivant, ce qui est la
+  # bonne conduite, et LOOP_MAX_RETRY borne le manège.
+  #
+  # Une ligne, deux champs, un point tenant lieu de date absente : un `read` sur
+  # un champ vide décalerait les colonnes et donnerait à `answered` la date de
+  # l'humain.
+  words="$(printf '[%s,%s,%s]' "$rev" "$con" "$lin" \
+    | HUMAN="$HUMAN" BOT="$BOT" python3 -c '
 import json, os, sys
-human = os.environ["HUMAN"]
-best = ""
+human, bot = os.environ["HUMAN"], os.environ["BOT"]
+said = answered = ""
 for group in json.load(sys.stdin):
     for it in group:
-        if (it.get("user") or {}).get("login") != human:
-            continue
-        # Une review « approuvée » sans corps ne demande rien : la traiter comme
-        # une instruction ferait boucler la PR sur un feu vert.
-        if it.get("state") == "APPROVED" and not (it.get("body") or "").strip():
-            continue
+        login = (it.get("user") or {}).get("login")
         ts = it.get("submitted_at") or it.get("created_at") or ""
-        if ts > best: best = ts
-print(best)
+        if login == human:
+            # Une review « approuvée » sans corps ne demande rien : la traiter
+            # comme une instruction ferait boucler la PR sur un feu vert.
+            if it.get("state") == "APPROVED" and not (it.get("body") or "").strip():
+                continue
+            if ts > said: said = ts
+        elif login == bot:
+            if ts > answered: answered = ts
+print(said or ".", answered or ".")
 ')" || exit $?
-
-  # La date du DERNIER COMMIT de la branche, pas `head.repo.pushed_at` : ce
-  # dernier est la date de push du DÉPÔT entier, donc il avance dès qu'une autre
-  # branche bouge — et un mot de l'humain paraissait alors déjà traité.
-  pushed="$(api "repos/$GH_REPO/commits/$sha" | python3 -c '
-import json, sys
-print(json.load(sys.stdin)["commit"]["committer"]["date"])
-')" || exit $?
+  read -r said answered <<<"$words"
+  [[ "$said" == "." ]] && said=""
+  [[ "$answered" == "." ]] && answered=""
 
   reason=""
   [[ "$mergeable" == "False" ]] && reason="conflit"
   [[ -z "$reason" && "$ci" == "failure" ]] && reason="CI rouge"
-  [[ -z "$reason" && -n "$said" && "$said" > "${pushed:-}" ]] && reason="retour de $HUMAN à traiter"
+  [[ -z "$reason" && -n "$said" && "$said" > "$answered" ]] && reason="retour de $HUMAN à traiter"
   [[ -n "$reason" ]] || continue
 
   # Une PR marquée attend une main humaine : la reprendre à l'identique ne
