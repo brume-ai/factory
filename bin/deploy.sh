@@ -47,6 +47,30 @@ GH_TOKEN="$(bash tools/factory/bin/gh-app-token.sh)"
 git -c "http.https://github.com/.extraheader=Authorization: Basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
     fetch --quiet origin
 git reset --hard --quiet "origin/$TRUNK"
+
+# LE POINTEUR DU SUBMODULE A BOUGÉ AVEC LE TRONC, PAS SON CONTENU. `reset --hard`
+# écrit le gitlink ; l'arbre de travail du submodule, lui, reste au commit d'avant
+# — ou vide, si le dépôt vient tout juste d'acquérir ce submodule. La boucle
+# exécuterait alors l'outillage d'avant le dernier correctif, ou pas d'outillage
+# du tout : `make loop` s'arrête sur « l'usine partagée n'est pas déployée », et
+# c'est le DÉPLOIEMENT qui aurait dû le dire.
+#
+# AVANT la comparaison before/after, délibérément : un déploiement qui ne change
+# pas le tronc doit quand même réparer un submodule laissé à moitié par un run
+# interrompu. Sinon « déjà à jour » devient le message d'une machine cassée.
+#
+# PAS DE `|| true`, contrairement au tour de boucle (`factory.mk`) : la boucle
+# tolère un outillage figé parce qu'elle tourne quand même ; `deploy` PROMET une
+# machine à jour, et un submodule non initialisé après un déploiement réussi est
+# exactement le mensonge que ce script existe pour ne pas dire.
+#
+# Le même en-tête d'autorisation que le fetch : un submodule privé vit dans la
+# même installation d'App, et `git -c` se transmet aux fetch enfants.
+if [[ -f .gitmodules ]]; then
+  git -c "http.https://github.com/.extraheader=Authorization: Basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+      submodule update --init --recursive --quiet
+fi
+
 after="$(git rev-parse --short HEAD)"
 
 if [[ "$before" == "$after" ]]; then
