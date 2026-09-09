@@ -100,8 +100,15 @@ ordre** :
 | Le besoin | La réponse |
 |---|---|
 | varie d'un déploiement à l'autre | une clé dans `factory.conf` |
-| c'est de la politique — l'ordre de la file, la façon de livrer, une PR de promotion, des alertes propres au projet | un crochet dans `tools/factory-hooks/` |
+| c'est de la politique — l'ordre de la file, la surface de relecture, une PR de promotion, des alertes propres au projet | un crochet dans `tools/factory-hooks/` |
 | c'est du mécanisme | ça remonte ici, et tout le monde en profite |
+
+**Le mode de livraison n'est pas de la politique, c'est une clé** — un crochet ne
+peut pas changer ce qui se passe à l'intérieur des scripts partagés, et le mode y
+change sept choses. Voir [`docs/livraison.md`](docs/livraison.md), qui décrit la
+cible : `pull-request` (une PR, fermée par le merge humain) et `trunk` (un push
+sur le tronc de recette, fermé par le déploiement), pour les dépôts où la
+protection de branche n'existe pas.
 
 Si aucune des trois ne convient, la frontière est mal placée : ouvrez une carte
 ici plutôt que de forker. Un crochet reste dans votre dépôt, y compris privé —
