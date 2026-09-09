@@ -176,4 +176,96 @@ set +e; msg="$(FACTORY_DELIVERY=trunc bash "$S" 2>&1 >/dev/null)"; rc=$?; set -e
 assert_rc 3 "$rc" "une valeur inconnue sort en 3"
 assert_contains "$msg" "FACTORY_DELIVERY" "le message nomme la cle"
 [ -s "$FAKE_HTTP_DIR/calls.log" ] && { echo "valeur inconnue : l'API a quand meme ete sondee" >&2; exit 1; }
+# --- LE MODE PAR DEFAUT NE BOUGE PAS D'UN OCTET ------------------------------
+# Ce que les cas qui suivent tiennent : `pull-request` est le mode de TOUS les
+# consommateurs installes, et ce chantier avait le droit de lui ajouter zero
+# comportement. Verifie par A/B contre l'avant-chantier (5429249) sur quinze
+# scenarios ; ces cas-la sont ceux qu'aucun test ne tenait, mesure par mutation.
+
+# r) LE VERROU DE `pull-request`, QUE RIEN NE TENAIT. La sonde carte par carte
+#    (`pulls?state=open&head=<proprietaire>:card/N`) est ce qui separe un tour
+#    tue en route -- a reprendre -- d'une carte LIVREE qui attend sa review : la
+#    panne du 2 aout, trois tours d'affilee sur #27. Aucun cas ne posait de carte
+#    `factory:in-progress` dans ce mode : le bloc entier mis sous `if false`
+#    laissait la suite au vert, et ce chantier venait de le REINDENTER a la main.
+#    La liste globale des PR est vide ici, et ce n'est pas un artifice : elle est
+#    paginee a 100, la sonde carte par carte est la seule qui voie au-dela.
+printf '[{"number":5,"created_at":"2026-01-01","labels":[{"name":"factory:in-progress"}]}]' > "$I"
+cp "$I" "$B"; printf '[]' > "$P"
+printf '[{"number":42}]' > "$FAKE_HTTP_DIR/repos_o_r_pulls_state_open_head_o_card_5_per_page_1.json"
+# un run tourne sur le tronc, et ce mode ne le saura jamais : il ne le demande pas.
+printf '{"workflow_runs":[{"id":21,"name":"tests","event":"push","status":"in_progress","html_url":"https://gh/run/21"}]}' > "$R"
+: > "$FAKE_HTTP_DIR/calls.log"
+set +e; n="$(bash "$S" 2>"$TESTTMP/err")"; rc=$?; set -e
+assert_contains "$TESTTMP/err" "attend une review" "pull-request : la carte livree est nommee comme telle, pas reprise en silence"
+assert_contains "$TESTTMP/err" "PR #42" "pull-request : la PR qui tranche est citee par son numero"
+assert_contains "$FAKE_HTTP_DIR/calls.log" "pulls?state=open&head=o:card/5" "la sonde porte sur la branche de CETTE carte, prefixee du proprietaire"
+# LA PROPRIETE LA PLUS CHERE DU CHANTIER. `actions/runs` est le seul appel du
+# script qui demande une permission d'App neuve (Actions: Read) : un consommateur
+# en pull-request qui se mettrait a le sonder recolterait un 403, donc un code 3,
+# donc l'arret de l'usine -- une installation existante n'a pas cette permission.
+# Ce cas est le seul qui traverse TOUT le script dans ce mode (le bloc ci-dessus
+# ne sort pas), donc le seul ou la garde de mode remplacee par `if true` meurt.
+assert_file_lacks "$FAKE_HTTP_DIR/calls.log" "actions/runs" "pull-request n'interroge jamais le pipeline"
+# CE QUE CE CAS NE PROUVE PAS, ET POURQUOI IL L'ECRIT QUAND MEME : la carte est
+# ensuite SERVIE (rc 0), car ce qui la retire de la file c'est la liste GLOBALE
+# des PR, pas cette sonde -- qui, elle, ne fait que parler. Comportement identique
+# a l'avant-chantier, verifie par A/B ; fixe ici pour qu'on le voie, pas pour
+# qu'on l'approuve.
+assert_rc 0 "$rc" "pull-request : la sonde par carte parle, mais ne retire pas la carte de la file"
+assert_eq "5" "$n" "pull-request : ... et c'est la liste globale des PR qui le ferait"
+
+# s) MEME CARTE PRISE, AUCUNE PR NULLE PART : c'est un tour tue en route, il se
+#    reprend, et il se DIT autrement -- « aucune PR » plutot que « deja prise ».
+#    Sans le bloc, le numero sortirait quand meme (par `choose`) : ce qui meurt
+#    en son absence, c'est le message et la sonde. Un cas qui ne regarderait que
+#    stdout ne tiendrait donc rien du tout.
+printf '[]' > "$FAKE_HTTP_DIR/repos_o_r_pulls_state_open_head_o_card_5_per_page_1.json"
+: > "$FAKE_HTTP_DIR/calls.log"
+set +e; n="$(bash "$S" 2>"$TESTTMP/err")"; rc=$?; set -e
+assert_rc 0 "$rc" "pull-request : un tour interrompu se reprend"
+assert_eq "5" "$n" "pull-request : la carte prise sans PR revient a un agent"
+assert_contains "$TESTTMP/err" "aucune PR" "pull-request : la reprise dit ce qui l'autorise"
+assert_contains "$FAKE_HTTP_DIR/calls.log" "pulls?state=open&head=o:card/5" "la sonde part aussi quand elle ne trouve rien"
+assert_file_lacks "$FAKE_HTTP_DIR/calls.log" "actions/runs" "pull-request n'interroge pas plus le pipeline quand il reprend"
+
+# t) UNE CARTE MISE DE COTE NE GELE PAS LA FILE. Une carte laissee en
+#    `factory:in-progress` ET mise de cote -- un agent qui a rendu la main sur une
+#    decision, le cas le plus banal -- n'attend plus aucun pipeline : personne ne
+#    la reprendra. Sans le filtre, elle tenait TOUTE la file au premier run qui
+#    passe sur le tronc, et le message accusait le pipeline. Le pipeline n'est
+#    alors meme pas interroge : il n'y a rien a departager.
+printf '{"workflow_runs":[{"id":22,"name":"tests","event":"push","status":"in_progress","html_url":"https://gh/run/22"}]}' > "$R"
+for lab in factory:needs-human factory:blocked factory:epic; do
+  printf '[{"number":5,"created_at":"2026-01-01","labels":[{"name":"factory:in-progress"},{"name":"%s"}]},{"number":7,"created_at":"2026-02-01","labels":[]}]' "$lab" > "$I"
+  : > "$FAKE_HTTP_DIR/calls.log"
+  set +e; n="$(FACTORY_DELIVERY=trunk bash "$S" 2>/dev/null)"; rc=$?; set -e
+  assert_rc 0 "$rc" "trunk : une carte prise puis $lab ne gele pas la file"
+  assert_eq "7" "$n" "trunk : la carte neuve part malgre la carte $lab restee en cours"
+  assert_file_lacks "$FAKE_HTTP_DIR/calls.log" "actions/runs" "trunk : rien a departager ($lab), le pipeline n'est pas interroge"
+done
+
+# u) L'INDICE DE PERMISSION NOMME L'ENDPOINT, PAS N'IMPORTE QUEL CHEMIN QUI
+#    CONTIENT `actions`. `github.com/actions` est une vraie organisation : sur un
+#    depot `actions/runner`, le motif attrapait le 403 des ISSUES et envoyait
+#    chercher « Actions: Read » -- exactement la classe de mauvais diagnostic que
+#    ce script existe pour supprimer (cinq arrets d'usine en sept jours), et la
+#    SEULE difference de comportement que l'A/B contre l'avant-chantier ait
+#    trouvee en mode pull-request.
+rm -f "$FAKE_HTTP_DIR"/*.code
+printf '403' > "$FAKE_HTTP_DIR/repos_actions_runner_pulls_state_open_per_page_100.code"
+set +e; msg="$(GH_REPO=actions/runner bash "$S" 2>&1 >/dev/null)"; rc=$?; set -e
+assert_rc 3 "$rc" "un 403 reste une erreur de configuration"
+assert_contains "$msg" "Issues: Read and write" "un depot nomme actions/ n'est pas l'endpoint Actions"
+assert_not_contains "$msg" "Actions: Read" "et on ne l'envoie pas chercher la mauvaise permission"
+# ... et le vrai endpoint Actions, lui, se nomme : c'est la permission neuve, donc
+# la seule que le mode `trunk` puisse manquer sur une installation existante.
+printf '[{"number":5,"created_at":"2026-01-01","labels":[{"name":"factory:in-progress"}]}]' > "$I"
+rm -f "$FAKE_HTTP_DIR"/*.code
+printf '403' > "$FAKE_HTTP_DIR/repos_o_r_actions_runs_branch_main_per_page_20.code"
+set +e; msg="$(FACTORY_DELIVERY=trunk bash "$S" 2>&1 >/dev/null)"; rc=$?; set -e
+assert_rc 3 "$rc" "un 403 sur le pipeline reste une erreur de configuration"
+assert_contains "$msg" "Actions: Read" "trunk : la permission neuve est nommee quand le pipeline refuse"
+rm -f "$FAKE_HTTP_DIR"/*.code
+
 echo ok

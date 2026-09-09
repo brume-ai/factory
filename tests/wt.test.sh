@@ -24,12 +24,20 @@ O="$TESTTMP/origin.git"; git init -q --bare -b main "$O" 2>/dev/null || git init
 R="$TESTTMP/repo"; git init -qb main "$R"
 git -C "$R" remote add origin "$O"
 printf 'GH_REPO = o/r\n' > "$R/factory.conf"
-# Un consommateur en mode pull-request ignore ses worktrees ; sans ça l'arbre
-# principal serait sale en permanence et le mode trunk verrait une reprise
-# fantôme à chaque tour.
-printf '.worktrees/\n' > "$R/.gitignore"
-git -C "$R" add factory.conf .gitignore
+# AUCUN `.gitignore` ICI, ET C'EST LE POINT. La fixture en portait un
+# (`.worktrees/`) qui masquait le SEUL chemin de migration que ce commit prétend
+# couvrir : un consommateur qui bascule `pull-request` → `trunk` a des worktrees
+# sur le disque, et son `.gitignore` n'a aucune raison de les couvrir — c'est le
+# mode précédent qui les avait posés là. Avec cette ligne, tous les cas trunk
+# passaient et le verrou du cas « 2 bis » restait invisible. La condition
+# réaliste EST la fixture ; l'exigence de `.gitignore` ne vivait que dans un
+# commentaire, et un commentaire ne mesure rien.
+git -C "$R" add factory.conf
 git -C "$R" -c user.email=t@t -c user.name=t commit -q -m init
+# LE COMMIT D'INIT, retenu par son SHA et pas par `HEAD~1` : les cas ci-dessous
+# empilent des commits non poussés, et un `HEAD~1` en publierait un de plus à
+# chaque ajout — le cas 5 mesurerait alors autre chose que ce qu'il annonce.
+BASE="$(git -C "$R" rev-parse HEAD)"
 git -C "$R" push -q origin main
 git -C "$R" fetch -q origin
 export FACTORY_ROOT="$R"
@@ -72,11 +80,51 @@ echo sale > "$R/.worktrees/card-5/fichier"
 
 out="$(bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
 assert_rc 0 "$rc" "pull-request : le worktree de la carte 5 porte du travail"
-assert_contains "$out" "5	" "pull-request : la carte vient du NOM du répertoire"
+# AUSSI STRICT QUE LE VOLET TRUNK, et pour une raison précise : `_what` a renommé
+# « N fichier(s) modifié(s) » en « N fichier(s) non commité(s) » DANS LES DEUX
+# MODES. Cette phrase remonte dans @WHY@ (factory.mk), donc dans l'invite de
+# l'agent et dans `make factory-log` : un consommateur en pull-request VOIT donc
+# quelque chose changer en montant de version. Le changement est défendable — il
+# nomme les fichiers non suivis, que « modifié » ne couvre pas — mais tant que
+# personne ne le tient, la prochaine main le rebascule sans le savoir. Mesuré :
+# muter le libellé faisait tomber une assertion du volet TRUNK, jamais celle-ci.
+assert_eq "5	1 fichier(s) non commité(s)" "$out" "pull-request : la carte vient du NOM du répertoire, et la phrase rendue est FIXÉE"
 
 out="$(FACTORY_DELIVERY=trunk bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
 assert_rc 1 "$rc" "trunk : un worktree n'existe pas pour lui"
 assert_contains "$TESTTMP/err" "rien d'inachevé dans l'arbre" "trunk : message de l'arbre unique"
+
+# --- 2 bis. LA BASCULE pull-request → trunk, celle d'un vrai consommateur -----
+# LE VERROU, mesuré : `.worktrees/` non ignoré fait rendre « ?? .worktrees/ » à
+# `git status --porcelain`, donc wt-resume rendait rc 0 sur la carte « ? » À
+# CHAQUE TOUR — pendant que wt-cleanup refuse par principe de détruire ces mêmes
+# worktrees (« un changement de clé n'est pas le moment de supprimer du travail
+# que personne n'a relu »). Les deux décisions du même commit se verrouillaient
+# l'une l'autre, et la boucle repartait sans fin sur une carte que rien ne clôt.
+# La première assertion garde LA FIXTURE : si un `.gitignore` revient un jour
+# masquer `.worktrees/`, ce cas doit tomber au lieu de passer sans rien prouver.
+assert_eq "?? .worktrees/" "$(git -C "$R" status --porcelain)" \
+  "bascule : l'arbre VOIT le reste de l'autre mode — sans ça ce cas ne prouve rien"
+out="$(FACTORY_DELIVERY=trunk bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
+assert_rc 1 "$rc" "bascule : un worktree résiduel n'est PAS du travail inachevé dans l'arbre courant"
+assert_contains "$TESTTMP/err" "rien d'inachevé dans l'arbre" "bascule : et wt-resume le dit"
+out="$(FACTORY_DELIVERY=trunk bash "$REPO/bin/wt-cleanup.sh" 2>&1)" && rc=0 || rc=$?
+assert_rc 0 "$rc" "bascule : wt-cleanup ne tue pas le tour"
+assert_contains "$out" "card-* subsistent" "bascule : wt-cleanup NOMME le reste, au lieu de le détruire"
+[ -d "$R/.worktrees/card-5" ] || { echo "bascule : le worktree a ete detruit" >&2; exit 1; }
+
+# --- 2 ter. TRUNK : un commit non poussé qui ne nomme AUCUNE carte ------------
+# LE CAS LE PLUS BANAL QUI SOIT — `git commit -m "wip"` — et il n'était nulle
+# part. Sans référence, le `grep` de wt-resume sort en 1 ; sous `pipefail` +
+# `set -e`, l'affectation puis le script mourraient en rc 1, et rc 1 veut dire
+# « rien à reprendre » pour factory.mk : la boucle prendrait une carte NEUVE et
+# piétinerait ce commit. C'est le `|| true` qui l'empêche, et c'est CE cas-là,
+# lui seul, qui le tient — mutation « `|| true` retiré » : rc 1, stdout vide.
+git -C "$R" -c user.email=t@t -c user.name=t commit -q --allow-empty \
+  -m "wip: rien qui nomme une carte"
+out="$(FACTORY_DELIVERY=trunk bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
+assert_rc 0 "$rc" "trunk : un commit sans référence reste du travail inachevé, pas « rien à reprendre »"
+assert_eq "?	1 commit(s) non poussé(s)" "$out" "trunk : carte inconnue, mais le travail est nommé ET rendu"
 
 # --- 3. TRUNK : le numéro de carte se relit dans les COMMITS ------------------
 git -C "$R" -c user.email=t@t -c user.name=t commit -q --allow-empty \
@@ -86,6 +134,19 @@ assert_rc 0 "$rc" "trunk : un commit non poussé est du travail inachevé"
 assert_contains "$out" "42	" "trunk : la carte vient de « Refs #42 », pas d'un nom de répertoire"
 assert_contains "$out" "commit(s) non poussé(s)" "trunk : ce qui traîne est nommé"
 
+# LA TOLÉRANCE DU MOTIF EST GARDÉE ICI, ET NULLE PART AILLEURS. Avec le seul
+# « Refs #42 » d'avant, élargir le motif au `#N` nu laissait la suite VERTE : un
+# remaniement futur ferait reprendre « Merge pull request #17 » sans un mot. Ce
+# leurre est PLUS RÉCENT que « Refs #42 » — `head -n1` prend le plus récent — et
+# porte les trois élargissements qu'on refuse : le `#N` nu (17), la casse
+# (« refs #99 », que le `-i` d'origine acceptait) et le deux-points
+# (« Refs: #98 », que le workflow de fermeture du consommateur ne lit pas).
+git -C "$R" -c user.email=t@t -c user.name=t commit -q --allow-empty \
+  -m "Merge pull request #17 from bot/card-3" -m "voir refs #99, et surtout pas Refs: #98"
+out="$(FACTORY_DELIVERY=trunk bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
+assert_rc 0 "$rc" "trunk : le leurre reste du travail inachevé"
+assert_contains "$out" "42	" "trunk : « Refs #N » EXACTEMENT — ni #17, ni « refs #99 », ni « Refs: #98 »"
+
 # --- 4. TRUNK : un arbre garé ailleurs est hors sujet, pas une reprise --------
 git -C "$R" checkout -q -b ailleurs
 out="$(FACTORY_DELIVERY=trunk bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
@@ -93,12 +154,30 @@ assert_rc 1 "$rc" "trunk : hors du tronc, aucune reprise"
 assert_contains "$TESTTMP/err" "hors sujet ici" "trunk : et on dit pourquoi"
 git -C "$R" checkout -q main
 
+# --- 4 bis. TRUNK : une racine qui n'est pas un dépôt git est une INSTALLATION
+# La garde est le point (a) du volet trunk, et rien ne la tenait. Retirée, une
+# installation cassée se dégrade en rc 1 « hors sujet ici » (branche vide ≠ tronc),
+# que factory.mk lit « rien à reprendre » : le repli silencieux que la clé existe
+# pour interdire, entré par la porte de service. Mesuré sur une racine non-git :
+# garde présente rc 3 « n'est pas un dépôt git » ; garde retirée rc 1 « hors sujet ».
+# GIT_CEILING_DIRECTORIES arrête la remontée de `rev-parse` à $TESTTMP : sans lui
+# ce cas mesurerait le TMPDIR de la machine — un /tmp posé dans un dépôt git (ça
+# existe) rendrait « c'est un dépôt » et le cas passerait sans rien prouver.
+N="$TESTTMP/notgit"; mkdir -p "$N"
+printf 'GH_REPO = o/r\n' > "$N/factory.conf"
+out="$(GIT_CEILING_DIRECTORIES="$TESTTMP" FACTORY_ROOT="$N" FACTORY_DELIVERY=trunk \
+  bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
+assert_rc 3 "$rc" "trunk : une racine sans dépôt git est une configuration cassée, pas « rien à reprendre »"
+assert_contains "$TESTTMP/err" "n'est pas un dépôt git" "trunk : et le message nomme la panne"
+assert_eq "" "$out" "trunk : rien sur stdout, la boucle ne doit pas lire un demi-résultat"
+
 # --- 5. FACTORY_TRUNK est honoré (aucun nom de tronc en dur) ------------------
 # La branche ET le point de comparaison doivent tous les deux venir de la clé :
-# on publie l'init sous le nom `recette`, donc le commit « Refs #42 » reste non
-# poussé et c'est lui qu'on doit retrouver.
+# on publie LE COMMIT D'INIT — par son SHA, $BASE, et pas par `HEAD~1` qui
+# publierait le dernier commit ajouté au-dessus — sous le nom `recette`, donc
+# « Refs #42 » reste non poussé et c'est lui qu'on doit retrouver.
 git -C "$R" branch -q -m main recette
-git -C "$R" push -q origin "HEAD~1:refs/heads/recette"
+git -C "$R" push -q origin "$BASE:refs/heads/recette"
 git -C "$R" fetch -q origin
 out="$(FACTORY_DELIVERY=trunk FACTORY_TRUNK=recette bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
 assert_rc 0 "$rc" "trunk : le nom du tronc vient de FACTORY_TRUNK"

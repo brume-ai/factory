@@ -78,7 +78,20 @@ if [ "$FACTORY_DELIVERY" = trunk ]; then
     exit 1
   }
 
-  dirty="$(git -C "$ROOT" status --porcelain 2>/dev/null | wc -l)"
+  # `.worktrees` EST HORS SUJET ICI, et l'oublier verrouillait la boucle. Un dépôt
+  # qui bascule `pull-request` → `trunk` garde ses `.worktrees/card-<n>` sur le
+  # disque, et son `.gitignore` n'a AUCUNE raison de les couvrir : c'est le mode
+  # précédent qui les avait posés là. `--porcelain` rendait donc « ?? .worktrees/ »
+  # — donc une reprise sur la carte « ? » À CHAQUE TOUR, indéfiniment, pendant que
+  # wt-cleanup, lui, refuse par principe de détruire du travail que personne n'a
+  # relu. Les deux décisions du même commit se verrouillaient l'une l'autre.
+  # Mesuré : dépôt en trunk, `git worktree add .worktrees/card-9`, sans .gitignore
+  # ⇒ wt-resume rc 0 « ?<TAB>1 fichier(s) non commité(s) », à chaque tour.
+  # Ce répertoire est l'artefact de l'usine dans l'AUTRE mode, pas du travail
+  # inachevé dans l'arbre courant : wt-cleanup le NOMME, ici on ne le compte pas.
+  # `:/` (la racine du dépôt) n'est pas décoratif : un pathspec uniquement négatif
+  # ne matche rien, et `status` deviendrait aveugle à tout.
+  dirty="$(git -C "$ROOT" status --porcelain -- ':/' ':(exclude,top).worktrees' 2>/dev/null | wc -l)"
   # AUCUN REPLI si `origin/$TRUNK` manque, et c'est délibéré : ici l'arbre EST le
   # tronc, donc un repli du genre `HEAD ^origin/HEAD` compterait toute l'histoire
   # du dépôt comme du travail inachevé et enverrait un agent « reprendre » la
@@ -90,23 +103,39 @@ if [ "$FACTORY_DELIVERY" = trunk ]; then
   fi
 
   # CE QUE CE 1 COÛTE AU CONSOMMATEUR, parce que personne d'autre ne le dira :
-  # tout fichier non suivi que son `.gitignore` ne couvre pas — artefact de build,
-  # déjection d'outil, reste d'un agent tué — devient ici une reprise PERMANENTE
+  # tout AUTRE fichier non suivi que son `.gitignore` ne couvre pas — artefact de
+  # build, déjection d'outil, reste d'un agent tué — devient une reprise PERMANENTE
   # sur la carte « ? ». Le mode `trunk` fait donc dépendre la boucle de la
   # propreté de l'arbre du consommateur. C'est voulu (voir `_what`), mais ça ne
   # se rattrape pas ici : c'est au compteur anti-tourniquet de la boucle de
-  # l'arrêter, et à `.gitignore` de ne pas le déclencher.
+  # l'arrêter, et à `.gitignore` de ne pas le déclencher. `.worktrees` est le seul
+  # cas que nous prenons en charge nous-mêmes, parce que c'est NOTRE reste et pas
+  # celui du consommateur — voir l'exclusion ci-dessus.
   (( dirty > 0 || ahead > 0 )) || { echo "wt-resume: rien d'inachevé dans l'arbre" >&2; exit 1; }
   what="$(_what "$dirty" "$ahead")"
 
-  # QUELLE CARTE ? Les commits non poussés la nomment. `Refs #N` EXACTEMENT, avec
-  # cette tolérance-là et pas une de plus : c'est la forme que lit le workflow du
-  # consommateur qui ferme les cartes. Accepter `Refs: #12` ici ferait reprendre
-  # une carte que le workflow ne fermerait jamais — une file qui grossit sans que
-  # personne puisse dire pourquoi.
-  # `|| true` OBLIGATOIRE : sans référence, `grep` sort en 1 (et `head` peut lui
-  # fermer le tuyau au nez), donc `pipefail` ferait échouer l'affectation, donc le
-  # script, sur le cas le plus banal qui soit.
+  # QUELLE CARTE ? Les commits non poussés la nomment. `Refs #N` EXACTEMENT, et le
+  # motif est SENSIBLE À LA CASSE pour de bon : le `-i` qui traînait ici démentait
+  # cette phrase, et démentait surtout le reste de la maison — le skill se relit
+  # lui-même par `git log --grep="Refs #$N"`, sensible à la casse, et le workflow
+  # de fermeture du consommateur lit la même convention. Un « refs #12 » repris
+  # ici serait une carte que rien ne fermerait jamais : une file qui grossit sans
+  # que personne puisse dire pourquoi. Même raison pour `Refs: #12`, et pour le
+  # `#12` nu, qui ferait reprendre « Merge pull request #17 ».
+  # `|| true` OBLIGATOIRE, et ce n'est pas de la prudence de façade : sans
+  # référence — le cas le plus banal qui soit, `git commit -m "wip"` — `grep` sort
+  # en 1, `pipefail` fait échouer l'affectation, `set -e` tue le script, et rc 1
+  # veut dire « rien à reprendre » pour factory.mk (recette `loop`). La boucle
+  # prendrait alors une carte NEUVE et piétinerait le travail non poussé :
+  # exactement la perte silencieuse que ce script existe pour empêcher. Mesuré :
+  # sans `|| true`, `rc=1` et stdout vide là où le contrat est `rc=0` et
+  # « ?<TAB>1 commit(s) non poussé(s) ».
+  # IL GARDE UN SECOND CAS, et une version de ce commentaire a affirmé le
+  # contraire sans le mesurer : `head -n1` FERME le tuyau au nez de `grep` dès
+  # qu'il tient sa ligne, donc `grep` meurt en SIGPIPE. Mesuré sur une entrée qui
+  # porte plusieurs références : `rc=141`, avec la bonne valeur sur stdout. Sans
+  # `|| true`, une reprise parfaitement valide serait lue comme « rien à
+  # reprendre » — le même effet que le cas sans référence, par une autre porte.
   # DEUX LIMITES CONNUES, délibérées toutes les deux. (1) `head -n1` prend le
   # commit LE PLUS RÉCENT : si deux commits non poussés portent deux cartes, la
   # seconde n'est nommée nulle part — l'agent la retrouvera par son label, alors
@@ -119,7 +148,7 @@ if [ "$FACTORY_DELIVERY" = trunk ]; then
   card='?'
   if (( ahead > 0 )); then
     card="$(git -C "$ROOT" log --format=%B "origin/$TRUNK..HEAD" 2>/dev/null \
-      | grep -oiE 'refs #[0-9]+' | grep -oE '[0-9]+' | head -n1 || true)"
+      | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | head -n1 || true)"
     card="${card:-?}"
   fi
 

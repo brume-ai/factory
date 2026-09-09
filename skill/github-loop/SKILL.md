@@ -49,11 +49,16 @@ livré quoi que ce soit, par un fait que vous ne contrôlez pas. Là où il ne l
 pas, la garantie du mode n'était déjà qu'une consigne, et c'est un défaut
 d'installation que vous ne réparerez pas d'ici.
 
-En `trunk`, lire le volet `pull-request` n'est rattrapé par RIEN aujourd'hui, et
-c'est le sens coûteux : le sondage tient toute carte qui porte une proposition
-ouverte sur `card/<n>` pour **livrée**, et la met de côté — dans les deux modes.
-La carte quitte donc la file sans avoir été fermée, et personne ne vous la rendra.
-C'est pour ça que `<Never>` le nomme dans son volet `trunk`.
+En `trunk`, rien ne vous ARRÊTE : la branche de carte se pousse, la proposition
+s'ouvre, les deux réussissent. Mais rien ne COMPTE.
+**Le sondage n'interroge aucune proposition en `trunk`** — une carte livrée y est
+une carte FERMÉE, pas une carte à proposition — et `factory:delivered` y est
+inerte, parce que rien dans l'usine ne le pose ni ne le retire. Votre carte
+revient donc au tour suivant, et au suivant, sur un travail qui n'a jamais touché
+le tronc et que rien ne déploiera ; c'est la garde anti-tourniquet de la boucle
+qui finit par l'arrêter en la nommant, après `LOOP_MAX_RETRY` tours payés pour
+rien. Le coût n'est pas une carte perdue, c'est une file qui tourne à vide
+jusqu'à l'arrêt. C'est pour ça que `<Never>` le nomme dans son volet `trunk`.
 </Delivery_Mode>
 
 <Purpose>
@@ -264,7 +269,7 @@ il n'y a que le tronc à regarder.
 
 ```bash
 git fetch -q
-git log --oneline @{u} --grep="Refs #$N"
+git log --oneline @{u} --grep="Refs #$N\b"
 ```
 
 Si le commit y est et que la carte est encore ouverte, ce n'est pas du travail :
@@ -536,19 +541,46 @@ restent valides et l'historique du tronc ne porte pas les octets — ce qui comp
 d'autant plus ici que ce tronc est la seule trace lisible du travail.
 
 ```bash
-T="$(mktemp -d)" && mkdir "$T/img" && cp <captures retenues> "$T/img/"
-git worktree add --detach "$T/b" && cd "$T/b"
-git checkout --orphan "evidence/$N" && git rm -rq --cached . && rm -rf ./*
-mkdir -p "$N" && cp "$T"/img/* "$N/"
-git add "$N" && git commit -qm "test(evidence): captures du parcours de #$N"
-git push -q origin "evidence/$N"
-cd - >/dev/null && git worktree remove --force "$T/b" && rm -rf "$T"
+T="$(mktemp -d)" || exit 4
+trap 'git worktree remove --force "$T/b" 2>/dev/null ; rm -rf "$T"' EXIT
+mkdir "$T/img" && cp <captures retenues> "$T/img/" || exit 4
+git worktree add -q --detach "$T/b" || exit 4
+git -C "$T/b" fetch -q origin "refs/heads/evidence/$N:refs/heads/evidence/$N" 2>/dev/null || true
+git -C "$T/b" checkout -q "evidence/$N" 2>/dev/null \
+  || { git -C "$T/b" checkout --orphan "evidence/$N" && git -C "$T/b" rm -rq --cached . ; } \
+  || exit 4
+mkdir -p "$T/b/$N" && cp "$T"/img/* "$T/b/$N/" \
+  && git -C "$T/b" add "$N" \
+  && git -C "$T/b" commit -q --allow-empty -m "test(evidence): captures du parcours de #$N" \
+  && git -C "$T/b" push -q origin "HEAD:refs/heads/evidence/$N" \
+  || { echo "factory: les captures de #$N ne sont pas parties" >&2 ; exit 4 ; }
 ```
 
-`git add "$N"` et rien d'autre : sur une branche orpheline, tout ce qui traîne
-dans le répertoire est un candidat au commit. Et la dernière ligne n'est pas de la
-politesse — un worktree détaché laissé debout reste dans `git worktree list` et se
-met en travers du nettoyage suivant.
+**`git -C "$T/b"` partout, jamais un `cd`.** `git worktree add … && cd "$T/b"` est
+UNE instruction ; la ligne d'après en est une AUTRE. Joué avec un `worktree add`
+qui échoue, l'ancien bloc basculait **l'arbre de la boucle** sur `evidence/<n>`
+puis faisait `rm -rf ./*` dedans : README, sources et travail non commité effacés,
+et `git push` rendait quand même 0 — la panne ressemblait à un succès. Ancré sur
+`$T`, plus aucun geste de ce bloc ne peut atteindre l'arbre courant.
+
+**Ce bloc se joue deux fois sans dégât**, et c'est le cas normal : une carte
+reprise après une fermeture qui n'a pas eu lieu dépose une seconde fois. On
+récupère alors la branche et on lui AJOUTE les captures ; `checkout --orphan` ne
+sert qu'au premier dépôt. Sans ça il échouait sur une branche déjà là, le `&&`
+coupait le nettoyage, et les lignes suivantes poussaient la branche PRÉEXISTANTE :
+les captures ne partaient jamais, tous les codes retour valaient 0, et les liens
+écrits sur la carte rendaient 404 — exactement ce que le premier paragraphe de
+`<Evidence>` interdit. `--allow-empty` tient la même promesse dans l'autre sens :
+redéposer les mêmes captures rend 0, pas une panne inventée.
+
+Le `push` nomme sa cible en entier (`HEAD:refs/heads/evidence/$N`) : c'est le
+commit qu'on vient de faire qui part, pas une branche du même nom qui traînait.
+
+`git add "$N"` et rien d'autre : sur une branche orpheline l'index est vidé, mais
+le répertoire porte encore tout le tronc, et tout ce qui y traîne est un candidat
+au commit. Le `trap` n'est pas de la politesse — un worktree détaché laissé debout
+reste dans `git worktree list` et se met en travers du nettoyage suivant ; posé sur
+`EXIT`, il nettoie aussi les chemins d'échec, qui sont ceux où on l'oublie.
 </Mode_Trunk>
 </Evidence>
 
@@ -696,6 +728,7 @@ qui couvre déjà le comportement :
 
 ```bash
 TRUNK="$(bash -c '. tools/factory/bin/lib.sh ; conf_get FACTORY_TRUNK main')"
+[ -n "$TRUNK" ] || { echo 'factory: FACTORY_TRUNK illisible' >&2 ; exit 3 ; }
 git merge-base --is-ancestor <sha> "origin/$TRUNK"   # le travail EST dans le tronc
 gh issue comment "$N" --body-file /tmp/preuve.md
 gh issue close "$N" --reason "not planned" \
@@ -934,11 +967,15 @@ Bloquez au premier plan jusqu'à la conclusion.
 
 <Mode_Pull_Request>
 ```bash
-gh pr checks "card/$N" --watch
+gh pr checks "card/$N" --watch   # après VOTRE push : la branche de la carte
+gh pr checks "$PR" --watch       # en entretien : le numéro donné par le pilote
 ```
 
-On passe ici la **branche qu'on vient de pousser** ; en entretien, le pilote vous a
-donné un NUMÉRO de proposition, et c'est celui-là. Jamais le numéro de la carte :
+Deux lignes et pas une, parce que l'argument n'est pas le même selon la porte par
+laquelle on arrive ici. On passe la **branche qu'on vient de pousser** ; en
+entretien, le pilote vous a donné un NUMÉRO de proposition, et c'est celui-là.
+Écrire `card/$N` en entretien surveillerait une branche qui n'existe pas, ou celle
+d'une AUTRE carte. Jamais le numéro de la carte non plus :
 GitHub numérote les issues et les propositions dans la même suite, donc l'issue #N
 et la PR #N ne sont jamais le même objet, et vous surveilleriez le travail de
 quelqu'un d'autre.
@@ -951,13 +988,63 @@ du répertoire courant, comme le `gh issue view` de l'étape 0.
 
 <Mode_Trunk>
 ```bash
-gh run watch "$(gh run list --branch "$(git branch --show-current)" \
-  --event push --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status
+sha="$(git rev-parse HEAD)" || exit 4
+n=0
+for _ in $(seq 30); do
+  n="$(gh run list --commit "$sha" --json databaseId --jq 'length')" || exit 4
+  [ "$n" -gt 0 ] && break
+  sleep 2
+done
+[ "$n" -gt 0 ] || { echo "factory: aucun run pour $sha après 60 s" >&2 ; exit 4 ; }
+tours=0
+while id="$(gh run list --commit "$sha" --json databaseId,status \
+              --jq 'map(select(.status != "completed")) | .[0].databaseId // empty')" \
+      && [ -n "$id" ]; do
+  # BORNÉE, ET AVEC UNE PAUSE. `gh run watch` bloque tant que le run avance, mais
+  # il rend aussitôt s'il échoue à le suivre — un jeton périmé, un run supprimé —
+  # et la boucle repartirait dans la seconde, indéfiniment, en brûlant l'API.
+  # Un tour qui n'aboutit pas doit s'arrêter en le DISANT.
+  tours=$((tours + 1))
+  [ "$tours" -le 40 ] || { echo "factory: le pipeline de $sha n'a pas conclu" >&2 ; exit 4 ; }
+  gh run watch "$id" --exit-status || true
+  sleep 5
+done
+# LE VERDICT EST LU, PAS SUPPOSÉ. `gh run list` réussit que la CI soit verte ou
+# rouge : terminer là-dessus rendrait 0 sur une suite en échec, et le tour se
+# croirait fini. On imprime le tableau, PUIS on sort sur la conclusion.
+gh run list --commit "$sha" --json conclusion,workflowName \
+  --jq '.[] | "\(.conclusion)\t\(.workflowName)"'
+gh run list --commit "$sha" --json conclusion \
+  --jq 'all(.conclusion == "success")' | grep -qx true \
+  || { echo "factory: le pipeline de $sha n'est pas vert" >&2 ; exit 1 ; }
 ```
 
-`git branch --show-current` plutôt qu'un nom écrit à la main : l'arbre EST sur le
-tronc, il sait comment il s'appelle, et un nom en dur serait faux chez le premier
-consommateur qui appelle le sien autrement.
+**L'identifiant se pose dans une variable, il ne se substitue pas dans l'argument.**
+`gh run watch "$(gh run list …)"` avale le code retour de `gh run list` avec le
+`$( )`. Or juste après le push, le run n'est pas encore enregistré : la liste est
+vide, `.[0].databaseId` rend la **chaîne** `null`, et on appelait `gh run watch
+null --exit-status` — qui rend la main aussitôt. Le tour n'attendait pas, ce qui
+est la seule chose que cette section existe pour imposer. Si `gh run list` échoue
+franchement — jeton d'une heure expiré, réseau — l'argument était carrément vide,
+même effet. D'où l'attente d'apparition, et un 4 si rien ne vient : un run qui
+n'existe pas encore n'est pas un run vert.
+
+**Le filtre porte sur le SHA, pas sur la branche.** Le tronc est celui de tout le
+monde et l'humain y pousse aussi : `--branch <tronc> --limit 1` rendait le dernier
+run du tronc, donc peut-être le commit de quelqu'un d'autre, et vous auriez rendu
+un verdict sur son travail. `--commit "$sha"` ne peut désigner que le vôtre, et se
+passe de lire le nom du tronc.
+
+**Et pas `--event push` non plus** : le déploiement — le fait qui ferme la carte,
+étape 6 — n'est pas déclenché par votre push mais **par la CI, en aval d'une suite
+verte**. Câblé ainsi, son run porte l'événement du workflow amont, jamais `push` :
+le filtrer sur `push` faisait attendre la suite, la voir verte, et terminer le tour
+en croyant avoir vu la fermeture. Il porte en revanche le **même SHA** que la
+suite, donc il apparaît dans cette liste-là, et la boucle l'attend comme le reste.
+
+Le verdict que vous lisez est la **dernière ligne** — le tableau des conclusions,
+un run par ligne. Plusieurs runs portent ce commit ; un seul code retour ne peut
+pas les porter tous.
 </Mode_Trunk>
 
 Verte : votre tour est fini et il a abouti. Rouge : vous avez le verdict qu'il vous
@@ -994,7 +1081,8 @@ invisible tourne en rond.
 - **Écrire `Closes #N` dans un commit.** C'est `Refs #N`, toujours.
 - `git push --force` sur le tronc.
 - **Ouvrir une proposition pour livrer une carte.** Elle ne fermera rien, et le
-  sondage tiendra la carte pour livrée à cause d'elle : #N quitte la file sans
-  avoir été fermée, et personne ne vous la rendra.
+  sondage ne la verra même pas : ici il n'interroge aucune proposition. #N revient
+  tour après tour sur un travail qui n'a jamais touché le tronc, jusqu'à ce que la
+  garde anti-tourniquet de la boucle arrête l'usine en la nommant.
 </Mode_Trunk>
 </Never>

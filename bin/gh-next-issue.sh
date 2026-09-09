@@ -152,9 +152,17 @@ api() {  # <chemin> — imprime le corps · 3 = refus de l'API · 4 = raté pass
     # où le pipeline remplace la PR : envoyer chercher `Issues` là serait
     # exactement le message qui a coûté cinq arrêts d'usine en sept jours.
     if [[ "$code" == 403 || "$code" == 404 ]]; then
+      # LE MOTIF EST ANCRÉ SUR L'ENDPOINT DE CE DÉPÔT, PAS SUR LE CHEMIN ENTIER.
+      # `*/actions/*` attrapait aussi le 403 des ISSUES de tout dépôt dont le
+      # propriétaire ou le nom est `actions` — github.com/actions est une vraie
+      # organisation — et envoyait alors chercher une permission qui n'a rien à
+      # voir avec la panne : la classe même de mauvais diagnostic que ce script
+      # existe pour supprimer. C'était aussi la SEULE différence de comportement
+      # que ce chantier introduisait en `pull-request`, mesurée par A/B contre
+      # l'avant-chantier sur `actions/runner`.
       case "$1" in
-        */actions/*) echo "  → l'App a-t-elle « Actions: Read », et la permission a-t-elle été ACCEPTÉE sur l'installation ?" >&2 ;;
-        *)           echo "  → l'App a-t-elle « Issues: Read and write », et la permission a-t-elle été ACCEPTÉE sur l'installation ?" >&2 ;;
+        "repos/$GH_REPO/actions/"*) echo "  → l'App a-t-elle « Actions: Read », et la permission a-t-elle été ACCEPTÉE sur l'installation ?" >&2 ;;
+        *)                          echo "  → l'App a-t-elle « Issues: Read and write », et la permission a-t-elle été ACCEPTÉE sur l'installation ?" >&2 ;;
       esac
     fi
     return 3
@@ -181,7 +189,7 @@ busy_label = os.environ["BUSY"]
 # "pull_request". Sans ce filtre, la boucle prend une PR pour une carte et part
 # travailler sur son propre travail.
 done = set(os.environ.get("DELIVERED", "").split())
-human = os.environ.get("HUMAN", "factory:needs-human")
+human = os.environ["HUMAN"]
 # La file étant OPT-OUT, cette liste est la seule chose qui retire une carte.
 # `blocked` DOIT y figurer : sans lui, la bascule opt-in→opt-out rendrait à la
 # file toutes les cartes que `gh-unblock` tient justement à l écart.
@@ -194,8 +202,8 @@ human = os.environ.get("HUMAN", "factory:needs-human")
 # (Aucune apostrophe ici, comme dans les commentaires voisins : cette source vit
 # entre quotes simples, une seule fermerait la chaine du shell.)
 shelved = {human, os.environ["DONE"],
-           os.environ.get("BLOCKED", "factory:blocked"),
-           os.environ.get("EPIC", "factory:epic")}
+           os.environ["BLOCKED"],
+           os.environ["EPIC"]}
 issues = [i for i in json.load(sys.stdin)
           if "pull_request" not in i and str(i["number"]) not in done
           and not any(l["name"] in shelved for l in i["labels"])]
@@ -267,10 +275,10 @@ import json, os, sys
 done = set(os.environ.get("DELIVERED", "").split())
 issues = [i for i in json.load(sys.stdin)
           if "pull_request" not in i and str(i["number"]) not in done
-          and not any(l["name"] in {os.environ.get("HUMAN", "factory:needs-human"),
-                                    os.environ.get("DONE", "factory:delivered"),
-                                    os.environ.get("BLOCKED", "factory:blocked"),
-                                    os.environ.get("EPIC", "factory:epic")} for l in i["labels"])]
+          and not any(l["name"] in {os.environ["HUMAN"],
+                                    os.environ["DONE"],
+                                    os.environ["BLOCKED"],
+                                    os.environ["EPIC"]} for l in i["labels"])]
 def rank(i): return (not any(l["name"] == os.environ.get("PRIO", "factory:priority") for l in i["labels"]), i["created_at"])
 print(min(issues, key=rank)["number"] if issues else "", end="")
 '
@@ -311,7 +319,10 @@ issues_raw="$(api "repos/$GH_REPO/issues?state=open&per_page=100")" || exit $?
 # DIT : sortir en 1 fait dormir la boucle et resonder, ce qui est exactement le
 # geste juste — trois minutes plus tard, le pipeline aura tranché à notre place.
 # UNE REQUÊTE, ET SEULEMENT SI UNE CARTE EST PRISE : sur un tableau sans carte en
-# cours il n'y a rien à départager, et `trunk` reste à un seul appel HTTP.
+# cours il n'y a rien à départager, et le tour reste à sa seule lecture des
+# issues. Dès qu'une carte est prise, c'est UN appel de plus, pas zéro : une
+# première version de ce commentaire annonçait « un seul appel HTTP » quoi qu'il
+# arrive, ce qui est faux et ferait chercher ailleurs le jour où le quota serre.
 #
 # ET OUI, C'EST BIEN LA SÉRIALISATION — la conséquence 6 de docs/livraison.md, et
 # elle atterrit ici plutôt que dans la boucle. Une première version de ce
@@ -362,11 +373,11 @@ live = [r for r in runs
         and r.get("status") in ("queued", "in_progress", "waiting", "requested", "pending")]
 if live:
     r = min(live, key=lambda r: r.get("id") or 0)
-    print("%s|%s" % (r.get("name") or "le pipeline", r.get("html_url") or ""))
+    print("%s\t%s" % (r.get("name") or "le pipeline", r.get("html_url") or ""))
 ')" || exit $?
     if [[ -n "$live" ]]; then
-      echo "gh-next-issue: #${taken// /, #} prise(s), et « ${live%%|*} » tourne encore sur $TRUNK — c'est le pipeline qui dira si ce travail est livré, pas un agent neuf." >&2
-      url="${live#*|}"
+      echo "gh-next-issue: #${taken// /, #} prise(s), et « ${live%%	*} » tourne encore sur $TRUNK — c'est le pipeline qui dira si ce travail est livré, pas un agent neuf." >&2
+      url="${live#*	}"
       if [[ -n "$url" ]]; then echo "  $url" >&2; fi
       exit 1
     fi
