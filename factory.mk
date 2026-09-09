@@ -54,14 +54,31 @@ LOOP_PROMPT_PR ?= github-loop : suis le skill, section <Tend_A_Pull_Request>. La
 LOOP_PROMPT   ?= github-loop : suis le skill. Travaille l'issue \#@ISSUE@ du dépôt $(GH_REPO). Une seule carte, menée jusqu'à une pull request prête à relire — ou son prérequis carvé, ou marquée bloquée, ou fermée si tu prouves qu'elle n'a plus d'objet. Tu ne rends JAMAIS la main en attendant un résultat : tu bloques au premier plan jusqu'au verdict. Tu ne fermes PAS une carte que tu as travaillee — c'est le merge qui la ferme. Tu fermes en revanche une carte dont tu PROUVES qu'il n'y a rien a faire. Puis stop.
 LOOP_PROMPT_CODEX ?= github-loop : suis le skill. Travaille l'issue \#@ISSUE@ du dépôt $(GH_REPO). Tu es l'agent principal et tu fais la carte de bout en bout toi-même. Une seule carte, menée jusqu'à une pull request prête à relire. Tu ne fermes PAS une carte que tu as travaillee — c'est le merge qui la ferme. Tu fermes en revanche une carte dont tu PROUVES qu'il n'y a rien a faire. Puis stop.
 
+# LES MÊMES, EN LIVRAISON `trunk`. Les trois prompts ci-dessus disent « menée
+# jusqu'à une pull request » et « c'est le merge qui la ferme » : les deux sont
+# FAUX en `trunk`, où la boucle pousse sur le tronc de recette et où c'est le
+# déploiement qui ferme la carte. Un agent à qui l'on donne le mauvais prompt
+# ouvre une PR que personne ne mergera, ou ferme lui-même une carte que le
+# pipeline devait fermer — et dans les deux cas la garantie du mode tombe.
+# Le mode est choisi DANS LA RECETTE, pas par un `ifeq` : il vient de
+# `bin/lib.sh` à l'exécution (voir la garde plus bas), pas d'une variable Make.
+# La reprise ne nomme AUCUN worktree : en `trunk` le travail inachevé est dans
+# l'arbre courant, et `wt-resume.sh` peut rendre « ? » quand le numéro de carte
+# ne se lit dans aucun commit — d'où la consigne de la retrouver par son label.
+LOOP_PROMPT_TRUNK ?= github-loop : suis le skill. Travaille l'issue \#@ISSUE@ du dépôt $(GH_REPO). Une seule carte, menée jusqu'à un commit poussé sur $(FACTORY_TRUNK) dont la CI est verte et le déploiement réussi — ou son prérequis carvé, ou marquée bloquée, ou fermée si tu prouves qu'elle n'a plus d'objet. Tu ne rends JAMAIS la main en attendant un résultat : tu bloques au premier plan jusqu'au verdict du pipeline. Tu ne fermes PAS une carte que tu as travaillee — c'est le déploiement qui la ferme. Tu fermes en revanche une carte dont tu PROUVES qu'il n'y a rien a faire. Puis stop.
+LOOP_PROMPT_CODEX_TRUNK ?= github-loop : suis le skill. Travaille l'issue \#@ISSUE@ du dépôt $(GH_REPO). Tu es l'agent principal et tu fais la carte de bout en bout toi-même. Une seule carte, menée jusqu'à un commit poussé sur $(FACTORY_TRUNK) dont la CI est verte et le déploiement réussi. Tu ne fermes PAS une carte que tu as travaillee — c'est le déploiement qui la ferme. Tu fermes en revanche une carte dont tu PROUVES qu'il n'y a rien a faire. Puis stop.
+LOOP_PROMPT_RESUME_TRUNK ?= github-loop : suis le skill. L'arbre porte du travail INACHEVÉ pour la carte \#@ISSUE@ (@WHY@). Tu le REPRENDS — tu ne repars pas de zéro et tu ne recrées rien : lis ce qui est fait, réconcilie, et mène la carte au bout. Si le numéro de carte est « ? », retrouve-la : c'est celle qui porte factory:in-progress. Tu ne rends JAMAIS la main en attendant un résultat. Puis stop.
+
 ifeq ($(MAIN),codex)
 LOOP_MAIN_BIN    := codex
 LOOP_PROMPT_TPL   = $(LOOP_PROMPT_CODEX)
+LOOP_PROMPT_TRUNK_TPL = $(LOOP_PROMPT_CODEX_TRUNK)
 LOOP_RUN_VERBOSE  = $(CODEX_LAUNCH) --json "$$prompt"
 LOOP_RUN_QUIET    = $(CODEX_LAUNCH) "$$prompt"
 else
 LOOP_MAIN_BIN    := claude
 LOOP_PROMPT_TPL   = $(LOOP_PROMPT)
+LOOP_PROMPT_TRUNK_TPL = $(LOOP_PROMPT_TRUNK)
 LOOP_RUN_VERBOSE  = $(CLAUDE_LAUNCH) --output-format stream-json --verbose -p "$$prompt" | "$(FACTORY_BIN)/claude-stream.sh"
 LOOP_RUN_QUIET    = $(CLAUDE_LAUNCH) -p "$$prompt"
 endif
@@ -204,8 +221,17 @@ loop:
 		# Sans cette ligne on recree le defaut du 2 aout (outillage perime qui \
 		# a l'air de marcher) par une nouvelle porte. \
 		git -C "$(CURDIR)" submodule update --init --quiet 2>/dev/null || true ; \
-		GH_REPO=$(GH_REPO) bash "$(FACTORY_BIN)/wt-cleanup.sh" || true ; \
-		GH_REPO=$(GH_REPO) bash "$(FACTORY_BIN)/gh-unblock.sh" || true ; \
+		# `|| true` SAUF SUR LE 3. Le ménage a le droit de rater — un DNS qui \
+		# bafouille, une carte qui a bougé sous le script — et un tour ne meurt \
+		# pas pour ça. Mais 3 ne veut pas dire « ça a raté », il veut dire « la \
+		# configuration est cassée, arrête-toi » : c'est le code que \
+		# `conf_require` et `delivery_require` rendent. Avalé par un `|| true`, \
+		# un FACTORY_DELIVERY mal écrit ferait tourner la boucle en silence, \
+		# sans jamais débloquer ni nettoyer, avec l'air de marcher. \
+		hk=0 ; GH_REPO=$(GH_REPO) bash "$(FACTORY_BIN)/wt-cleanup.sh" || hk=$$? ; \
+		[ "$$hk" != 3 ] || { echo "$(FACTORY_CYAN)— wt-cleanup : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ; } ; \
+		hk=0 ; GH_REPO=$(GH_REPO) bash "$(FACTORY_BIN)/gh-unblock.sh" || hk=$$? ; \
+		[ "$$hk" != 3 ] || { echo "$(FACTORY_CYAN)— gh-unblock : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ; } ; \
 		command -v python3 >/dev/null && GH_REPO=$(GH_REPO) python3 "$(FACTORY_BIN)/gh-security-triage.py" || true ; \
 		# LE MÉNAGE DU CONSOMMATEUR, s'il en a. Un projet a des alertes que \
 		# l'usine ne connaît pas — les erreurs de production de SON schéma \
@@ -226,7 +252,8 @@ loop:
 			rz="$$(bash "$(FACTORY_BIN)/wt-resume.sh")" && rzc=0 || rzc=$$? ; \
 			if [ "$$rzc" = 0 ]; then \
 				why="$${rz#*$$(printf '\t')}" ; issue="$${rz%%$$(printf '\t')*}" ; \
-				prompt="$(LOOP_PROMPT_RESUME)" ; prompt="$${prompt//@ISSUE@/$$issue}" ; prompt="$${prompt//@WHY@/$$why}" ; \
+				if [ "$$FACTORY_DELIVERY" = trunk ]; then prompt="$(LOOP_PROMPT_RESUME_TRUNK)" ; else prompt="$(LOOP_PROMPT_RESUME)" ; fi ; \
+				prompt="$${prompt//@ISSUE@/$$issue}" ; prompt="$${prompt//@WHY@/$$why}" ; \
 				echo "$(FACTORY_CYAN)— reprise : carte #$$issue ($$why) —$(FACTORY_RST)" ; \
 				prc=9 ; \
 			fi ; \
@@ -249,17 +276,27 @@ loop:
 			1) echo "$(FACTORY_CYAN)— file vide · nouveau sondage dans $(LOOP_SLEEP)s —$(FACTORY_RST)" ; \
 			   sleep $(LOOP_SLEEP) ; continue ;; \
 		esac ; \
+		if [ "$$FACTORY_DELIVERY" = trunk ]; then prompt="$(LOOP_PROMPT_TRUNK_TPL)" ; else prompt="$(LOOP_PROMPT_TPL)" ; fi ; \
+		prompt="$${prompt//@ISSUE@/$$issue}" ; \
+		echo "$(FACTORY_CYAN)— issue #$$issue —$(FACTORY_RST)" ; \
+		fi ; \
+		# LA GARDE ANTI-TOURNIQUET COUVRE LES TROIS CHEMINS, et pas seulement la \
+		# carte neuve. Elle vivait à l'intérieur du bloc `elif` ci-dessus, donc \
+		# une REPRISE qui échoue en boucle — le chemin prc=9 — n'était comptée \
+		# par personne : la même carte repartait indéfiniment, et le compteur qui \
+		# existe pour arrêter ça ne la voyait pas. L'entretien d'une PR (prc=0) \
+		# n'était pas compté non plus. Ici, `$$issue` porte le sujet du tour dans \
+		# les trois cas — « 12 », « 12 » en reprise, « pr34 » en entretien — donc \
+		# une même chose reprise LOOP_MAX_RETRY fois sans avancer arrête la \
+		# boucle, quelle que soit la porte par laquelle elle est entrée. \
 		if [ "$$issue" = "$$last" ]; then \
 			same=$$((same+1)) ; \
 		else \
 			last="$$issue" ; same=1 ; \
 		fi ; \
 		if [ "$$same" -gt "$(LOOP_MAX_RETRY)" ]; then \
-			echo "$(FACTORY_CYAN)— issue #$$issue reprise $(LOOP_MAX_RETRY) fois sans avancer : arrêt. Regardez ce qui la bloque avant de relancer. —$(FACTORY_RST)" ; \
+			echo "$(FACTORY_CYAN)— « $$issue » reprise $(LOOP_MAX_RETRY) fois sans avancer : arrêt. Regardez ce qui la bloque avant de relancer. —$(FACTORY_RST)" ; \
 			exit 4 ; \
-		fi ; \
-		prompt="$(LOOP_PROMPT_TPL)" ; prompt="$${prompt//@ISSUE@/$$issue}" ; \
-		echo "$(FACTORY_CYAN)— issue #$$issue —$(FACTORY_RST)" ; \
 		fi ; \
 		GH_TOKEN="$$(bash "$(FACTORY_BIN)/gh-app-token.sh")" || { echo "$(FACTORY_CYAN)— jeton dApp impossible à frapper : configuration cassée. Arrêt. —$(FACTORY_RST)" ; exit 3 ; } ; \
 		export GH_TOKEN ; \

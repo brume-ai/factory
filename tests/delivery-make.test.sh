@@ -44,15 +44,24 @@ tour() {
     echo "la boucle a echoue :" >&2; cat "$TESTTMP/loop.out" >&2; return 1; }
   sed -n 's/^livraison: //p' "$TESTTMP/agent.log" | tail -n1
 }
+prompt_du_tour() { sed -n 's/^prompt: //p' "$TESTTMP/agent.log" | tail -n1; }
 
 # --- Le defaut traverse la boucle --------------------------------------------
 base_conf
 assert_eq "pull-request" "$(tour)" "cle absente : la boucle travaille en pull-request"
+# ET L'AGENT RECOIT LE PROMPT DE SON MODE. Un agent a qui l'on donne le mauvais
+# ouvre une pull request que personne ne mergera, ou ferme lui-meme une carte que
+# le pipeline devait fermer : dans les deux cas la garantie du mode tombe, et
+# rien dans le journal n'a l'air anormal.
+assert_contains "$(prompt_du_tour)" "pull request" "pull-request : le prompt parle de pull request"
+assert_contains "$(prompt_du_tour)" "c'est le merge qui la ferme" "pull-request : le prompt dit qui ferme la carte"
 
 # --- factory.conf : les deux lecteurs sont d'accord --------------------------
 base_conf
 printf 'FACTORY_DELIVERY = trunk\n' >> "$C/factory.conf"
 assert_eq "trunk" "$(tour)" "factory.conf : trunk traverse la boucle"
+assert_contains "$(prompt_du_tour)" "c'est le déploiement qui la ferme" "trunk : le prompt dit qui ferme la carte"
+assert_not_contains "$(prompt_du_tour)" "pull request" "trunk : le prompt ne promet aucune pull request"
 
 # --- LE CAS QUI SEPARE LES DEUX LECTEURS : la cle vit dans le .env -----------
 # Make ne lit pas .env. Un lecteur Make rendrait pull-request ici.
