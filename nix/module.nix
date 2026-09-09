@@ -24,6 +24,19 @@ in
     };
     trunk = lib.mkOption { type = lib.types.str; default = "main"; };
     stateDir = lib.mkOption { type = lib.types.str; default = "/srv/factory"; };
+    stateDevice = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "/dev/disk/by-label/factory-state";
+      description = ''
+        Peripherique portant `stateDir`, monte par le module. `null` si `stateDir`
+        vit sur le disque racine, ou si l'hote declare le montage lui-meme.
+
+        PAR ETIQUETTE, JAMAIS PAR /dev/sdX : l'ordre d'enumeration n'est pas
+        garanti d'un demarrage a l'autre, et une fstab qui designe le mauvais
+        disque empeche la machine de demarrer.
+      '';
+      example = "/dev/disk/by-label/factory-state";
+    };
     repoDir = lib.mkOption {
       type = lib.types.str;
       default = "${cfg.stateDir}/workspace/repo";
@@ -53,18 +66,45 @@ in
       "f ${secrets}/claude-home/.claude.json 0600 ${cfg.user} users - {}"
     ];
 
-    # LE MAGASIN D'IMAGES PAR MONTAGE LIE, PAS PAR data-root : docker 29 range
-    # ses couches dans le magasin de containerd, que data-root ne gouverne pas.
-    fileSystems."/var/lib/docker" = {
-      device = "${cfg.stateDir}/docker";
-      fsType = "none";
-      options = [ "bind" ];
-    };
-    fileSystems."/var/lib/containerd" = {
-      device = "${cfg.stateDir}/containerd";
-      fsType = "none";
-      options = [ "bind" ];
-    };
+    # LE VOLUME D'ETAT LUI-MEME. Sans ce montage, `stateDir` est un simple
+    # repertoire du disque racine : le magasin d'images y atterrit, une remise a
+    # zero de la machine emporte le cache, et les secrets deposes a la main ne
+    # survivent a rien. Les deux montages lies ci-dessous n'ont alors plus de
+    # source persistante — ils lient la racine sur elle-meme, en silence.
+    #
+    # `nofail` pour qu'un volume absent n'interdise PAS de demarrer : sinon un
+    # incident de stockage devient un incident d'acces, et on perd la machine au
+    # moment ou il faut justement s'y connecter pour la reparer.
+    fileSystems = lib.mkMerge [
+      (lib.mkIf (cfg.stateDevice != null) {
+        ${cfg.stateDir} = {
+          device = cfg.stateDevice;
+          fsType = "ext4";
+          options = [ "defaults" "nofail" ];
+        };
+      })
+      {
+        # LE MAGASIN D'IMAGES PAR MONTAGE LIE, PAS PAR data-root : docker 29 range
+        # ses couches dans le magasin de containerd, que data-root ne gouverne pas.
+        #
+        # `depends` EST OBLIGATOIRE : un bind dont la source n'est pas encore
+        # montee lie le repertoire VIDE du dessous. Docker demarre, ne voit aucune
+        # image, en reconstruit une de onze gigaoctets — sur le disque racine — et
+        # rien ne signale que le volume, monte entre-temps, est ailleurs.
+        "/var/lib/docker" = {
+          device = "${cfg.stateDir}/docker";
+          fsType = "none";
+          options = [ "bind" ];
+          depends = [ cfg.stateDir ];
+        };
+        "/var/lib/containerd" = {
+          device = "${cfg.stateDir}/containerd";
+          fsType = "none";
+          options = [ "bind" ];
+          depends = [ cfg.stateDir ];
+        };
+      }
+    ];
 
     users.users.${cfg.user} = {
       isNormalUser = true;
@@ -83,7 +123,20 @@ in
       authorizedKeysFiles = [ "${secrets}/authorized_keys" ];
     };
 
-    environment.systemPackages = with pkgs; [ git jq curl openssl nodejs_22 gnumake ];
+    # `python3` PARCE QUE LES SCRIPTS DE bin/ EN DEPENDENT SUR L'HOTE, pas
+    # seulement dans le conteneur : `deploy.sh` frappe son jeton en lancant
+    # `bin/gh-app-token.sh`, qui lit la reponse de l'API en python (ligne 71).
+    # Ca marche aujourd'hui uniquement parce que les images cloud embarquent
+    # python pour cloud-init — une base qui ne le ferait pas donnerait un
+    # deploiement qui echoue sur « jeton impossible a frapper ».
+    #
+    # `nodejs` N'Y EST PLUS, et c'est deliberé. Il n'est utile qu'a la
+    # construction de l'image, ou le service `factory-image` le fournit deja par
+    # son propre `path`. Dans systemPackages il etait redondant — et il rendait ce
+    # module inutilisable sur un hote qui refuse les toolchains de langage sur le
+    # systeme, ce qui est une politique repandue et saine : ils appartiennent au
+    # devcontainer du projet.
+    environment.systemPackages = with pkgs; [ git jq curl openssl python3 gnumake ];
 
     virtualisation.docker = {
       enable = true;
@@ -154,6 +207,15 @@ in
       script = sh ''
         npx -y @devcontainers/cli@0.88.0 build \
           --workspace-folder ${cfg.repoDir} --image-name ${cfg.imageTag}
+
+        # GARDE : une image sans CLI Docker franchit toutes les etapes suivantes
+        # et ne se revele qu'a la premiere carte. Un `docker compose build` ou une
+        # base mal choisie produit exactement ca — la Feature docker-in-docker
+        # n'est appliquee que par l'outillage Dev Containers — et la panne se
+        # presente alors comme un probleme de carte, tres loin de sa cause.
+        # On le verifie pendant qu'on regarde.
+        ${docker} run --rm ${cfg.imageTag} bash -lc 'command -v docker >/dev/null' \
+          || { echo "l'image batie n'a pas de CLI Docker : la boucle ne pourra pas monter de stack" >&2; exit 1; }
       '';
     };
 
