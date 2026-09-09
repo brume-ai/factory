@@ -136,6 +136,11 @@ Le module produit l'utilisateur système, le volume d'état, l'unité `factory-l
 et sa rotation de journal. Une usine de plus, c'est ce bloc — sur la même machine
 ou sur une autre.
 
+Pour **faire naître** cette machine sous Incus plutôt que de l'installer :
+[`docs/vm-nixos.md`](docs/vm-nixos.md) — la recette vérifiée, et les deux pièges
+qui coûtent une demi-journée chacun (Secure Boot refuse le disque de NixOS ; le
+profil Incus par défaut branche sur du NAT, pas sur le LAN).
+
 **Le module n'a jamais la clé de l'App**, seulement le chemin où la lire. La clé
 est un secret chez le propriétaire de l'hôte, déchiffré au démarrage. Sur un
 poste de travail il n'y en a pas : on pousse sous son propre compte, et
