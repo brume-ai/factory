@@ -71,6 +71,17 @@ endif
 loop:
 	@command -v $(LOOP_MAIN_BIN) >/dev/null 2>&1 || { echo "$(LOOP_MAIN_BIN) CLI introuvable dans le PATH"; exit 1; }
 	@[ -n "$(GH_REPO)" ] || { echo "factory.mk: GH_REPO absent (factory.conf a la racine du depot)"; exit 3; }
+	@# LE MODE DE LIVRAISON, LU PAR bin/lib.sh ET PAR PERSONNE D'AUTRE.
+	@# Make POURRAIT le lire seul — le `-include factory.conf` ci-dessus lui donne
+	@# la variable, comme FACTORY_TRUNK. Il ne le fait pas, parce que ce serait un
+	@# SECOND lecteur, et un lecteur strictement plus faible : `conf_get` lit
+	@# factory.conf PUIS .env, tolere `export`, les guillemets et un commentaire
+	@# de fin de ligne ; Make ne lit que factory.conf et rien de tout cela. Une
+	@# cle posee dans le .env — l'emplacement que la doc recommande — donnerait
+	@# alors `trunk` a tous les scripts et `pull-request` a la boucle, sans un mot.
+	@# Un basculement de mode SILENCIEUX, produit par le lecteur du mode.
+	@# Donc : une seule liste de valeurs, un seul message, un seul verdict.
+	@bash -c '. "$(FACTORY_DIR)/bin/lib.sh" ; FACTORY_ROOT="$(CURDIR)" delivery_mode >/dev/null'
 	@# IDENTITÉ DE COMMIT DE L'USINE. Une CI de dépôt consommateur qui vérifie
 	@# l'auteur des commits (allowlist bot, check CLA...) refuse tout auteur
 	@# qu'elle ne reconnaît pas. Sans identité explicite, l'agent signe avec
@@ -173,6 +184,7 @@ loop:
 	@# Le Makefile, lui, est déjà parsé par le `make` en cours : un correctif qui le
 	@# touche n'entre qu'au prochain démarrage de la boucle.
 	@last="" ; same=0 ; \
+	FACTORY_DELIVERY="$$(bash -c '. "$(FACTORY_DIR)/bin/lib.sh" ; FACTORY_ROOT="$(CURDIR)" delivery_mode')" ; export FACTORY_DELIVERY ; \
 	export GIT_AUTHOR_NAME="$(FACTORY_GIT_NAME)" GIT_AUTHOR_EMAIL="$(FACTORY_GIT_EMAIL)" ; \
 	export GIT_COMMITTER_NAME="$(FACTORY_GIT_NAME)" GIT_COMMITTER_EMAIL="$(FACTORY_GIT_EMAIL)" ; \
 	stop_asked() { \

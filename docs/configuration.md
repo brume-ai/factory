@@ -37,6 +37,7 @@ pour couvrir les deux.
 | Cle | Defaut | Lue via | Consommateur |
 |---|---|---|---|
 | `GH_REPO` | *(requise)* | `conf_get`/`conf_require`, transmise explicitement par `factory.mk` a chaque script qu'il appelle | `gh-next-issue.sh`, `gh-unblock.sh`, `gh-stack.sh`, `gh-seed-labels.sh`, `wt-cleanup.sh`, `gh-pr-attention.sh`, `run-loop.sh`, `deploy.sh`, `bin/factory stop`, garde de `factory.mk` |
+| `FACTORY_DELIVERY` | `pull-request` | `conf_get` (`delivery_mode`/`delivery_require` dans `bin/lib.sh`) ; `factory.mk` **delegue a ce meme lecteur** au lieu d'en avoir un second | le mode de livraison : `pull-request` (la boucle rend une PR, le merge humain ferme la carte) ou `trunk` (elle pousse sur le tronc de recette, le pipeline du consommateur ferme la carte). Toute autre valeur : **code 3**, jamais de repli silencieux. Voir `docs/livraison.md` |
 | `FACTORY_TRUNK` | `main` | `conf_get` | garde de branche et rebase du tronc dans `factory.mk` (`make loop`), `gh-stack.sh` (base par defaut), `deploy.sh` |
 | `FACTORY_GIT_NAME` | *(requise)* | variable Make (`-include factory.conf`), verifiee au demarrage de `make loop` | `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` exportes par `factory.mk` avant chaque tour |
 | `FACTORY_GIT_EMAIL` | *(requise)* | idem | `GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_EMAIL` idem |
