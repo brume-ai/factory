@@ -34,6 +34,7 @@ import os
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -72,8 +73,13 @@ TOKEN = token()
 DRY = "--dry-run" in sys.argv
 
 
-def api(path, method="GET", data=None, paginate=False):
-    """Appelle l'API. `paginate` suit les pages tant qu'elles sont pleines."""
+def api(path, method="GET", data=None, paginate=False, absolute=False):
+    """Appelle l'API. `paginate` suit les pages tant qu'elles sont pleines.
+
+    `absolute` sort du prefixe /repos/<depot>/ : la recherche d'issues vit sous
+    /search/issues, pas sous le depot, et c'est le seul appel du script qui en a
+    besoin.
+    """
     if DRY and method != "GET":
         print(f"  [dry-run] {method} /{path}"
               + (f"  {json.dumps(data, ensure_ascii=False)[:120]}" if data else ""),
@@ -86,7 +92,8 @@ def api(path, method="GET", data=None, paginate=False):
     # zéro carte en n'écrivant qu'une ligne sur stderr. Le `Link` est la seule
     # forme que les trois comprennent.
     items = []
-    url = f"https://api.github.com/repos/{REPO}/{path}"
+    url = (f"https://api.github.com/{path}" if absolute
+           else f"https://api.github.com/repos/{REPO}/{path}")
     if paginate:
         url += ("&" if "?" in url else "?") + "per_page=100"
     while True:
@@ -272,6 +279,44 @@ def main():
         body = f"{marker(key)}\n\n{card['body']}"
         issue = existing.get(key)
         if issue is None:
+            # ON REDEMANDE AVANT DE CRÉER, et cette seconde question n'est pas
+            # une précaution de style.
+            #
+            # Mesuré sur open-source-draft : le 2026-09-09 à 15h10, ce triage a
+            # créé #442 et #443 alors que #427 et #429 étaient OUVERTES, portaient
+            # le même marqueur au caractère près, et le même label
+            # `factory:delivered`. Même motif le 2026-08-11 et le 2026-09-05 : des
+            # lots entiers recréés à la même seconde. La clé est pourtant stable
+            # (`dependabot:<manifeste>`) et la pagination suit le `Link`.
+            #
+            # La cause n'est pas établie — la liste au-dessus est simplement
+            # revenue sans les cartes qui existaient. Ce garde ne l'explique pas,
+            # il la rend inoffensive : une recherche CIBLÉE sur le marqueur ne
+            # dépend d'aucune liste, donc aucune liste incomplète ne peut la
+            # tromper.
+            #
+            # Le coût d'un doublon n'est pas cosmétique : la file est opt-out,
+            # donc une carte en double EST du travail en double — un tour d'agent
+            # complet, une PR concurrente sur le même lockfile, et deux diffs qui
+            # se marchent dessus à la relecture.
+            # LA RECHERCHE PROPOSE, LE CORPS DÉCIDE. GitHub tokenise le code : une
+            # requête sur `<!-- factory-security:dependabot:products/studio/backend/uv.lock -->`
+            # rend AUSSI la carte de `products/studio/ee/backend` — vérifié, deux
+            # résultats pour un marqueur. Se fier au compte annulerait des créations
+            # légitimes, c'est-à-dire remplacer un doublon par une carte manquante,
+            # qui est la panne la plus chère des deux : un doublon se voit, une
+            # alerte jamais transposée ne se voit pas.
+            q = urllib.parse.quote(f'repo:{REPO} is:issue is:open "{marker(key)}"')
+            probe = api(f"search/issues?q={q}", absolute=True)
+            twin = None
+            for cand in (probe or {}).get("items", []) if isinstance(probe, dict) else []:
+                if marker(key) in (cand.get("body") or ""):
+                    twin = cand["number"]
+                    break
+            if twin is not None:
+                print(f"gh-security-triage: carte #{twin} porte déjà ce marqueur — "
+                      f"création annulée ({key})", file=sys.stderr)
+                continue
             api("issues", "POST", {"title": card["title"], "body": body,
                                    "labels": [PRIORITY]})
             created += 1
