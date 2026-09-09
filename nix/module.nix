@@ -201,7 +201,12 @@ in
         User = cfg.user;
         WorkingDirectory = cfg.repoDir;
       };
-      path = with pkgs; [ nodejs_22 git coreutils config.virtualisation.docker.package ];
+      # `bash` PARCE QUE npx LANCE `sh`, et qu'un `path` systemd EST le PATH :
+      # rien d'autre ne s'y trouve. Sur une distribution classique le shell est
+      # dans le PATH par accident du systeme ; sur NixOS il n'y a pas d'accident,
+      # et la CLI Dev Containers s'arrete sur `npm error enoent spawn sh` — un
+      # message qui parle de npm et pas du tout du shell manquant.
+      path = with pkgs; [ bash nodejs_22 git coreutils config.virtualisation.docker.package ];
       # PAR LA CLI DEV CONTAINERS, jamais docker build : une Feature n'est
       # appliquee que par l'outillage Dev Containers.
       script = sh ''
@@ -235,6 +240,17 @@ in
         FACTORY_IMAGE_TAG = cfg.imageTag;
         FACTORY_TRUNK = cfg.trunk;
       };
+      # MEME RAISON QUE POUR factory-image, ET C'EST LA MEME PANNE : un `path`
+      # systemd EST le PATH de l'unite. `ExecStart` nomme bash par son chemin
+      # absolu, mais le script, lui, appelle `docker` et `env bash` par leur nom.
+      # Sans cette ligne : « docker: command not found », « env: 'bash': No such
+      # file or directory », sortie 127 — et `Restart = always` en fait une boucle
+      # d'echec toutes les trente secondes, qui ressemble a une usine qui redemarre.
+      #
+      # `git` parce que le script rafraichit le depot avant de lancer un tour.
+      # Le reste (coreutils, findutils, gnugrep, gnused) est ajoute par NixOS a
+      # toute unite, ce qui explique que seuls docker et bash aient manque.
+      path = with pkgs; [ bash git config.virtualisation.docker.package ];
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
