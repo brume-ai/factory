@@ -97,33 +97,12 @@ fi
 # même lui qui l'a le plus souvent déclenché — il sonde toutes les PR à chaque
 # tour, donc il fait le plus d'appels. curl réessaie d'abord ; ce qui survit est
 # classé en 4 (passager, la boucle resonde) ou 3 (refus, la boucle crie).
-CURL_RETRY=(--retry 3 --retry-delay 2 --retry-connrefused
-            --connect-timeout 10 --max-time 60)
-
-api() {
-  local body code m="${2:-GET}" data="${3:-}" rc
-  body="$(mktemp)"; trap 'rm -f "$body"' RETURN
-  code="$(curl -sS "${CURL_RETRY[@]}" -o "$body" -w '%{http_code}' -X "$m" \
-          -H "Authorization: Bearer $TOKEN" \
-          -H "Accept: application/vnd.github+json" \
-          ${data:+-H "Content-Type: application/json" -d "$data"} "https://api.github.com/$1")" || rc=$?
-  if [[ -n "${rc:-}" ]]; then
-    echo "gh-pr-attention: transport KO sur /$1 (curl $rc) — raté passager, on resonde" >&2
-    return 4
-  fi
-  if [[ "$code" == 000 || "$code" == 5* || "$code" == 429 ]]; then
-    echo "gh-pr-attention: HTTP $code sur /$1 — raté passager, on resonde" >&2
-    return 4
-  fi
-  [[ "$code" == 2* ]] || { echo "gh-pr-attention: HTTP $code sur /$1" >&2; return 3; }
-  # Un 200 tronqué reste un 200 : sans cette validation, c'est le `json.load`
-  # d'un consommateur qui explose plus bas, en trace Python illisible.
-  if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$body" 2>/dev/null; then
-    echo "gh-pr-attention: réponse illisible sur /$1 (corps tronqué) — raté passager, on resonde" >&2
-    return 4
-  fi
-  cat "$body"
-}
+# LE CLIENT HTTP VIT DANS lib.sh, et pas ici. Quatre copies de cette
+# fonction coexistaient avec quatre comportements ; deux seulement
+# distinguaient le rate passager du refus de l'API, et c'est la difference
+# entre une usine qui dort trois minutes et une usine qui s'arrete.
+FACTORY_API_TAG=gh-pr-attention
+api() { factory_api "$@"; }
 
 prs="$(api "repos/$GH_REPO/pulls?state=open&per_page=100")" || exit $?
 

@@ -123,61 +123,12 @@ fi
 # `--max-time` est indispensable avec `--retry` : sans lui, une connexion qui
 # pend 134 s (observé le 10/08) est réessayée trois fois, et un tour part pour
 # sept minutes de silence.
-CURL_RETRY=(--retry 3 --retry-delay 2 --retry-connrefused
-            --connect-timeout 10 --max-time 60)
-
-api() {  # <chemin> — imprime le corps · 3 = refus de l'API · 4 = raté passager
-  local body code rc
-  body="$(mktemp)"; trap 'rm -f "$body"' RETURN
-  code="$(curl -sS "${CURL_RETRY[@]}" -o "$body" -w '%{http_code}' \
-    -H "Authorization: Bearer $TOKEN" \
-    -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/$1")" || rc=$?
-  if [[ -n "${rc:-}" ]]; then
-    echo "gh-next-issue: transport KO sur /$1 (curl $rc) — raté passager, on resonde" >&2
-    return 4
-  fi
-  # 000 = curl n'a pas obtenu de réponse · 5xx et 429 = GitHub flanche ou nous
-  # freine. Aucun de ces trois n'est réparable par un humain, donc aucun ne doit
-  # arrêter l'usine.
-  if [[ "$code" == 000 || "$code" == 5* || "$code" == 429 ]]; then
-    echo "gh-next-issue: HTTP $code sur /$1 — raté passager, on resonde" >&2
-    return 4
-  fi
-  if [[ "$code" != 2* ]]; then
-    echo "gh-next-issue: HTTP $code sur /$1" >&2
-    # Le 403 a UNE cause dominante : l'App n'a pas la permission. On la nomme,
-    # plutôt que de laisser chercher côté jeton ou réseau — et ce n'est pas la
-    # même selon l'endpoint. `Actions: Read` n'est demandée qu'en mode `trunk`,
-    # où le pipeline remplace la PR : envoyer chercher `Issues` là serait
-    # exactement le message qui a coûté cinq arrêts d'usine en sept jours.
-    if [[ "$code" == 403 || "$code" == 404 ]]; then
-      # LE MOTIF EST ANCRÉ SUR L'ENDPOINT DE CE DÉPÔT, PAS SUR LE CHEMIN ENTIER.
-      # `*/actions/*` attrapait aussi le 403 des ISSUES de tout dépôt dont le
-      # propriétaire ou le nom est `actions` — github.com/actions est une vraie
-      # organisation — et envoyait alors chercher une permission qui n'a rien à
-      # voir avec la panne : la classe même de mauvais diagnostic que ce script
-      # existe pour supprimer. C'était aussi la SEULE différence de comportement
-      # que ce chantier introduisait en `pull-request`, mesurée par A/B contre
-      # l'avant-chantier sur `actions/runner`.
-      case "$1" in
-        "repos/$GH_REPO/actions/"*) echo "  → l'App a-t-elle « Actions: Read », et la permission a-t-elle été ACCEPTÉE sur l'installation ?" >&2 ;;
-        *)                          echo "  → l'App a-t-elle « Issues: Read and write », et la permission a-t-elle été ACCEPTÉE sur l'installation ?" >&2 ;;
-      esac
-    fi
-    return 3
-  fi
-  # LE CORPS EST VALIDÉ ICI, PAS PLUS LOIN. Un 200 tronqué en cours de transfert
-  # reste un 200 : c'est le `json.load` d'un consommateur qui explosait, trois
-  # étages plus bas, en `JSONDecodeError: Expecting value` — une trace Python
-  # illisible qui ressemblait à un bug de code et n'était qu'un octet manquant.
-  # Six fois en sept jours.
-  if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$body" 2>/dev/null; then
-    echo "gh-next-issue: réponse illisible sur /$1 (corps tronqué) — raté passager, on resonde" >&2
-    return 4
-  fi
-  cat "$body"
-}
+# LE CLIENT HTTP VIT DANS lib.sh, et pas ici. Quatre copies de cette
+# fonction coexistaient avec quatre comportements ; deux seulement
+# distinguaient le rate passager du refus de l'API, et c'est la difference
+# entre une usine qui dort trois minutes et une usine qui s'arrete.
+FACTORY_API_TAG=gh-next-issue
+api() { factory_api "$@"; }
 
 # UNE seule requête, partition côté client. L'API n'a pas de « sans ce label »,
 # et deux requêtes exposeraient à une carte qui change d'état entre les deux.

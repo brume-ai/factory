@@ -70,15 +70,12 @@ BLOCKED="${FACTORY_BLOCKED_LABEL:-factory:blocked}"
 if [ -n "${FACTORY_TOKEN:-}" ]; then TOKEN="$FACTORY_TOKEN"
 else TOKEN="$(bash "$HERE/gh-app-token.sh")" || exit 3
 fi
-api() {
-  local m="${2:-GET}" data="${3:-}" code body
-  body="$(mktemp)"; trap 'rm -f "$body"' RETURN
-  code="$(curl -sS -o "$body" -w '%{http_code}' -X "$m" \
-    -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-    ${data:+-H "Content-Type: application/json" -d "$data"} "https://api.github.com/$1")"
-  [[ "$code" == 2* ]] || { echo "gh-unblock: HTTP $code sur /$1" >&2; return 3; }
-  cat "$body"
-}
+# LE CLIENT HTTP VIT DANS lib.sh, et pas ici. Quatre copies de cette
+# fonction coexistaient avec quatre comportements ; deux seulement
+# distinguaient le rate passager du refus de l'API, et c'est la difference
+# entre une usine qui dort trois minutes et une usine qui s'arrete.
+FACTORY_API_TAG=gh-unblock
+api() { factory_api "$@"; }
 
 n=0
 while read -r issue blocker; do

@@ -117,6 +117,87 @@ delivery_require() {  # sort en 3 si FACTORY_DELIVERY est illisible
   export FACTORY_DELIVERY
 }
 
+# LE MEME CLIENT HTTP POUR TOUTE LA MAISON, et c'est une correction, pas du
+# rangement. Quatre scripts definissaient chacun leur `api()`, avec QUATRE
+# comportements :
+#   gh-next-issue    reessaie, classe 3/4, nomme la permission manquante
+#   gh-pr-attention  idem, plus la validation du JSON
+#   gh-unblock       aucun reessai, et TOUT echec HTTP rendu en 3
+#   gh-stack         rien du tout : le corps d'un 404 partait dans le parseur
+#
+# Le 3 de gh-unblock est le plus couteux des quatre. « 3 » veut dire « un humain
+# doit reparer », donc la boucle s'arrete ; un 502 de GitHub l'arretait aussi.
+# C'est le defaut symetrique de celui qui a coute cinq arrets d'usine en sept
+# jours, et il a survecu parce que `factory.mk` l'appelait avec `|| true` — le
+# masque disparu, la panne apparait. D'ou : un seul client, la classification du
+# meilleur des quatre, et plus de version faible a oublier de corriger.
+#
+# CONTRAT : $TOKEN doit etre pose par l'appelant (c'est le nom que les quatre
+# utilisaient deja), et $FACTORY_API_TAG prefixe les messages — a defaut, le nom
+# du script appelant.
+FACTORY_CURL_RETRY=(--retry 3 --retry-delay 2 --retry-connrefused
+                    --connect-timeout 10 --max-time 60)
+
+# PAS DE `trap … RETURN` ICI, et c'est une lecon payee. Un trap RETURN pose dans
+# une fonction n'est pas local a cette fonction sans `set -o functrace` : il
+# survit et se redeclenche au retour de la fonction APPELANTE. Les quatre copies
+# s'en tiraient parce qu'elles etaient appelees en direct ; passees derriere le
+# mince `api() { factory_api "$@"; }`, le trap partait deux fois et la seconde
+# lisait `$body` hors de portee — « variable sans liaison » sous `set -u`, sur
+# une requete parfaitement reussie. Le menage se fait donc a la main, dans
+# l'enveloppe, quel que soit le chemin de sortie.
+factory_api() {  # <chemin> [methode] [donnees] — imprime le corps · 3 refus · 4 rate passager
+  local body rc
+  body="$(mktemp)" || { echo "factory: mktemp a echoue" >&2; return 3; }
+  _factory_api "$body" "$@"; rc=$?
+  rm -f "$body"
+  return $rc
+}
+
+_factory_api() {  # <fichier de corps> <chemin> [methode] [donnees]
+  local body="$1" path="$2" m="${3:-GET}" data="${4:-}" code rc=
+  local tag="${FACTORY_API_TAG:-$(basename "${BASH_SOURCE[2]:-factory}" .sh)}"
+  [ -n "${TOKEN:-}" ] || { echo "$tag: aucun jeton pose avant factory_api" >&2; return 3; }
+  code="$(curl -sS "${FACTORY_CURL_RETRY[@]}" -o "$body" -w '%{http_code}' -X "$m" \
+    -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+    ${data:+-H "Content-Type: application/json" -d "$data"} \
+    "https://api.github.com/$path")" || rc=$?
+  if [ -n "$rc" ]; then
+    echo "$tag: transport KO sur /$path (curl $rc) — rate passager, on resonde" >&2
+    return 4
+  fi
+  # 000 = curl n'a obtenu aucune reponse · 5xx et 429 = GitHub flanche ou nous
+  # freine. Aucun des trois n'est reparable par un humain, donc aucun ne doit
+  # arreter l'usine.
+  case "$code" in
+    000|5*|429) echo "$tag: HTTP $code sur /$path — rate passager, on resonde" >&2; return 4 ;;
+  esac
+  if [[ "$code" != 2* ]]; then
+    echo "$tag: HTTP $code sur /$path" >&2
+    # Le 403 a UNE cause dominante — l'App n'a pas la permission — et ce n'est
+    # pas la meme selon l'endpoint. Le motif est ancre sur l'endpoint DE CE
+    # DEPOT : `*/actions/*` attrapait aussi le 403 des issues de tout depot dont
+    # le proprietaire s'appelle `actions` (github.com/actions est une vraie
+    # organisation), et envoyait chercher une permission sans rapport.
+    case "$code:$path" in
+      40[34]:"repos/${GH_REPO:-}/actions/"*)
+        echo "  → l'App a-t-elle « Actions: Read », et la permission a-t-elle ete ACCEPTEE sur l'installation ?" >&2 ;;
+      40[34]:*)
+        echo "  → l'App a-t-elle « Issues: Read and write », et la permission a-t-elle ete ACCEPTEE sur l'installation ?" >&2 ;;
+    esac
+    return 3
+  fi
+  # UN 200 TRONQUE RESTE UN 200. Sans cette validation, c'est le `json.load` d'un
+  # consommateur qui explose plus bas, en trace Python illisible — et un corps
+  # coupe en vol est un rate passager, pas une configuration cassee.
+  if command -v python3 >/dev/null 2>&1 \
+     && ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$body" 2>/dev/null; then
+    echo "$tag: reponse illisible sur /$path (corps tronque) — rate passager, on resonde" >&2
+    return 4
+  fi
+  cat "$body"
+}
+
 # Un shell sur l'usine, en direct. FACTORY_SSH_BIN permet aux tests (et a un
 # transport exotique) de remplacer ssh sans toucher aux appelants.
 factory_ssh() {

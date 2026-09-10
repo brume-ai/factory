@@ -30,11 +30,12 @@ TRUNK="$(conf_get FACTORY_TRUNK main)"
 if [ -n "${FACTORY_TOKEN:-}" ]; then TOKEN="$FACTORY_TOKEN"
 else TOKEN="$(bash "$HERE/gh-app-token.sh")" || exit 3
 fi
-api() {
-  local m="${2:-GET}" body="${3:-}"
-  curl -sS -X "$m" -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-       ${body:+-H "Content-Type: application/json" -d "$body"} "https://api.github.com/$1"
-}
+# LE CLIENT HTTP VIT DANS lib.sh, et pas ici. Quatre copies de cette
+# fonction coexistaient avec quatre comportements ; deux seulement
+# distinguaient le rate passager du refus de l'API, et c'est la difference
+# entre une usine qui dort trois minutes et une usine qui s'arrete.
+FACTORY_API_TAG=gh-stack
+api() { factory_api "$@"; }
 
 branch_of() { printf 'card/%s' "$1"; }
 
