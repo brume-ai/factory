@@ -8,7 +8,7 @@
 # un agent qui pousse sur un tronc protege ou qui ouvre une proposition qui ne
 # fermera jamais sa carte. Ce test rend ce cout-la immediat.
 . "$(dirname "$0")/helpers.sh"
-# LE FICHIER SOUS TEST EST SURCHARGEABLE, et c'est ce qui rend le controle 16
+# LE FICHIER SOUS TEST EST SURCHARGEABLE, et c'est ce qui rend le controle 18
 # possible : ce test se relance LUI-MEME sur des copies mutees du SKILL.md pour
 # prouver qu'il attrape les mutations. Sans cette variable il faudrait ecrire la
 # mutation a cote et esperer que quelqu'un la joue.
@@ -148,12 +148,27 @@ tronc_commun() {
     /^<\/Mode_(Pull_Request|Trunk)>$/    { skip = 0 }
   ' "$S"
 }
+tronc_commun_code() {  # les lignes de CODE du tronc commun, volets exclus
+  awk '
+    /^<Delivery_Mode>$/                  { skip = 1 }
+    /^<Mode_(Pull_Request|Trunk)>$/      { skip = 1; fence = 0 }
+    skip == 0 && /^```/                  { fence = 1 - fence; next }
+    skip == 0 && fence == 1              { printf "%d\t%s\n", NR, $0 }
+    /^<\/Delivery_Mode>$/                { skip = 0 }
+    /^<\/Mode_(Pull_Request|Trunk)>$/    { skip = 0; fence = 0 }
+  ' "$S"
+}
 # `\bPR\b` et pas `PR` : PREUVE, PROUVE et PRECIS en portent les deux lettres.
-# `worktree` est un marqueur pull-request cote procedure — le mode trunk n'en
-# cree jamais pour une carte (il en detache un pour la branche de preuves, mais
-# c'est DANS son volet).
+# `worktree` NU N'EST PLUS LE BON MOTIF, et c'est une consequence mesuree du
+# deplacement du depot de preuves dans le tronc commun : ce bloc detache un
+# worktree sur `$T` pour les DEUX modes, et le lint criait dessus. Ce qui reste
+# mode-dependant, c'est l'environnement PAR CARTE — son chemin, sa creation nue,
+# et les crochets qui le fabriquent. La tournure « UN WORKTREE PAR CARTE », elle,
+# est gardee par la table du controle 11, qui l'exige cote pull-request et
+# l'interdit cote trunk : ce n'est pas un trou, c'est un autre controle.
 for m in 'Closes #' 'Refs #' 'factory:delivered' '[Pp]ull request' '\bPR\b' \
-         'card/' 'worktree' '--draft' 'gh pr ' 'déploiement'; do
+         'card/' '\.worktrees/' 'worktree add -b' 'worktree-up' 'worktree-down' \
+         '--draft' 'gh pr ' 'déploiement'; do
   h="$(tronc_commun | grep -E -- "$m" | head -3 || true)"
   [ -z "$h" ] || fail "mode-dependant hors volet ($m) :
 $h"
@@ -222,7 +237,14 @@ absent() {  # <mode> <motif>...
 }
 present pull-request 'gh pr create --draft --base' 'Closes #<n>' 'factory:delivered' \
                      '.worktrees/card-' 'gh pr checks' 'le merge humain'
-absent  pull-request 'Refs #' 'checkout --orphan' 'gh run watch'
+# `checkout --orphan` A QUITTE CETTE LISTE, et ce n'est pas un relachement : le
+# depot des preuves est passe dans le tronc commun — la branche orpheline
+# `evidence/<n>` sert les deux modes depuis qu'on a constate que des captures
+# commitees dans la branche d'une carte meurent au merge avec elle — donc l'agent
+# pull-request le lit desormais, et c'est voulu. Ce qui doit rester absent de sa
+# lecture, c'est ce qu'il EXECUTERAIT de travers : `Refs #` et l'attente du
+# verdict sur le tronc.
+absent  pull-request 'Refs #' 'gh run watch'
 present trunk 'Refs #N' 'checkout --orphan' 'gh run watch' 'git rebase @{u}' \
               "Il n'y a pas de \`factory:delivered\` ici"
 # ET CES DEUX-LA DANS LE CODE, PAS DANS LA PROSE. Mesure : en reecrivant le bloc
@@ -230,10 +252,19 @@ present trunk 'Refs #N' 'checkout --orphan' 'gh run watch' 'git rebase @{u}' \
 # code et l'assertion ci-dessus restait verte — satisfaite par le paragraphe qui
 # EXPLIQUE la commande. Un volet dont la prose parle d'un geste que son code ne
 # fait plus est exactement ce que ce fichier existe pour attraper.
-for m in 'checkout --orphan' 'gh run watch'; do
-  volet_code Mode_Trunk | grep -qF -- "$m" \
-    || fail "« $m » n'est plus dans le CODE du volet trunk, seulement dans sa prose"
-done
+grep -qF -- 'gh run watch' <<<"$(volet_code Mode_Trunk)" \
+  || fail "« gh run watch » n'est plus dans le CODE du volet trunk, seulement dans sa prose"
+# MEME MESURE POUR LE DEPOT DES PREUVES, DEPLACEE AVEC LUI. Une prose du tronc
+# commun qui promet une branche orpheline au-dessus d'un bloc qui ne la cree plus
+# est exactement ce que ce fichier existe pour attraper.
+grep -qF -- 'checkout --orphan' <<<"$(tronc_commun_code)" \
+  || fail "« checkout --orphan » n'est plus dans le CODE du tronc commun : le depot des preuves est retombe dans un volet, ou a disparu"
+# ET UNE SEULE FOIS DANS TOUT LE FICHIER. Deux blocs de depot, ce serait la
+# divergence qu'on repare : le controle 16 joue le PREMIER, et le second vivrait
+# sans jamais etre mesure.
+c="$(lignes_de_code | grep -cF -- 'checkout --orphan' || true)"
+[ "$c" = 1 ] \
+  || fail "$c blocs de code creent la branche de preuves : le controle 16 n'en joue qu'un, l'autre ne serait jamais mesure"
 # `factory:delivered` n'est PAS dans les absents du volet trunk : le mode le
 # mentionne pour le NIER, et c'est justement ce qu'on veut lire. Ce qui doit
 # manquer, c'est ce qu'un agent EXECUTERAIT — la creation de la proposition, le
@@ -267,11 +298,13 @@ grep -qF "<Tend_A_Pull_Request>" "$REPO/factory.mk" \
 # 11. LES DEUX VOLETS D'UNE PAIRE SE DISTINGUENT — PAIRE PAR PAIRE, TOUTES.
 # CE CONTROLE EXISTE PARCE QUE LE TEST ETAIT CREUX ICI. Mesure : un script qui
 # ECHANGE le corps des deux volets d'une paire (balises intactes, ordre du
-# quadruplet respecte) laissait ce fichier rendre `ok` sur 3 des 11 paires — la
-# #1 (ce qu'est « le bout » d'une carte), la #6 (les labels poses en fin de tour)
-# et la #7 (le critere de blocage). Les trois qui decident le plus. Un test de
-# volets qui ne detecte pas l'inversion des volets ne teste rien : il constate
-# que le fichier a des balises.
+# quadruplet respecte) laissait ce fichier rendre `ok` sur 3 des 11 paires
+# d'alors — la #1 (ce qu'est « le bout » d'une carte), la #6 (les labels poses en
+# fin de tour) et la #7 (le critere de blocage). Les trois qui decident le plus.
+# Une douzieme paire s'est depuis intercalee a l'etape 4 (le test que la carte
+# ecrit), donc ces trois-la sont aujourd'hui les #1, #7 et #8. Un test de volets
+# qui ne detecte pas l'inversion des volets ne teste rien : il constate que le
+# fichier a des balises.
 # LES 8 AUTRES etaient attrapees par ricochet — un `gh pr create` qui atterrit
 # dans le volet trunk (controle 7), un motif de lecture qui manque (controle 8).
 # Un ricochet n'est pas une garantie : il tombe des qu'une paire est ecrite en
@@ -286,6 +319,7 @@ cote_pr=(
   "pull request vérifiée et prête à relire"
   "livrée, en attente de review"
   "Le travail est dans un environnement à lui"
+  "Un relecteur humain lira ce diff avant qu'il parte"
   "UN WORKTREE PAR CARTE"
   "La preuve va dans le **corps de la proposition**"
   "Ne mergez pas. Ne demandez pas de review à vous-même."
@@ -299,6 +333,7 @@ cote_trunk=(
   "commit poussé sur le tronc"
   "**le déploiement**, jamais vous"
   "Ne cherchez pas de worktree, il n'y en a pas."
+  "Il n'y a aucune relecture humaine entre vous et le tronc déployé."
   "UN SEUL ARBRE"
   "La preuve va **sur la carte, en commentaire**"
   "poussée, suite verte, déploiement réussi"
@@ -388,14 +423,126 @@ grep -qF "Le sondage n'interroge aucune proposition en \`trunk\`" "$S" \
   || fail "<Delivery_Mode> ne dit plus ce que le sondage fait vraiment en trunk"
 
 # ---------------------------------------------------------------------------
+# 14. LES REMONTEES SONT AU TRONC COMMUN, ET NULLE PART AILLEURS. Le skill a vecu
+# en trois exemplaires divergents, et ce qui est revenu ici est du MECANISME :
+# une propriete de git, de GitHub ou de la boucle, donc vraie des deux cotes.
+# Deux facons de reperdre ce travail, et une seule se voit a l'oeil nu : la
+# phrase disparait, ou elle est RECOPIEE dans un volet « pour que ce soit bien
+# clair » — et le fichier recommence a porter deux copies d'une meme consigne,
+# qui est le defaut exact qu'on repare. On exige donc les deux a la fois.
+volets() {  # tout ce qui est DANS un volet, les deux modes confondus
+  awk '
+    /^<Mode_(Pull_Request|Trunk)>$/   { inv = 1; next }
+    /^<\/Mode_(Pull_Request|Trunk)>$/ { inv = 0; next }
+    inv == 1                          { printf "%d\t%s\n", NR, $0 }
+  ' "$S"
+}
+# `<<<` ET PAS UN PIPE, pour la raison deja payee au controle 8 : `awk | grep -q`
+# sous `pipefail` rend 141 — grep sort a la premiere occurrence et laisse awk sur
+# un SIGPIPE. Mesure : la premiere version de ce controle criait « remontee
+# absente du tronc commun » sur une phrase qui y etait, ligne 141 du skill.
+tronc_seul() {  # <motif>... : present dans le tronc commun, absent de tout volet
+  local m d tronc dans_volets
+  tronc="$(tronc_commun)"
+  dans_volets="$(volets)"
+  for m in "$@"; do
+    grep -qF -- "$m" <<<"$tronc" \
+      || fail "remontee absente du tronc commun : « $m »"
+    d="$(grep -F -- "$m" <<<"$dans_volets" || true)"
+    [ -z "$d" ] || fail "remontee recopiee dans un volet : « $m »
+$d"
+  done
+}
+# `GH_REPO` etait enferme dans le volet pull-request, et la faute se commettait
+# en face : sur `gh issue comment`, la seule commande qui depose la preuve la ou
+# l'usine ne propose plus rien.
+tronc_seul 'recevrait donc une chaîne vide'
+# La couture par laquelle la politique du consommateur atteint l'agent. Sans
+# elle, remplacer une copie par un lien fait taire d'un coup tout ce qu'on a
+# range « chez le consommateur » : l'agent ne saura meme pas qu'il faut aller le
+# lire.
+tronc_seul 'Lisez aussi les conventions du dépôt' \
+           'ne suivent pas la langue de la carte'
+# La resolution de conflit vivait dans <Tend_A_Pull_Request>, c'est-a-dire dans
+# la section dont le volet trunk dit « Cette section ne vous concerne pas » —
+# alors que c'est la ou l'usine rebase a chaque tour que l'autre cote est deja
+# publie et irrecuperable.
+tronc_seul 'résolvez en comprenant les deux côtés'
+# Le canal de confiance se definissait par trois formes qui n'existent que sur
+# une proposition. Le corps de la carte est la seule qui existe des deux cotes.
+tronc_seul 'le seul de ces canaux qui existe des deux côtés'
+# Le plafond de creation : <Carve_The_Prerequisite> ouvrait la porte sans la
+# borner, et le risque croit avec l'autonomie de la boucle, pas avec le mode.
+tronc_seul 'Ce que vous avez le droit de créer'
+# Le tube fait passer une commande finie pour une commande pendue — l'illusion
+# exacte qui pousse a rendre la main, dans la section qui existe pour l'empecher.
+tronc_seul 'Et méfiez-vous du tube'
+# <Evidence> : la preuve regardee par l'agent, l'enregistrement qui ne voyage
+# pas, la branche orpheline pour les deux modes, et le poids des octets.
+tronc_seul 'abord vue par VOUS' \
+           'Un enregistrement du parcours sert à VOUS' \
+           'Les captures voyagent sur une branche à elles, dans les deux modes' \
+           'Compressez-les avant de les pousser'
+
+# ET LES DEUX CONTRADICTIONS TRANCHEES. Celles-la ne se prouvent pas par une
+# presence : la version fausse etait une phrase, et c'est son ABSENCE qui compte.
+# (a) La sortie « je n'arrive pas a conclure » designait `factory:blocked` et
+# promettait qu'une carte parquee est « visible ». C'est faux dans ce depot :
+# bin/gh-unblock.sh relit le CORPS (« Bloquée par #N »), pas le label — une carte
+# bloquee sans cette ligne n'est jamais rendue a la file. On asserte donc la
+# garde dans les deux fichiers, comme le controle 13 asserte celle du sondage.
+h="$(grep -nF 'une carte parquée est visible' "$S" || true)"
+[ -z "$h" ] || fail "la sortie « je n'arrive pas a conclure » repose factory:blocked : l'etape 6 l'interdit pour ce qui n'attend aucune livraison
+$h"
+tronc_seul 'il avait tort contre le reste du fichier'
+grep -qF 'Bloquée par #' "$REPO/bin/gh-unblock.sh" \
+  || fail "gh-unblock.sh ne relit plus « Bloquée par #N » : la raison ecrite dans <Never_End_A_Turn_With_Work_Pending> n'est plus vraie dans ce depot"
+sortie_du_tour="$(awk '
+  /^Un tour se termine sur/                  { p = 1 }
+  /^<\/Never_End_A_Turn_With_Work_Pending>$/ { p = 0 }
+  p == 1                                     { print }
+' "$S")"
+[ -n "$sortie_du_tour" ] \
+  || fail "le dernier paragraphe de <Never_End_A_Turn_With_Work_Pending> a change de forme"
+grep -qF 'factory:needs-human' <<<"$sortie_du_tour" \
+  || fail "la sortie « je n'arrive pas a conclure » ne pose plus factory:needs-human"
+# (b) <Evidence> rangeait la video parmi les preuves a mettre en face d'un
+# critere, alors que la seule forme de transport que la section donne est `![…]`
+# sur un fichier versionne. On borne le controle au paragraphe fautif, parce que
+# la prose voisine PARLE de l'enregistrement — et doit continuer a en parler.
+face_a_la_preuve="$(awk '
+  /^\*\*Mettez chaque critère/ { p = 1 }
+  p == 1 && /^$/                { exit }
+  p == 1                        { print }
+' "$S")"
+[ -n "$face_a_la_preuve" ] \
+  || fail "le paragraphe « Mettez chaque critère en face de sa preuve » a change de forme"
+if grep -qF 'vidéo' <<<"$face_a_la_preuve"; then
+  fail "la liste des preuves qui voyagent nomme de nouveau la vidéo : rien dans <Evidence> ne sait la faire voyager, et le lien serait mort"
+fi
+
+# ET CE QUI EST REMONTE DANS UN VOLET Y RESTE, DU BON COTE. Deux consignes ne
+# valent que la ou l'usine pousse elle-meme sur le tronc : le tronc rouge qui
+# bloque toute la file derriere lui, et la branche de production. La seconde est
+# une exigence du MODE et pas une politique de depot — `factory doctor` refuse
+# `trunk` tant que la separation des deux troncs n'est pas declaree —, donc on
+# l'asserte des deux cotes, dans le skill et dans la commande qui la tient.
+present trunk 'hérite alors du même rouge' \
+              'Toucher la branche de production' 'FACTORY_PROD_TRUNK'
+absent  pull-request 'hérite alors du même rouge' \
+              'Toucher la branche de production' 'FACTORY_PROD_TRUNK'
+grep -qF 'FACTORY_PROD_TRUNK' "$REPO/bin/doctor.sh" \
+  || fail "factory doctor ne connait plus FACTORY_PROD_TRUNK : le volet trunk promet une garde qui n'existe pas"
+
+# ---------------------------------------------------------------------------
 # SOUS MUTATION, ON S'ARRETE ICI. Tout ce qui precede est du LINT : il ne lit que
 # `$S`, donc il porte sur le mutant. Ce qui suit EXECUTE des commandes extraites
-# du fichier, ce qu'une copie mutee des volets ne change pas — et le controle 17
-# relance ce fichier 12 fois. On ne paie pas douze fois ce qu'on mesure une.
+# du fichier, ce qu'une copie mutee des volets ne change pas — et le controle 18
+# relance ce fichier 13 fois. On ne paie pas treize fois ce qu'on mesure une.
 if [ -n "${SKILL_TEST_MUTANT:-}" ]; then echo "ok-lint"; exit 0; fi
 
 # ---------------------------------------------------------------------------
-# 14. LA COMMANDE ECRITE DANS LE SKILL MARCHE VRAIMENT, ET LES DEUX MODES
+# 15. LA COMMANDE ECRITE DANS LE SKILL MARCHE VRAIMENT, ET LES DEUX MODES
 # DONNENT DEUX RESULTATS. Tout ce qui precede est du lint : il verifie la FORME
 # du fichier, pas que la premiere commande du tour rende quoi que ce soit. Or
 # c'est elle qui choisit le volet — une commande stale ou fautive laisserait un
@@ -495,7 +642,7 @@ case "$out" in *"mode de livraison : trunk"*) ;; *)
   fail "bibliothèque injoignable : le tour n'a pas repris la valeur exportée (« $out »)";; esac
 
 # ---------------------------------------------------------------------------
-# 15. LE BLOC QUI DEPOSE LES PREUVES EST JOUE, DEUX FOIS, ET AVEC UNE PANNE.
+# 16. LE BLOC QUI DEPOSE LES PREUVES EST JOUE, DEUX FOIS, ET AVEC UNE PANNE.
 # DEUX BLOQUANTS ONT VECU ICI, et aucun lint ne pouvait les voir.
 # (a) `git worktree add --detach "$T/b" && cd "$T/b"` est UNE instruction ; la
 # ligne suivante en est une AUTRE. Avec un `worktree add` en echec, le `cd`
@@ -509,7 +656,7 @@ case "$out" in *"mode de livraison : trunk"*) ;; *)
 # suivantes poussaient la branche PREEXISTANTE — les captures ne partaient jamais
 # et tous les codes retour valaient 0. Mesure : `ls-tree` de la branche distante
 # rendait README.md et src/a.txt, aucun `42/*.png`.
-# ON JOUE DONC LE BLOC, extrait du fichier comme le controle 13 extrait la
+# ON JOUE DONC LE BLOC, extrait du fichier comme le controle 15 extrait la
 # commande de mode : le jour ou quelqu'un le reecrit, c'est la nouvelle version
 # qui passe ces trois epreuves, pas une copie.
 bloc_orphelin() {  # le seul bloc bash du fichier qui cree la branche de preuves
@@ -605,7 +752,7 @@ $(cat "$TESTTMP/p3")"
 unset IMG N
 
 # ---------------------------------------------------------------------------
-# 16. « DEJA POUSSE ? » NE S'APPARIE PAS SUR LE VOISIN. `--grep` est une
+# 17. « DEJA POUSSE ? » NE S'APPARIE PAS SUR LE VOISIN. `--grep` est une
 # expression reguliere sans borne de mot : `Refs #42` s'appariait sur un commit
 # qui dit `Refs #420`. La carte #42 etait alors declaree deja poussee sur le
 # travail d'une AUTRE, et l'etape 0 renvoie vers <Close_What_Has_No_Object> —
@@ -636,13 +783,13 @@ drc=0; ( cd "$fix3/travail" && N=420 bash "$TESTTMP/deja.sh" ) >"$TESTTMP/d420" 
   || fail "#420 n'est plus reconnue par son propre commit : la borne de mot a trop borne"
 
 # ---------------------------------------------------------------------------
-# 17. CE TEST N'EST PAS CREUX, ET IL LE PROUVE EN SE RELANCANT SUR DES MUTANTS.
+# 18. CE TEST N'EST PAS CREUX, ET IL LE PROUVE EN SE RELANCANT SUR DES MUTANTS.
 # Le controle 11 affirme que les deux volets d'une paire se distinguent. Une
 # affirmation dans un test n'est pas une mesure : on ECHANGE donc le corps des
 # deux volets, paire par paire, balises intactes, et on exige un rouge a chaque
 # fois. C'est la mutation exacte qui rendait `ok` sur les paires #1, #6 et #7.
-# LE MUTANT NE REJOUE QUE LE LINT (voir la garde plus haut) : les controles 14 a
-# 16 executent du code qui ne depend pas des volets.
+# LE MUTANT NE REJOUE QUE LE LINT (voir la garde plus haut) : les controles 15 a
+# 17 executent du code qui ne depend pas des volets.
 cat > "$TESTTMP/echange.py" <<'EOPY'
 import io, re, sys
 k, src, dst = int(sys.argv[1]), sys.argv[2], sys.argv[3]
