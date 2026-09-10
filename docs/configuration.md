@@ -2,7 +2,17 @@
 
 Le README dit comment se servir de l'usine. Ce fichier dit ce que chaque clé fait.
 
-`factory config --list` rend les mêmes valeurs, résolues, avec leur source.
+> **`factory config --list` n'existe pas**, et cette ligne l'affirmait au présent.
+> Aucune des deux copies de l'usine n'a jamais eu cette commande : `bin/factory`
+> n'a que `status`, `doctor`, `log`, `deploy`, `stop` et `ssh`, et le reste sort
+> en 2. Un doc qui ment sur ce qui existe coûte exactement une fois le temps de
+> le découvrir, par personne.
+>
+> Ce qui existe aujourd'hui pour lire une installation, c'est **`factory
+> doctor`** : il imprime le mode de livraison, le tronc, les clés qui manquent
+> et, en mode `trunk`, ce que le pipeline du consommateur ne tient pas. Le
+> listing des clés avec leur source reste à écrire — `conf_get` sait déjà
+> résoudre, il ne manque que la source à remonter.
 
 
 Toute la configuration est lue par `conf_get`/`conf_require` (`bin/lib.sh`)
@@ -71,7 +81,31 @@ pour couvrir les deux.
 | `GH_APP_ID` | *(requise)* | `conf_get` | `gh-app-token.sh` : identifiant numerique de l'App GitHub |
 | `GH_APP_INSTALL_ID` | *(requise)* | `conf_get` | `gh-app-token.sh` : identifiant d'installation de l'App sur le depot |
 | `GH_APP_KEY` | `$FACTORY_STATE/secrets/gh-app.pem` | `conf_get` | `gh-app-token.sh` : chemin de la cle privee `.pem` de l'App |
+| `FACTORY_DEPLOY_JOB` | *(requise en `FACTORY_DELIVERY = trunk`)* | `conf_get` | `doctor.sh` : `<chemin du workflow>:<identifiant du job>` — le job de CI qui déclenche le déploiement. Le déclarer, c'est déclarer que ce n'est PAS l'hébergeur qui déploie au push. Le docteur prouve ensuite que le fichier existe, que le job existe, qu'il est en aval d'une suite (`needs:`, ou un déclencheur `workflow_run` conditionné à `conclusion == 'success'`) et qu'il ne s'en échappe pas par un `always()` **de niveau job**. Ignorée en `pull-request` |
+| `FACTORY_CLOSE_WORKFLOW` | *(requise en `FACTORY_DELIVERY = trunk`)* | `conf_get` | `doctor.sh` : le chemin du workflow qui ferme les cartes sur déploiement réussi. **Son déclencheur vous appartient** — l'usine ne sait pas ce qu'est votre preprod, et reconnaître le mécanisme d'un consommateur connu remonterait sa politique ici, ce que `docs/livraison.md` interdit. Le docteur prouve seulement que le fichier existe, qu'il ferme vraiment une carte (`gh issue close`, `issues.update`, ou un état passé à `closed`), qu'un filtre `head_branch` éventuel nomme bien `FACTORY_TRUNK`, et qu'il a `issues: write` s'il déclare un bloc `permissions:` et ferme avec le jeton par défaut. Ignorée en `pull-request` |
+| `FACTORY_PROD_TRUNK` | *(requise en `FACTORY_DELIVERY = trunk`)* | `conf_get` | `doctor.sh` : la branche dont le déploiement est la **production**, forcément différente de `FACTORY_TRUNK`. C'est la seule façon pour une machine de distinguer une usine posée sur une branche de recette d'une usine posée sur la production — l'écart d'un caractère que `docs/livraison.md` désigne comme le plus dangereux. Le docteur prouve que les deux noms diffèrent (casse comprise) et que la branche existe ; que ce soit bien elle qui déploie la production reste **déclaré**. Ignorée en `pull-request` |
 
+
+### Les trois clés du mode `trunk` : nommer, plutôt que cocher
+
+Elles ne sont pas une conséquence de plus de `FACTORY_DELIVERY` — elles ne
+changent le comportement d'aucun script gouverné. Elles sont l'**entrée** de
+`factory doctor` : ce que le consommateur doit dire pour que la machine puisse
+prouver le reste.
+
+Elles ont cette forme parce que l'usine ne sait reconnaître ni « déployer », ni
+« fermer une carte chez cet hébergeur-là », ni « la branche de production » :
+aucune de ces trois choses n'a de signature commune à deux consommateurs. La
+tentation serait alors un booléen — *« oui, mon pipeline est gréé »*. Il ne vaut
+rien : une case se coche sans lire, et une fois cochée elle survit à la refonte
+qui l'a rendue fausse. **Un chemin, lui, pourrit visiblement** — le fichier
+disparaît, le job est renommé, la branche est supprimée — et le docteur le voit.
+
+Le partage est donc : le consommateur déclare **où**, la machine prouve **quoi**.
+Ce qui reste indécidable — le réglage « push-to-deploy » de l'hébergeur, qu'un
+job nommé `deploy` déploie vraiment, que le tronc de production déploie vraiment
+la production — `factory doctor` l'imprime en clair à la fin plutôt que de le
+deviner.
 
 ## Crochets
 

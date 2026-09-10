@@ -10,8 +10,12 @@ Au-dessus de la boucle, un **tampon** : un agent joignable en conversation qui
 surveille, répond et carve des cartes, mais n'écrit jamais de code.
 
 > **Ce README décrit la cible.** L'usine existe et tourne ; `factory init`,
-> `factory doctor`, la feature devcontainer et le tampon sont ce vers quoi on va.
-> `factory doctor` dit toujours la vérité sur l'état réel d'une installation.
+> `factory config`, `factory bump`, la feature devcontainer et le tampon sont ce
+> vers quoi on va. `factory doctor`, lui, **existe** : il dit la vérité sur le
+> mode de livraison d'une installation et refuse un mode `trunk` que le pipeline
+> du consommateur ne tient pas. Ce qu'il ne vérifie pas encore est dit là où on
+> le lit, plus bas — un docteur qui laisse croire qu'il couvre plus que ça est
+> pire que pas de docteur du tout.
 
 ---
 
@@ -53,11 +57,36 @@ complète ce qui manque et laisse le reste. Pour savoir *quoi* avant d'agir :
 factory doctor
 ```
 
-Il énonce le contrat ligne par ligne et dit ce qui n'est pas satisfait — un
-service `tools` absent du compose, une couche agent non montée, `make loop`
-manquant, un `.env` sans les clés d'App. C'est le même contrat que la boucle
-vérifie avant sa première carte : **un énoncé, deux appelants**, donc le docteur
-ne peut pas se périmer par rapport à la boucle.
+Il énonce le **mode de livraison** de l'installation, les clés que l'usine lit
+dans tous les cas, et — en mode `trunk` seulement — les trois exigences que ce
+mode fait peser sur le consommateur (`docs/livraison.md`) :
+
+1. le déploiement est déclenché par la CI, en aval d'une suite verte ;
+2. un workflow ferme les cartes sur déploiement réussi ;
+3. le tronc de l'usine n'est pas le tronc de production.
+
+Il **nomme celle qui manque**, dit comment la satisfaire, et sort en 3 — sans
+s'arrêter au premier grief, parce qu'un docteur qu'on relance trois fois de suite
+cesse d'être lancé. En mode `pull-request` il n'exige aucun des trois : la
+garantie y est portée par la protection de branche, et il le dit.
+
+Le consommateur déclare **où** (`FACTORY_DEPLOY_JOB`, `FACTORY_CLOSE_WORKFLOW`,
+`FACTORY_PROD_TRUNK` — voir `docs/configuration.md`), la commande prouve
+**quoi**. Ce qu'elle ne peut pas voir, elle l'imprime aussi : le réglage
+« push-to-deploy » de l'hébergeur ne vit pas dans le dépôt, et prétendre l'avoir
+vérifié serait pire que se taire.
+
+> **Ce qu'il ne fait pas encore.** Le reste du contrat annoncé plus haut — un
+> service `tools` absent du compose, une couche agent non montée, `make loop`
+> manquant, un `.env` sans les clés d'App — n'est **pas** énoncé par cette
+> commande. Le fichier est structuré pour l'accueillir (une section par exigence,
+> un compteur commun, un seul code de sortie) ; il faut une carte, pas une
+> réserve qui traîne.
+>
+> Et `make loop` ne l'appelle pas encore : `factory doctor --quiet` est écrit
+> pour ça — silence complet quand tout va, griefs, remèdes et code 3 sinon —
+> mais la garde reste à poser dans `factory.mk`. Tant qu'elle n'y est pas, le
+> docteur est une commande qu'on tape, pas un contrat que la boucle vérifie.
 
 ## Ce que `init` a posé
 
@@ -188,6 +217,9 @@ survit part ailleurs.
 factory config --list        # toutes les clés, leur valeur effective et sa source
 factory config GH_REPO       # une seule, et d'où elle vient
 ```
+
+> `factory config` fait partie de la cible annoncée en tête : il n'existe pas
+> encore. Pour lire une installation aujourd'hui, `factory doctor`.
 
 Priorité : environnement du process, puis `factory.conf`, puis `.env`. Sans
 exception — une clé qui se comporterait autrement est un défaut, pas une nuance à

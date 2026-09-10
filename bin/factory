@@ -13,6 +13,7 @@
 # qu'on ne lit pas qui aurait raison.
 #
 #   factory                 état de l'usine
+#   factory doctor          ce que cette installation permet, et ce qui manque
 #   factory log [-f|N]      journal — en direct, ou les N dernières lignes
 #   factory deploy          met son dépôt au niveau de origin/main
 #   factory stop            lui demande de finir sa carte puis de s'arrêter
@@ -27,6 +28,14 @@ FACTORY_SSH_OPTS="$(conf_get FACTORY_SSH_OPTS)"
 case "${1:-status}" in
   status)
     exec bash "$HERE/status.sh"
+    ;;
+  doctor)
+    # `shift` fait passer `--quiet` — et tout argument futur — sans que
+    # l'aiguilleur ait à le connaître. Aucune valeur SSH n'est nécessaire pour
+    # arriver jusqu'ici, donc `factory doctor` marche sur un poste sans
+    # FACTORY_HOST : c'est précisément là qu'on veut un docteur.
+    shift
+    exec bash "$HERE/doctor.sh" "$@"
     ;;
   log)
     shift
