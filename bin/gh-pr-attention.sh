@@ -25,11 +25,58 @@
 #
 # Codes : 0 = un numéro sur stdout · 1 = rien à faire · 3 = mal configuré ·
 # 4 = raté passager (réseau, 5xx, corps tronqué) — la boucle resonde, elle ne
-# s'arrête pas.
+# s'arrête pas. En livraison `trunk`, « rien à faire » est la seule réponse
+# possible, et le sondage n'a même pas lieu : voir la garde en tête du corps.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 . "$HERE/lib.sh"
+
+# EN LIVRAISON `trunk`, CE SCRIPT N'A PAS D'OBJET — ET IL EST NUISIBLE. Aucune PR
+# n'est sur le chemin d'une carte : la boucle pousse sur le tronc de recette, et
+# c'est le déploiement du commit qui ferme la carte. Toute PR ouverte dans un tel
+# dépôt est donc, par construction, HORS du chemin d'une carte. Or on lit
+# `pulls?state=open` SANS filtre de branche ni de label : elle entre dans la
+# boucle ci-dessous, et rien ne l'en distingue.
+#
+# Ce que l'usine en ferait est pire que rien. Une PR de longue durée réunit
+# facilement les trois critères de réveil — elle porte les mots de l'humain, et
+# son `mergeable` bascule à False dès qu'un correctif touche sa base — donc le
+# pilote enverrait un agent avec LOOP_PROMPT_PR : « remets-la en état, ou
+# ferme-la en justifiant ». Sur une PR que l'usine ne comprend pas, les deux
+# issues sont mauvaises, et ça recommencerait à chaque tour.
+#
+# L'usine n'a pas à savoir CE QUE cette PR est — c'est une affaire de
+# consommateur, et docs/livraison.md range la surface de relecture du mode
+# `trunk` parmi la politique, pas parmi la clé. Elle a seulement à savoir qu'en
+# `trunk`, aucune PR ne lui appartient.
+#
+# LE CODE EST 1, ET C'EST LE PILOTE QUI LE DICTE. `factory.mk` ne distingue que
+# trois valeurs : 4 → il dort $(LOOP_SLEEP) et resonde, donc une usine `trunk`
+# dormirait sans fin ; 3 → « sondage des PR impossible : configuration cassée.
+# Arrêt. », donc il arrêterait une usine à qui il ne manque rien ; 0 → prompt
+# d'entretien, avec un numéro de PR vide ou hérité du tour d'avant, `pr` n'étant
+# pas réinitialisé. Tout le reste laisse le tour continuer vers la reprise puis
+# la carte neuve — ce qui est exactement l'ordre voulu ici. Parmi ce reste, 1 est
+# le seul qui DISE quelque chose : c'est déjà le code que rend la dernière ligne
+# de ce fichier pour « aucune PR ne demande de travail ». Même réponse, même
+# code ; le mode ne change pas le vocabulaire.
+#
+# LA GARDE PASSE AVANT `conf_require`, À DESSEIN. `FACTORY_HUMAN_LOGIN` et
+# `FACTORY_BOT_LOGIN` n'ont aucun autre lecteur dans l'usine partagée (vérifiable
+# d'un `grep -rn 'FACTORY_.*_LOGIN' bin/`) : les réclamer en `trunk` ferait sortir
+# en 3 — donc arrêterait la boucle sur « configuration cassée » — un dépôt qui
+# n'a rien oublié.
+#
+# ELLE RESTE ICI MÊME QUAND LE PILOTE COURT-CIRCUITE L'APPEL. Un crochet de
+# consommateur, un fork, ou une main humaine appellent ce script directement ;
+# c'est la PR de production qu'ils se feraient rendre.
+delivery_require
+if [ "$FACTORY_DELIVERY" = trunk ]; then
+  echo "gh-pr-attention: livraison « trunk » — aucune PR sur le chemin d'une carte, rien à entretenir" >&2
+  exit 1
+fi
+
 conf_require GH_REPO FACTORY_HUMAN_LOGIN FACTORY_BOT_LOGIN
 GH_REPO="$(conf_get GH_REPO)"
 HUMAN="$(conf_get FACTORY_HUMAN_LOGIN)"

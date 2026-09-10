@@ -16,11 +16,44 @@
 #
 # IL NE TOUCHE JAMAIS aux worktrees qui ne s'appellent pas `card-<n>` : `alpha`,
 # `beta` et les autres sont les environnements de quelqu'un d'autre.
+#
+# IL GARDE SON NOM DANS LES DEUX MODES parce que son sujet EST le worktree. En
+# mode `trunk` il n'y en a aucun : il sort tôt, en le disant, et le crochet
+# `worktree-down` du consommateur n'est alors JAMAIS appelé — l'usine n'a plus
+# rien monté à démonter.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 . "$HERE/lib.sh"
 ROOT="$(factory_root)"
+# EN MODE `trunk` IL N'Y A RIEN À DÉTRUIRE, et il faut le dire AVANT de payer
+# quoi que ce soit : sans worktree de carte, ce script frapperait un jeton d'App
+# et poserait une requête `/pulls?state=all&per_page=100`, à chaque tour, pour
+# lister les pull requests de cartes qui n'en ont pas. C'est un fait du MODE,
+# donc il vit ici — `factory.mk` continue de l'appeler sans condition et n'a rien
+# à savoir de plus. Nu, jamais en substitution : voir lib.sh.
+delivery_require
+if [ "$FACTORY_DELIVERY" = trunk ]; then
+  # UN RESTE DE L'AUTRE MODE NE DOIT PAS DORMIR EN SILENCE. Un dépôt qui passe de
+  # `pull-request` à `trunk` garde ses `.worktrees/card-<n>` sur le disque — une
+  # pile abandonnée coûte ~3 Go, une base, une route — et plus personne pour les
+  # détruire. Les compter est local et gratuit ; les détruire ne l'est pas, et un
+  # changement de clé de configuration n'est pas le moment de supprimer du
+  # travail que personne n'a relu. On nomme, on ne touche pas.
+  n=0
+  for dir in "$ROOT"/.worktrees/card-*; do [ -d "$dir" ] && n=$((n+1)); done
+  if [ "$n" -gt 0 ]; then
+    echo "wt-cleanup: mode trunk, rien à détruire — mais $n worktree(s) card-* subsistent dans $ROOT/.worktrees, reste du mode pull-request, à retirer à la main" >&2
+  else
+    echo "wt-cleanup: mode trunk — un seul arbre, rien à détruire" >&2
+  fi
+  # 0, et pas 1 : ce script rend déjà 0 quand il ne trouve rien à détruire
+  # (dernière ligne du fichier). « Rien à détruire » est la même phrase dans les
+  # deux modes, donc le même code — sinon l'appelant devrait distinguer deux
+  # sortes de rien. Le 1 « file vide » est le code des SONDAGES, dont la boucle
+  # lit la sortie ; celui-ci n'en a pas.
+  exit 0
+fi
 conf_require GH_REPO
 GH_REPO="$(conf_get GH_REPO)"
 DRY="${1:-}"

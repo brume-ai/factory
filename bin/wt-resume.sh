@@ -1,17 +1,39 @@
 #!/usr/bin/env bash
-# Extrait de Brume (tools/factory/wt-resume.sh) au SHA 12ac9e92 ; generalise ici.
-# wt-resume.sh — un environnement de carte porte-t-il du travail inachevé ?
-# Imprime « <carte><TAB><état> », ou sort en 1.
+# Extrait de Brume (tools/factory/wt-resume.sh) au SHA 12ac9e92 ; generalise ici,
+# puis fusionne avec le resume.sh de l'usine soeur (mode `trunk`).
+# wt-resume.sh — du travail inachevé attend-il quelque part ?
+# Imprime « <carte><TAB><ce qui traîne> », ou sort en 1.
 #
-# POURQUOI EN PREMIER. Un agent tué en route laisse son worktree debout avec du
-# travail NON COMMITÉ : c'est l'état le plus fragile de toute la chaîne. Une PR
-# se retrouve, une issue se relit — un fichier modifié et jamais commité disparaît
-# au premier nettoyage maladroit, et personne ne saura ce qui a été perdu.
+# POURQUOI EN PREMIER. Un agent tué en route laisse du travail NON COMMITÉ :
+# c'est l'état le plus fragile de toute la chaîne. Une PR se retrouve, une issue
+# se relit — un fichier modifié et jamais commité disparaît au premier nettoyage
+# maladroit, et personne ne saura ce qui a été perdu. Le sondage des issues ne le
+# voit pas : il lit GitHub, et GitHub ne sait rien d'un arbre sale.
 #
-# Il passe donc avant l'entretien des PR et avant les cartes neuves. Le sondage
-# des issues repère bien une carte « prise sans PR », mais il ne dit pas qu'un
-# ENVIRONNEMENT existe déjà, avec sa base, sa pile et son travail : l'agent
-# repartirait de zéro à côté de ce qui est déjà fait.
+# OÙ IL CHERCHE DÉPEND DU MODE DE LIVRAISON, et de rien d'autre :
+#
+#   pull-request  chaque carte a son worktree `.worktrees/card-<n>` ; le NUMÉRO
+#                 est le nom du répertoire.
+#   trunk         sans pull request, il n'y a aucune raison de tenir un
+#                 environnement par carte : l'usine fait UNE carte à la fois, sur
+#                 le tronc, dans l'arbre d'où la boucle se lance. Le numéro se
+#                 relit alors DANS LES COMMITS (`Refs #N`), pas dans un nom de
+#                 répertoire.
+#
+# UN SEUL FICHIER, ET PAS DEUX. La question posée est la même des deux côtés, et
+# le contrat de sortie aussi. Deux scripts, ce serait la même question répondue à
+# deux endroits — donc deux endroits à corriger le jour où l'on apprend quelque
+# chose de plus sur les fichiers non suivis ou les commits non poussés, et c'est
+# exactement le mécanisme qui a fait diverger les deux usines. Ce serait aussi
+# une seconde lecture du mode chez l'APPELANT, qui devrait choisir le nom du
+# script : `factory.mk` en appelle un seul et n'a rien à savoir.
+#
+# LE NOM MENT DANS UN MODE SUR DEUX, et c'est assumé ici : le renommer en
+# `resume.sh` touche `factory.mk`, `bin/status.sh` et le stub des tests, qui
+# doivent bouger dans le MÊME commit ou la boucle de test exécutera un `bash`
+# introuvable — 127, que la recette lit « rien à reprendre ». Le préfixe stderr
+# reste donc `wt-resume:` lui aussi : c'est ce que `bin/status.sh` reconnaît pour
+# séparer la mécanique du rapport de l'agent.
 #
 # Codes : 0 = une carte à reprendre sur stdout · 1 = rien · 3 = mal configuré.
 set -euo pipefail
@@ -19,7 +41,123 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 . "$HERE/lib.sh"
 ROOT="$(factory_root)"
+# NU, EN TÊTE, comme conf_require. En substitution — `[ "$(delivery_mode)" = trunk ]`
+# ou `local m="$(delivery_mode)"` — le code 3 est avalé, la valeur est vide, et ce
+# script irait chercher au mauvais endroit sur une faute de frappe. Après cette
+# ligne on ne lit plus que $FACTORY_DELIVERY. Voir lib.sh.
+delivery_require
 
+# La phrase rendue à la boucle, qui la recopie telle quelle dans le prompt.
+# « non commité(s) » et pas « modifié(s) » : `--porcelain` compte AUSSI les
+# fichiers non suivis, et un fichier de test jamais `git add` est exactement le
+# travail qui disparaît en silence.
+_what() {  # <dirty> <ahead>
+  local what=""
+  (( $1 > 0 )) && what="$1 fichier(s) non commité(s)"
+  (( $2 > 0 )) && what="${what:+$what, }$2 commit(s) non poussé(s)"
+  printf '%s' "$what"
+}
+
+if [ "$FACTORY_DELIVERY" = trunk ]; then
+  TRUNK="$(conf_get FACTORY_TRUNK main)"
+
+  # En `pull-request` l'absence de dépôt se traduit par un glob vide, donc « rien
+  # à reprendre » — une réponse juste. Ici l'arbre EST le sujet : ne pas savoir le
+  # lire n'est pas « rien », c'est une installation à réparer.
+  git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || {
+    echo "wt-resume: $ROOT n'est pas un dépôt git" >&2; exit 3; }
+
+  branch="$(git -C "$ROOT" branch --show-current 2>/dev/null || echo '')"
+  [ "$branch" = "$TRUNK" ] || {
+    # Pas une reprise, et pas non plus une configuration cassée : `make loop`
+    # refuse déjà de démarrer hors du tronc et le dit mieux que nous. La garde
+    # n'est pas décorative : sur une branche quelconque, `origin/$TRUNK..HEAD`
+    # compterait TOUTE la branche comme du travail de carte et rendrait un
+    # numéro faux.
+    echo "wt-resume: l'arbre est sur « $branch », pas sur « $TRUNK » — hors sujet ici" >&2
+    exit 1
+  }
+
+  # `.worktrees` EST HORS SUJET ICI, et l'oublier verrouillait la boucle. Un dépôt
+  # qui bascule `pull-request` → `trunk` garde ses `.worktrees/card-<n>` sur le
+  # disque, et son `.gitignore` n'a AUCUNE raison de les couvrir : c'est le mode
+  # précédent qui les avait posés là. `--porcelain` rendait donc « ?? .worktrees/ »
+  # — donc une reprise sur la carte « ? » À CHAQUE TOUR, indéfiniment, pendant que
+  # wt-cleanup, lui, refuse par principe de détruire du travail que personne n'a
+  # relu. Les deux décisions du même commit se verrouillaient l'une l'autre.
+  # Mesuré : dépôt en trunk, `git worktree add .worktrees/card-9`, sans .gitignore
+  # ⇒ wt-resume rc 0 « ?<TAB>1 fichier(s) non commité(s) », à chaque tour.
+  # Ce répertoire est l'artefact de l'usine dans l'AUTRE mode, pas du travail
+  # inachevé dans l'arbre courant : wt-cleanup le NOMME, ici on ne le compte pas.
+  # `:/` (la racine du dépôt) n'est pas décoratif : un pathspec uniquement négatif
+  # ne matche rien, et `status` deviendrait aveugle à tout.
+  dirty="$(git -C "$ROOT" status --porcelain -- ':/' ':(exclude,top).worktrees' 2>/dev/null | wc -l)"
+  # AUCUN REPLI si `origin/$TRUNK` manque, et c'est délibéré : ici l'arbre EST le
+  # tronc, donc un repli du genre `HEAD ^origin/HEAD` compterait toute l'histoire
+  # du dépôt comme du travail inachevé et enverrait un agent « reprendre » la
+  # dernière carte jamais livrée. Un dépôt sans référence distante est une
+  # installation à réparer, pas une reprise.
+  ahead=0
+  if git -C "$ROOT" rev-parse --verify -q "origin/$TRUNK" >/dev/null 2>&1; then
+    ahead="$(git -C "$ROOT" rev-list --count "origin/$TRUNK..HEAD" 2>/dev/null || echo 0)"
+  fi
+
+  # CE QUE CE 1 COÛTE AU CONSOMMATEUR, parce que personne d'autre ne le dira :
+  # tout AUTRE fichier non suivi que son `.gitignore` ne couvre pas — artefact de
+  # build, déjection d'outil, reste d'un agent tué — devient une reprise PERMANENTE
+  # sur la carte « ? ». Le mode `trunk` fait donc dépendre la boucle de la
+  # propreté de l'arbre du consommateur. C'est voulu (voir `_what`), mais ça ne
+  # se rattrape pas ici : c'est au compteur anti-tourniquet de la boucle de
+  # l'arrêter, et à `.gitignore` de ne pas le déclencher. `.worktrees` est le seul
+  # cas que nous prenons en charge nous-mêmes, parce que c'est NOTRE reste et pas
+  # celui du consommateur — voir l'exclusion ci-dessus.
+  (( dirty > 0 || ahead > 0 )) || { echo "wt-resume: rien d'inachevé dans l'arbre" >&2; exit 1; }
+  what="$(_what "$dirty" "$ahead")"
+
+  # QUELLE CARTE ? Les commits non poussés la nomment. `Refs #N` EXACTEMENT, et le
+  # motif est SENSIBLE À LA CASSE pour de bon : le `-i` qui traînait ici démentait
+  # cette phrase, et démentait surtout le reste de la maison — le skill se relit
+  # lui-même par `git log --grep="Refs #$N"`, sensible à la casse, et le workflow
+  # de fermeture du consommateur lit la même convention. Un « refs #12 » repris
+  # ici serait une carte que rien ne fermerait jamais : une file qui grossit sans
+  # que personne puisse dire pourquoi. Même raison pour `Refs: #12`, et pour le
+  # `#12` nu, qui ferait reprendre « Merge pull request #17 ».
+  # `|| true` OBLIGATOIRE, et ce n'est pas de la prudence de façade : sans
+  # référence — le cas le plus banal qui soit, `git commit -m "wip"` — `grep` sort
+  # en 1, `pipefail` fait échouer l'affectation, `set -e` tue le script, et rc 1
+  # veut dire « rien à reprendre » pour factory.mk (recette `loop`). La boucle
+  # prendrait alors une carte NEUVE et piétinerait le travail non poussé :
+  # exactement la perte silencieuse que ce script existe pour empêcher. Mesuré :
+  # sans `|| true`, `rc=1` et stdout vide là où le contrat est `rc=0` et
+  # « ?<TAB>1 commit(s) non poussé(s) ».
+  # IL GARDE UN SECOND CAS, et une version de ce commentaire a affirmé le
+  # contraire sans le mesurer : `head -n1` FERME le tuyau au nez de `grep` dès
+  # qu'il tient sa ligne, donc `grep` meurt en SIGPIPE. Mesuré sur une entrée qui
+  # porte plusieurs références : `rc=141`, avec la bonne valeur sur stdout. Sans
+  # `|| true`, une reprise parfaitement valide serait lue comme « rien à
+  # reprendre » — le même effet que le cas sans référence, par une autre porte.
+  # DEUX LIMITES CONNUES, délibérées toutes les deux. (1) `head -n1` prend le
+  # commit LE PLUS RÉCENT : si deux commits non poussés portent deux cartes, la
+  # seconde n'est nommée nulle part — l'agent la retrouvera par son label, alors
+  # que rendre deux numéros casserait le contrat « une carte, un tour ».
+  # (2) GitHub numérote issues et pull requests dans la même suite : un `Refs`
+  # vers une PR enverrait l'agent « reprendre » une PR. Le workflow de fermeture
+  # s'en garde ; nous ne pouvons pas sans un appel réseau, et personne n'est
+  # fermé par erreur — l'agent, lui, verra tout de suite que le numéro n'est pas
+  # une carte.
+  card='?'
+  if (( ahead > 0 )); then
+    card="$(git -C "$ROOT" log --format=%B "origin/$TRUNK..HEAD" 2>/dev/null \
+      | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | head -n1 || true)"
+    card="${card:-?}"
+  fi
+
+  echo "wt-resume: travail inachevé sur $TRUNK ($what) — carte #$card" >&2
+  printf '%s\t%s' "$card" "$what"
+  exit 0
+fi
+
+# --- pull-request : un environnement par carte -------------------------------
 for dir in "$ROOT"/.worktrees/card-*; do
   [[ -d "$dir" ]] || continue
   card="$(basename "$dir")"; card="${card#card-}"
@@ -38,9 +176,7 @@ for dir in "$ROOT"/.worktrees/card-*; do
 
   (( dirty > 0 || ahead > 0 )) || continue
 
-  what=""
-  (( dirty > 0 )) && what="$dirty fichier(s) modifié(s)"
-  (( ahead > 0 )) && what="${what:+$what, }$ahead commit(s) non poussé(s)"
+  what="$(_what "$dirty" "$ahead")"
   echo "wt-resume: carte #$card — travail inachevé dans $dir ($what)" >&2
   printf '%s\t%s' "$card" "$what"
   exit 0

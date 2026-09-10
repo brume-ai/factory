@@ -13,6 +13,17 @@ assert_eq "valeur" "$(run conf_get AVEC_GUILLEMETS)" "guillemets retires"
 assert_eq "defaut" "$(run conf_get ABSENTE defaut)" "defaut applique"
 assert_eq "gagne" "$(GH_REPO=gagne run conf_get GH_REPO)" "l'environnement gagne"
 
+# LES BLANCS DE FIN. La coupe du commentaire laisse derriere elle les espaces qui
+# le precedaient : « main   # le tronc » rendait « main  », et un `git fetch
+# origin "main  "` echoue sur un depot parfaitement sain. Vaut pour TOUTES les
+# cles, d'ou sa place ici et pas dans le test d'une cle en particulier.
+make_conf 'AVEC_COMMENTAIRE = main   # le tronc' \
+          'AVEC_TABULATION = main	' \
+          'GUILLEMETS_ET_BRUIT = "  garde  "   # les guillemets gardent le blanc'
+assert_eq "main" "$(run conf_get AVEC_COMMENTAIRE)" "les blancs devant un commentaire sont manges"
+assert_eq "main" "$(run conf_get AVEC_TABULATION)" "une tabulation de fin aussi"
+assert_eq "  garde  " "$(run conf_get GUILLEMETS_ET_BRUIT)" "mais les guillemets gardent le blanc qu'ils entourent"
+
 # conf_require : exit 3 et message
 set +e
 msg="$( (cd "$TESTTMP" && . "$REPO/bin/lib.sh" && conf_require VRAIMENT_ABSENTE) 2>&1 )"
