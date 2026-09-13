@@ -11,11 +11,16 @@ t_setup() {
   export FACTORY_ROOT="$TESTTMP"
   export FACTORY_TOKEN="t0k3n"
   export PATH="$REPO/tests/fakes:$PATH"
-  # LE MODE DE LIVRAISON EST SOUS LE CONTROLE DU TEST, jamais sous celui du shell
-  # qui lance la suite. conf_get lit l'environnement EN PREMIER : un
-  # FACTORY_DELIVERY=trunk exporte par un humain presse ferait passer au vert une
-  # suite qui ne prouve plus le defaut. Chaque test pose la cle ou il veut.
-  unset FACTORY_DELIVERY
+  # LA CONFIGURATION EST SOUS LE CONTRÔLE DU TEST, jamais sous celui du shell qui
+  # lance la suite. `conf_get` lit l'environnement EN PREMIER : un
+  # FACTORY_STAGING exporté par un humain pressé ferait passer au vert une suite
+  # qui ne prouve plus le défaut, et un nom de label exporté ferait passer une
+  # suite qui ne prouve plus que factory.conf est honoré. Chaque test pose les
+  # clés qu'il veut, APRÈS t_setup.
+  unset FACTORY_TRUNK FACTORY_STAGING FACTORY_MILESTONE
+  unset FACTORY_STAGED_LABEL FACTORY_BUSY_LABEL FACTORY_BLOCKED_LABEL \
+        FACTORY_HUMAN_LABEL FACTORY_EPIC_LABEL FACTORY_DONE_LABEL \
+        FACTORY_PRIORITY_LABEL
 }
 
 assert_eq() {  # <attendu> <obtenu> <message>

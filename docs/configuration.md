@@ -16,39 +16,48 @@ process, puis `factory.conf`, puis `.env`, a la racine du depot resolue par
 `git rev-parse --show-toplevel`, sinon le repertoire courant). `conf_require`
 fait la meme chose mais sort en code 3 si la valeur manque.
 
-> **Défaut connu, à corriger.** Le paragraphe qui suit décrit une incohérence
-> réelle du code actuel : six clés ne suivent pas l'ordre de priorité annoncé.
-> C'est un défaut, pas une règle — il disparaîtra, et ce paragraphe avec lui.
+**Sans exception.** Les labels `factory:*` en étaient une jusqu'au modèle de
+release : ils étaient lus par expansion directe de l'environnement du process, si
+bien que les poser dans `factory.conf` ne suffisait pas — et rien ne le disait à
+l'exécution. Le paragraphe « Défaut connu, à corriger » qui décrivait ça est
+parti avec le défaut : **les sept noms passent par `label_get` (`bin/lib.sh`)**,
+qui appelle `conf_get` et porte le défaut de chaque label à un seul endroit.
 
-**Attention a une nuance reelle** : les six labels `FACTORY_*_LABEL` (sauf un
-cas) sont lus en bash par `${FACTORY_XXX_LABEL:-defaut}` ou en Python par
-`os.environ.get(...)`, **directement dans l'environnement du process**, pas
-via `conf_get`. Les poser dans `factory.conf` ne suffit donc pas partout :
-`factory.mk` ne les exporte pas non plus vers les scripts qu'il appelle (il
-ne passe explicitement que `GH_REPO`). Pour qu'un label renomme vaille
-partout, **exportez-le reellement** avant `make loop` (`export
-FACTORY_BLOCKED_LABEL=... ; make loop`) ou posez-le dans le `.env` de
-l'usine, charge par `docker run --env-file` sur la machine (donc bien dans
-l'environnement du conteneur). Seul `FACTORY_HUMAN_LABEL` est lu par
-`conf_get` dans `gh-pr-attention.sh` (donc `factory.conf`-compatible la) mais
-par expansion directe dans `gh-next-issue.sh` (donc pas la) : exportez-le
-pour couvrir les deux.
+`bin/gh-security-triage.py` est le seul lecteur qui ne puisse pas sourcer
+`bin/lib.sh` — il est en Python. Ce n'est pas une exception pour autant : son
+appelant résout les rôles par `label_get` et lui passe les quatre qu'il lit
+(`PRIO`, `BUSY`, `DONE`, `STAGED`), ce que `factory.mk` fait, et le Python les
+lit **strictement** — aucun défaut à lui, sortie en 3 si l'un manque. Un défaut
+écrit côté Python serait un second domicile pour le nom, invisible depuis
+`factory.conf` : le renommage marcherait dans les scripts shell et pas là, et le
+triage poserait sa priorité sous l'ANCIEN nom — une carte de sécurité hors de la
+file, sans que rien ne le dise.
+
+**Deux branches nommées, et elles ne disent pas la même chose.** `FACTORY_TRUNK`
+est la branche de **production** — l'usine n'y écrit jamais — et `FACTORY_STAGING`
+la branche de **travail**, la seule où elle a le droit d'écrire. Les scripts qui
+nomment une branche appellent `branches_require` (`bin/lib.sh`), qui les résout,
+rogne leurs blancs, réapplique les défauts et **refuse de démarrer en code 3 si
+les deux sont la même**. Le pourquoi est dans [`docs/release.md`](release.md).
 
 | Cle | Defaut | Lue via | Consommateur |
 |---|---|---|---|
-| `GH_REPO` | *(requise)* | `conf_get`/`conf_require`, transmise explicitement par `factory.mk` a chaque script qu'il appelle | `gh-next-issue.sh`, `gh-unblock.sh`, `gh-stack.sh`, `gh-seed-labels.sh`, `wt-cleanup.sh`, `gh-pr-attention.sh`, `run-loop.sh`, `deploy.sh`, `bin/factory stop`, garde de `factory.mk` |
-| `FACTORY_DELIVERY` | `pull-request` | `conf_get` (`delivery_mode`/`delivery_require` dans `bin/lib.sh`) ; `factory.mk` **delegue a ce meme lecteur** au lieu d'en avoir un second | le mode de livraison : `pull-request` (la boucle rend une PR, le merge humain ferme la carte) ou `trunk` (elle pousse sur le tronc de recette, le pipeline du consommateur ferme la carte). Toute autre valeur : **code 3**, jamais de repli silencieux. Voir `docs/livraison.md` |
-| `FACTORY_TRUNK` | `main` | `conf_get` | garde de branche et rebase du tronc dans `factory.mk` (`make loop`), `gh-stack.sh` (base par defaut), `deploy.sh` |
+| `GH_REPO` | *(requise)* | `conf_get`/`conf_require`, transmise explicitement par `factory.mk` a chaque script qu'il appelle | `gh-next-issue.sh`, `gh-unblock.sh`, `gh-stack.sh`, `gh-seed-labels.sh`, `gh-stage-pr.sh`, `gh-release.sh`, `wt-cleanup.sh`, `gh-pr-attention.sh`, `run-loop.sh`, `deploy.sh`, `bin/factory stop`, garde de `factory.mk` |
+| `FACTORY_TRUNK` | `main` | `conf_get`, via `branches_require` | la branche de **PRODUCTION**, cible de la release. **L'usine n'y écrit jamais.** Lue par `bin/lib.sh` (la garde) et `bin/gh-release.sh` (le tag à partir duquel les cartes sont fermées) — et par personne d'autre : aucun script d'écriture ne la nomme. Son NOM, en revanche, **est** dans l'environnement de l'agent : `branches_require` exporte la paire normalisée, et `factory.mk` l'appelle dans le shell même qui lance l'agent (le pourquoi de cet export est écrit dans `bin/lib.sh`). Ce n'est pas un trou : ce qui protège la production, c'est la protection de branche, jamais l'ignorance de son nom |
+| `FACTORY_STAGING` | `staging` | `conf_get`, via `branches_require` | la branche de **TRAVAIL**, la seule où l'usine écrit : base par défaut de `gh-stack.sh`, cible du merge de `gh-stage-pr.sh`, garde de branche et `fetch`/`merge --ff-only` de `factory.mk`, `reset --hard` de `deploy.sh`, branche que suit l'environnement en ligne. Jamais lue par une variable Make |
+| `FACTORY_MILESTONE` | *(vide = aucun filtre)* | `conf_get` | `gh-next-issue.sh`, et personne d'autre : **le jalon nomme la release et le sondage le fait respecter**. Filtrage côté client sur le champ `milestone` déjà présent dans la réponse — aucun appel de plus. Vide signifie *aucun filtre*, pas « jalon sans nom » |
 | `FACTORY_GIT_NAME` | *(requise)* | variable Make (`-include factory.conf`), verifiee au demarrage de `make loop` | `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` exportes par `factory.mk` avant chaque tour |
 | `FACTORY_GIT_EMAIL` | *(requise)* | idem | `GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_EMAIL` idem |
-| `FACTORY_HUMAN_LOGIN` | *(requise)* | `conf_get`/`conf_require` | `gh-pr-attention.sh` (qui traite une review comme une instruction) et le canal de confiance du skill `github-loop` |
+| `FACTORY_HUMAN_LOGIN` | *(requise)* | `conf_get`/`conf_require` | `gh-pr-attention.sh` (qui traite sa parole comme une instruction : il réveille une PR ouverte, il CARVE sur une PR déjà intégrée) et le canal de confiance du skill `github-loop` |
 | `FACTORY_BOT_LOGIN` | *(requise)* | `conf_require`/`conf_get` | `gh-pr-attention.sh` : le login sous lequel l'usine PARLE. C'est sa réponse qui marque un retour du relecteur comme traité — sans défaut possible, une valeur fausse rendrait chaque PR soit muette, soit éternellement réveillée |
-| `FACTORY_HUMAN_LABEL` | `factory:needs-human` | `conf_get` dans `gh-pr-attention.sh` ; environnement direct dans `gh-next-issue.sh` | label « decision humaine requise, hors file » |
-| `FACTORY_BLOCKED_LABEL` | `factory:blocked` | environnement direct | `gh-next-issue.sh` (exclu de la file), `gh-unblock.sh` (retire quand le bloqueur tombe) |
-| `FACTORY_EPIC_LABEL` | `factory:epic` | environnement direct | `gh-next-issue.sh` (exclu de la file : chapeau d'epopee, pas du travail) |
-| `FACTORY_BUSY_LABEL` | `factory:in-progress` | environnement direct | `gh-next-issue.sh` (carte deja prise), `gh-security-triage.py` (`FROZEN`, spec gelee) |
-| `FACTORY_DONE_LABEL` | `factory:delivered` | environnement direct | `gh-next-issue.sh` (carte livree), `gh-security-triage.py` (`FROZEN`) |
-| `FACTORY_PRIORITY_LABEL` | `factory:priority` | environnement direct | `gh-next-issue.sh` (fait passer devant la file), pose par `gh-security-triage.py` sur les cartes qu'il cree |
+| `FACTORY_BUSY_LABEL` | `factory:in-progress` | `conf_get`, via `label_get busy` | `gh-next-issue.sh` (carte deja prise), `gh-security-triage.py` (`FROZEN`, spec gelee) |
+| `FACTORY_BLOCKED_LABEL` | `factory:blocked` | `conf_get`, via `label_get blocked` | `gh-next-issue.sh` (exclu de la file), `gh-unblock.sh` (retire quand le bloqueur tombe) |
+| `FACTORY_HUMAN_LABEL` | `factory:needs-human` | `conf_get`, via `label_get human` | label « decision humaine requise, hors file » : `gh-next-issue.sh`, `gh-pr-attention.sh` |
+| `FACTORY_EPIC_LABEL` | `factory:epic` | `conf_get`, via `label_get epic` | `gh-next-issue.sh` (exclu de la file : chapeau d'epopee, pas du travail) |
+| `FACTORY_DONE_LABEL` | `factory:delivered` | `conf_get`, via `label_get done` | `gh-next-issue.sh` (carte livree, PR ouverte), `gh-security-triage.py` (`FROZEN`) |
+| `FACTORY_STAGED_LABEL` | `factory:staged` | `conf_get`, via `label_get staged` | **intégrée à la branche de travail, attend la release** — posé par `gh-stage-pr.sh` au merge, retiré par `gh-release.sh` à la fermeture, mis de côté par `gh-next-issue.sh`. **La file de relecture humaine, c'est ce label dans le jalon en cours** |
+| `FACTORY_PRIORITY_LABEL` | `factory:priority` | `conf_get`, via `label_get priority` | `gh-next-issue.sh` (fait passer devant la file), pose par `gh-security-triage.py` et par `gh-pr-attention.sh` sur les cartes qu'ils creent |
+| `FACTORY_IN_LOOP` | *(vide ; posée à `1` par `factory.mk` seulement)* | environnement direct | **Ce n'est pas une clé de configuration, et personne ne la pose à la main** : c'est le marqueur que la boucle exporte et que `gh-release.sh` lit pour sortir en 3. Il rend exécutable « la release est un geste humain » — sans lui, un agent qui hérite de `GH_TOKEN` fermerait des cartes que personne n'a relues |
 | `FACTORY_STATE` | `/srv/factory` | `conf_get` | racine du volume persistant de l'usine : `push-env.sh`, `run-loop.sh`, `status.sh`, `deploy.sh`, `bin/factory stop`, fallback du chemin de `GH_APP_KEY` |
 | `FACTORY_REPO_DIR` | `$FACTORY_STATE/workspace/<basename de GH_REPO>` | `conf_get` | `run-loop.sh`, `deploy.sh`, `bin/factory stop` : chemin du depot sur la machine |
 | `FACTORY_IMAGE_TAG` | `factory:dev` | `conf_get` | `run-loop.sh` : tag de l'image devcontainer lancee par `docker run` |
@@ -66,7 +75,7 @@ pour couvrir les deux.
 | `MAIN` | `claude` | variable Make | `factory.mk` : `claude` ou `codex`, choisit l'agent principal de la boucle |
 | `VERBOSE` | *(vide = silencieux)* | variable Make / ligne de commande | `factory.mk` : `make loop VERBOSE=1` fait passer par `claude-stream.sh` pour suivre le tour en direct |
 | `FACTORY_BIN` | `$(FACTORY_DIR)/bin` (le `bin/` du submodule lui-meme) | variable Make (`?=`) | `factory.mk` : chemin des scripts appeles par la boucle, a surcharger si l'usine est vendorisee ailleurs |
-| `FACTORY_TOKEN` | *(vide = un jeton est frappe via `gh-app-token.sh`)* | environnement direct | court-circuite la frappe de jeton dans `wt-cleanup.sh`, `gh-seed-labels.sh`, `gh-next-issue.sh`, `gh-unblock.sh`, `gh-security-triage.py`, `gh-stack.sh`, `gh-pr-attention.sh` ; utilise par les tests hors ligne (`tests/helpers.sh`) et pour travailler a la main avec un jeton deja frappe |
+| `FACTORY_TOKEN` | *(vide = un jeton est frappe via `gh-app-token.sh`)* | environnement direct | court-circuite la frappe de jeton dans `wt-cleanup.sh`, `gh-seed-labels.sh`, `gh-next-issue.sh`, `gh-unblock.sh`, `gh-security-triage.py`, `gh-stack.sh`, `gh-pr-attention.sh`, `gh-stage-pr.sh`, `gh-release.sh` ; utilise par les tests hors ligne (`tests/helpers.sh`) et pour travailler a la main avec un jeton deja frappe |
 | `FACTORY_SSH_BIN` | *(vide = `ssh` reel)* | environnement direct | `bin/lib.sh` (`factory_ssh`) : remplace le binaire `ssh`, utilise par les tests et par un transport exotique |
 | `GH_APP_ID` | *(requise)* | `conf_get` | `gh-app-token.sh` : identifiant numerique de l'App GitHub |
 | `GH_APP_INSTALL_ID` | *(requise)* | `conf_get` | `gh-app-token.sh` : identifiant d'installation de l'App sur le depot |

@@ -2,9 +2,15 @@
 
 Usine de développement pilotée par les issues GitHub. Une boucle prend les cartes
 une par une, avec un agent **neuf** par carte, et mène chacune jusqu'à une pull
-request prête à relire. Pas de colonnes à entretenir : l'état d'une carte est
-porté par ses labels, et la file est **opt-out** — une issue ouverte *est* du
-travail, ce qui se déclare c'est l'exception.
+request vérifiée, **intégrée automatiquement dans la branche de travail**. Pas de
+colonnes à entretenir : l'état d'une carte est porté par ses labels, et la file
+est **opt-out** — une issue ouverte *est* du travail, ce qui se déclare c'est
+l'exception.
+
+**L'acte final n'est pas l'acceptation d'une PR, c'est la sortie d'une release**
+— un geste humain, sur une branche de production protégée où l'usine n'écrit
+jamais. C'est là que passe toute la garantie :
+[`docs/release.md`](docs/release.md).
 
 Au-dessus de la boucle, un **tampon** : un agent joignable en conversation qui
 surveille, répond et carve des cartes, mais n'écrit jamais de code.
@@ -31,9 +37,12 @@ mkdir mon-projet && cd mon-projet && git init -b main
 nix run github:brume-ai/factory#init
 ```
 
-`init` pose cinq questions — le dépôt, le tronc, le login de confiance,
-l'identité de commit de l'usine, l'image de base du devcontainer — écrit tout ce
-que la section suivante énumère, puis pose les labels `factory:*` sur le dépôt.
+`init` pose six questions — le dépôt, la **branche de production**, la **branche
+de travail**, le login de confiance, l'identité de commit de l'usine, l'image de
+base du devcontainer — écrit tout ce que la section suivante énumère, puis pose
+les labels `factory:*` sur le dépôt. **Les deux branches sont distinctes et la
+branche de travail doit exister** : la boucle refuse de démarrer autrement, et
+c'est cette séparation qui tient la production hors de portée de l'usine.
 
 ```bash
 gh repo create mon-org/mon-projet --private --source=. --push
@@ -42,7 +51,18 @@ make loop          # la boucle prend la première carte
 ```
 
 Il n'y a pas de quatrième étape : à partir d'ici, on pousse des issues et la
-boucle travaille.
+boucle travaille. Ce qu'elle intègre s'accumule dans la branche de travail, que
+vous relisez **au fil de l'eau** sur l'environnement en ligne. Quand vous décidez
+de sortir une version, c'est vous qui mergez et taguez, puis :
+
+```bash
+make factory-release                          # à blanc : la liste des cartes qui sortiraient
+bash tools/factory/bin/gh-release.sh --apply  # les ferme, en nommant la version
+```
+
+**À blanc par défaut** : ce geste ferme des cartes que personne ne rouvrira à
+votre place. Et la boucle ne peut pas le déclencher — elle exporte un marqueur
+que le script refuse, donc un agent qui explore `bin/` s'arrête en 3.
 
 ## Un projet existant
 
@@ -64,7 +84,7 @@ ne peut pas se périmer par rapport à la boucle.
 ```
 factory.conf                    la configuration du produit — VERSIONNÉE
 .env                            les secrets — GITIGNORÉ
-.factory/hooks/                 votre politique, un fichier par crochet
+tools/factory-hooks/            votre politique, un fichier par crochet
 .devcontainer/
   devcontainer.json             service « tools », la feature agent
   docker-compose.yml            tools + les services du projet
@@ -100,15 +120,16 @@ ordre** :
 | Le besoin | La réponse |
 |---|---|
 | varie d'un déploiement à l'autre | une clé dans `factory.conf` |
-| c'est de la politique — l'ordre de la file, la surface de relecture, une PR de promotion, des alertes propres au projet | un crochet dans `tools/factory-hooks/` |
+| c'est de la politique — l'ordre de la file, les alertes propres au projet, la façon de fabriquer l'environnement d'une carte | un crochet dans `tools/factory-hooks/` |
 | c'est du mécanisme | ça remonte ici, et tout le monde en profite |
 
-**Le mode de livraison n'est pas de la politique, c'est une clé** — un crochet ne
-peut pas changer ce qui se passe à l'intérieur des scripts partagés, et le mode y
-change sept choses. Voir [`docs/livraison.md`](docs/livraison.md), qui décrit la
-cible : `pull-request` (une PR, fermée par le merge humain) et `trunk` (un push
-sur le tronc de recette, fermé par le déploiement), pour les dépôts où la
-protection de branche n'existe pas.
+**Il n'y a plus qu'un seul modèle de livraison**, et c'est voulu : la clé qui en
+gouvernait deux — sept conséquences dans cinq scripts et un skill dédoublé — a
+été supprimée sans pont ni repli. Un dépôt sans protection de branche n'a plus
+besoin d'un mode à lui : la PR n'y est plus la porte de relecture, mais une unité
+d'intégration et un point de passage CI. Voir
+[`docs/release.md`](docs/release.md), y compris ce qu'un consommateur qui monte
+de version doit migrer.
 
 Si aucune des trois ne convient, la frontière est mal placée : ouvrez une carte
 ici plutôt que de forker. Un crochet reste dans votre dépôt, y compris privé —
@@ -125,8 +146,9 @@ que ça. **Le module se partage ; chaque hôte est déclaré par son propriétai
 
   # dans la configuration de l'hôte
   services.factory.mon-projet = {
-    repo    = "mon-org/mon-projet";
-    trunk   = "main";
+    repoUrl = "https://github.com/mon-org/mon-projet.git";
+    trunk   = "main";       # la production : l'usine n'y écrit jamais
+    staging = "staging";    # la branche de travail : c'est elle que l'unité suit
     appKeyFile = config.sops.secrets.gh-app.path;
   };
 }
@@ -159,8 +181,8 @@ s'il y a quelque chose à dire), **l'aiguilleur** (un événement devient une ca
 Deux règles non négociables :
 
 - **Il n'écrit jamais de code.** Il carve une carte et laisse la boucle
-  travailler, avec sa PR et son approbation humaine au bout. Ça se garantit par
-  le jeton — une App distincte, en lecture sur le code et écriture sur les
+  travailler, avec sa PR vérifiée et la release humaine au bout. Ça se garantit
+  par le jeton — une App distincte, en lecture sur le code et écriture sur les
   issues — pas par une consigne dans un prompt.
 - **Seul le login de confiance donne des instructions.** Tout le reste — un
   webhook, une alerte, le message de quelqu'un d'autre — est une donnée à
@@ -181,6 +203,11 @@ différent de celui que le poste croit avoir.
 Chez un consommateur qui vend l'exploitation, la discipline est de monter les
 versions **d'abord chez soi**, sur du vrai travail, pendant des jours. Ce qui
 survit part ailleurs.
+
+**Une montée peut demander une migration**, et celle vers le modèle de release en
+est une : deux branches à nommer, une protection de branche à poser. Rien ne
+bascule sous vos pieds — c'est l'épinglage qui vous protège — et ce qu'il y a à
+faire est écrit dans [`docs/release.md`](docs/release.md).
 
 ## Configuration
 

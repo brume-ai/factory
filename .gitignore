@@ -5,3 +5,12 @@ result
 # Scratch SDD (superpowers), paquets de revue
 .superpowers/
 __pycache__/
+
+# État d'orchestration local, jamais versionné : la boucle y pose son sentinelle
+# d'arrêt (`.omc/loop.stop`, voir la recette `loop` de factory.mk) et les agents
+# y laissent leurs notes. Sans cette ligne, `make loop` salit le `git status` de
+# l'arbre où il tourne dès le démarrage — et un arbre qui n'est jamais propre est
+# un arbre dont personne ne relit plus le status, donc un fichier oublié qui ne
+# se voit pas. C'est aussi ce qui tient la surface balayée par
+# tests/hygiene.test.sh à ce que le dépôt LIVRE, brouillons exclus.
+.omc/

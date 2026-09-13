@@ -17,6 +17,19 @@ factory_root() {
   fi
 }
 
+# LES BLANCS DE BORD SONT MANGÉS ICI, UNE FOIS, POUR TOUTES LES CLÉS.
+# Aucune clé de l'usine n'a de blanc significatif — hôtes, chemins, labels,
+# logins, tags, noms de branche — et une seule espace suffit à faire échouer un
+# `git fetch origin "main "`, ou à faire interroger GitHub sur une branche qui
+# n'existe pas. La règle est écrite à UN endroit et relue à deux : _conf_read
+# pour les FICHIERS, `branches_require` pour l'ENVIRONNEMENT, que `conf_get` lit
+# en premier et ne rogne pas.
+_trim() {  # <valeur> : sans blanc de tete ni de queue
+  local v="$1"
+  v="${v#"${v%%[![:space:]]*}"}"
+  printf '%s' "${v%"${v##*[![:space:]]}"}"
+}
+
 # Meme extraction que le from_env historique de gh-app-token.sh : tolere
 # `export`, les guillemets simples et doubles, un commentaire en fin de ligne
 # et un retour chariot Windows.
@@ -24,14 +37,11 @@ _conf_read() {  # <nom> <fichier>
   local v
   v="$(sed -n "s/^[[:space:]]*\(export[[:space:]]\+\)\?$1[[:space:]]*=[[:space:]]*//p" "$2" | tail -n1)"
   v="${v%%[[:space:]]#*}"; v="${v%$'\r'}"
-  # LES BLANCS DE FIN, que la coupe du commentaire ci-dessus laisse derriere
-  # elle : « CLE = trunk   # mode PSR » rend « trunk  », deux espaces comprises.
-  # Aucune cle de l'usine n'a de blanc significatif — hotes, chemins, labels,
-  # logins, tags — et une seule espace suffit a faire echouer un
-  # `git fetch origin "main "` ou a rendre « trunk  » inconnu d'un case strict.
-  # On les mange ici, une fois, pour toutes les cles, et AVANT les guillemets :
-  # ceux-ci sont justement le moyen de garder un blanc quand on en veut un.
-  v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
+  # La coupe du commentaire ci-dessus laisse derrière elle les blancs qui le
+  # précédaient : « CLE = staging   # la branche de travail » rend « staging  »,
+  # deux espaces comprises. On rogne AVANT de retirer les guillemets : ceux-ci
+  # sont justement le moyen de garder un blanc quand on en veut un.
+  v="$(_trim "$v")"
   v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"
   printf '%s' "$v"
 }
@@ -60,61 +70,100 @@ conf_require() {  # <nom>... : sort en 3 si une valeur manque
   done
 }
 
-# LE MODE DE LIVRAISON, et rien d'autre (docs/livraison.md) :
-#   pull-request  la boucle rend une pull request, le merge humain ferme la carte
-#   trunk         la boucle pousse sur le tronc de recette, et c'est le pipeline
-#                 du consommateur qui ferme la carte
+# LES DEUX BRANCHES NOMMÉES, ET C'EST LÀ QUE VIT LA GARANTIE (docs/release.md) :
+#   FACTORY_TRUNK    la branche de PRODUCTION, cible de la release. L'usine n'y
+#                    écrit JAMAIS.
+#   FACTORY_STAGING  la branche de TRAVAIL de l'usine, et la SEULE où elle a le
+#                    droit d'écrire : les cartes en partent, les PR y
+#                    retournent, l'environnement en ligne la suit.
 #
-# Le defaut est `pull-request` pour deux raisons, et la seconde compte autant que
-# la premiere : c'est le mode qui porte la garantie la plus forte — GitHub
-# interdit d'approuver sa propre PR — et c'est celui de tous les consommateurs
-# existants, qui ne doivent RIEN voir changer en montant de version.
+# DEUX BRANCHES ÉGALES, C'EST UNE USINE QUI PUBLIE EN PRODUCTION À CHAQUE CARTE :
+# le merge automatique atterrit sur la branche que la release est censée
+# protéger, et la file de relecture humaine n'a plus rien à relire puisque tout
+# est déjà sorti. D'où le refus, avant le premier appel API. Le message NOMME ce
+# qui protège vraiment — la protection de branche, et pas le jeton, dont les
+# permissions sont à l'échelle du DÉPÔT et pas de la branche — sinon la garde
+# laisserait croire à une sécurité qui n'existe pas.
 #
-# AUCUN REPLI SILENCIEUX. Un « FACTORY_DELIVERY = tunk » qui retomberait sur le
-# defaut ferait livrer en pull request un depot SANS protection de branche : le
-# bot y mergerait sa propre PR, et « l'agent ne s'auto-approuve pas » cesserait
-# d'etre une garantie sans que rien ne le dise. C'est exactement la panne que
-# cette cle existe pour empecher, donc code 3, et on NOMME la valeur fautive.
+# À APPELER EN TÊTE DE SCRIPT, à côté de `conf_require` — et JAMAIS dans un $( ).
+# LE PIÈGE : `local b="$(branches_require)"` et `f "$(branches_require)"` AVALENT
+# le code 3, parce que le statut devient celui de `local` ou de `f` ; un `exit`
+# depuis une substitution ne tue que le sous-shell, et l'export n'atteint jamais
+# l'appelant — le script continuerait avec des branches que personne n'a
+# validées. D'où cette forme : un appel NU qui pose les deux variables une fois,
+# après quoi on ne lit plus que $FACTORY_TRUNK et $FACTORY_STAGING. Elles portent
+# le NOM DES CLÉS, et pas un second nom : deux noms pour la même valeur validée,
+# c'est la garantie qu'un script finira par lire celui que personne n'a validé.
 #
-# UN SEUL LECTEUR DANS LA MAISON. factory.mk ne reimplemente pas ce case : il
-# source ce fichier (voir la garde de la recette `loop`). Deux lecteurs, c'est
-# deux verdicts sur le meme factory.conf le jour ou l'un tolere une forme que
-# l'autre refuse, et personne pour dire lequel a raison.
-delivery_mode() {  # imprime pull-request|trunk ; rend 3 sur une valeur inconnue
-  local m
-  m="$(conf_get FACTORY_DELIVERY pull-request)"
-  # _conf_read rogne deja les blancs des FICHIERS ; celui-ci rattrape
-  # l'ENVIRONNEMENT, que conf_get lit en premier et ne rogne pas — typiquement
-  # `make loop FACTORY_DELIVERY='trunk '`.
-  m="${m#"${m%%[![:space:]]*}"}"; m="${m%"${m##*[![:space:]]}"}"
-  [ -n "$m" ] || m=pull-request
-  case "$m" in
-    pull-request|trunk) printf '%s' "$m"; return 0 ;;
-  esac
-  echo "factory: FACTORY_DELIVERY = « $m » inconnu. Les deux seules valeurs sont « pull-request » (defaut) et « trunk ». Voir docs/livraison.md." >&2
-  return 3
+# Seuls les scripts qui NOMMENT une branche l'appellent. Une clé cassée n'a pas à
+# empêcher push-env.sh de projeter un .env.
+branches_require() {  # sort en 3 si les deux branches sont la meme
+  FACTORY_TRUNK="$(conf_get FACTORY_TRUNK main)"
+  FACTORY_STAGING="$(conf_get FACTORY_STAGING staging)"
+  # LE ROGNAGE, PUIS LA RÉAPPLICATION DU DÉFAUT, DANS CET ORDRE. Une valeur
+  # d'environnement faite d'un seul blanc est NON VIDE pour `conf_get` : ni le
+  # fichier ni le défaut ne sont consultés. Elle devient VIDE après rognage, et
+  # sans la ligne qui suit la garde comparerait « » à « main », passerait, et
+  # exporterait une chaîne vide — un `base=` que GitHub ignore, donc une
+  # intégration qui voit TOUTES les PR ouvertes, y compris celles qui visent la
+  # production.
+  FACTORY_TRUNK="$(_trim "$FACTORY_TRUNK")";     [ -n "$FACTORY_TRUNK" ]   || FACTORY_TRUNK=main
+  FACTORY_STAGING="$(_trim "$FACTORY_STAGING")"; [ -n "$FACTORY_STAGING" ] || FACTORY_STAGING=staging
+  if [ "$FACTORY_TRUNK" = "$FACTORY_STAGING" ]; then
+    {
+      echo "factory: FACTORY_TRUNK et FACTORY_STAGING valent toutes deux « $FACTORY_TRUNK » : l'usine écrirait dans la branche de production."
+      echo "Ce n'est PAS le jeton qui protège — les permissions d'une App GitHub sont à l'échelle du DÉPÔT, pas de la branche, donc « contents: write » autorise à écrire partout — c'est la protection de branche."
+      echo "Donnez à FACTORY_STAGING une branche distincte, et protégez FACTORY_TRUNK. Voir docs/release.md."
+    } >&2
+    exit 3
+  fi
+  # Repose dans l'environnement les valeurs NORMALISÉES. `conf_get` lit
+  # l'environnement en premier : tout ce que ce script lance ensuite — un autre
+  # script, un crochet du consommateur, l'agent — hérite des valeurs déjà
+  # validées au lieu de relire les fichiers et d'en tirer d'autres.
+  export FACTORY_TRUNK FACTORY_STAGING
 }
 
-# A APPELER EN TETE DE SCRIPT, a cote de conf_require — et JAMAIS dans un $( ).
-# LE PIEGE : `local m="$(delivery_mode)"` et `f "$(delivery_mode)"` AVALENT le
-# code 3, parce que le statut devient celui de `local` ou de `f` ; la valeur est
-# vide, et le script continue en se croyant en pull-request. Un `exit` depuis une
-# substitution ne tue que le sous-shell. D'ou cette forme : un appel NU qui pose
-# la variable une fois, apres quoi on ne lit plus que $FACTORY_DELIVERY.
+# UN SEUL CHEMIN DE LECTURE POUR LES SEPT LABELS.
+# Six clés de label étaient lues par expansion directe de l'environnement
+# (« ${FACTORY_*_LABEL:-factory:quelque-chose} ») : les poser dans factory.conf
+# ne suffisait donc PAS, il fallait AUSSI les exporter. Le renommage marchait à
+# moitié, et la moitié qui ne marchait pas était silencieuse — c'est le « Défaut
+# connu, à corriger » que docs/configuration.md portait. Un septième label
+# arrive avec la release : l'occasion de corriger, pas d'aggraver.
 #
-# La variable posee porte le nom de la cle, et pas un second nom : deux noms pour
-# la meme valeur validee, c'est la garantie qu'un script finira par lire celui
-# que personne n'a valide.
+# LE DÉFAUT DE CHAQUE LABEL EST ÉCRIT ICI, UNE FOIS. Il vivait dans chaque
+# script qui lisait la clé, en autant de copies que de lecteurs. Deux copies
+# d'un nom finissent par diverger, et un nom de label qui diverge sort une carte
+# de la file pour toujours : le script qui pose le label et celui qui le retire
+# ne parlent plus du même mot.
 #
-# Seuls les scripts que le mode GOUVERNE l'appellent. Une cle cassee n'a pas a
-# empecher push-env.sh de projeter un .env.
-delivery_require() {  # sort en 3 si FACTORY_DELIVERY est illisible
-  FACTORY_DELIVERY="$(delivery_mode)" || exit 3
-  # Repose dans l'environnement la valeur NORMALISEE. conf_get lit
-  # l'environnement en premier : tout ce que ce script lance ensuite — un autre
-  # script, un crochet du consommateur, l'agent — herite de la valeur deja
-  # validee au lieu de relire les fichiers et d'en tirer une autre.
-  export FACTORY_DELIVERY
+# ON APPELLE PAR RÔLE, PAS PAR CLÉ : `label_get busy`, jamais
+# `conf_get FACTORY_BUSY_LABEL factory:in-progress` — sinon le défaut retrouve
+# un second domicile et on a juste déplacé le problème.
+#
+# UN RÔLE INCONNU REND 3 ET N'IMPRIME RIEN. Sous `set -e`, l'affectation nue
+# `BUSY="$(label_get bsy)"` tue alors le script, et c'est voulu : un nom de
+# label VIDE est bien pire qu'un nom faux, parce que `grep -q ""` trouve TOUT —
+# une carte serait vue comme bloquée, livrée et prise à la fois. Ne jamais
+# écrire `local X="$(label_get …)"` : `local` rendrait 0 et avalerait le refus,
+# le même piège que celui documenté sur `branches_require`.
+label_get() {  # <rôle> : imprime le nom du label ; 3 sur un rôle inconnu
+  # « ${1:-} » et pas « $1 » : appelé sans argument sous `set -u`, le second
+  # tuerait le shell sur « unbound variable », donc avec le code 1 — « rien à
+  # faire », que la boucle prend pour une file vide. Le refus doit rester un 3.
+  case "${1:-}" in
+    busy)     conf_get FACTORY_BUSY_LABEL     factory:in-progress ;;
+    blocked)  conf_get FACTORY_BLOCKED_LABEL  factory:blocked ;;
+    human)    conf_get FACTORY_HUMAN_LABEL    factory:needs-human ;;
+    epic)     conf_get FACTORY_EPIC_LABEL     factory:epic ;;
+    done)     conf_get FACTORY_DONE_LABEL     factory:delivered ;;
+    priority) conf_get FACTORY_PRIORITY_LABEL factory:priority ;;
+    staged)   conf_get FACTORY_STAGED_LABEL   factory:staged ;;
+    *)
+      echo "factory: label_get « ${1:-} » : rôle inconnu. Les sept rôles sont busy blocked human epic done priority staged." >&2
+      return 3 ;;
+  esac
 }
 
 # Un shell sur l'usine, en direct. FACTORY_SSH_BIN permet aux tests (et a un

@@ -9,10 +9,10 @@
 #
 # LA RELATION DE BLOCAGE **EST** LA PILE. Une carte porte « Bloquée par #M » en
 # tête de son corps ; si la PR de #M est encore ouverte, son travail n'est pas
-# dans `main`, et la carte doit donc se construire DESSUS. C'est ce qui rend la
-# base calculée au lieu d'héritée : sans ça, la base est « la branche sur
-# laquelle l'arbre se trouvait », c'est-à-dire un accident — juste par chance
-# aujourd'hui, faux dès que deux cartes s'enchaînent dans le désordre.
+# dans la branche de travail, et la carte doit donc se construire DESSUS. C'est
+# ce qui rend la base calculée au lieu d'héritée : sans ça, la base est « la
+# branche sur laquelle l'arbre se trouvait », c'est-à-dire un accident — juste
+# par chance aujourd'hui, faux dès que deux cartes s'enchaînent dans le désordre.
 # CHAÎNER LES `--base` NE SUFFIT PAS. Ça donne l'ergonomie de review — chaque PR
 # n'affiche que le diff de sa couche — mais PAS la pile native : ni carte de
 # pile, ni rebase automatique des couches au merge, ni « merger le sommet fait
@@ -23,9 +23,19 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 . "$HERE/lib.sh"
+# LA BASE D'UNE PR EST LA BRANCHE DE TRAVAIL, JAMAIS LA PRODUCTION, et c'est
+# ici que ça se joue : ce script est le seul qui CHOISIT la base d'une PR. Une
+# base rendue sur la production ferait proposer chaque carte au merge dans la
+# branche que la release est censée protéger.
+#
+# APPEL NU, jamais dans un $( ) : la substitution avalerait le code 3 et
+# `base="$(gh-stack.sh base 12)"` rendrait une chaîne VIDE, que
+# `gh pr create --base ""` traduit par la branche PAR DÉFAUT du dépôt —
+# c'est-à-dire, justement, la production. Après l'appel on ne lit plus que
+# $FACTORY_STAGING, déjà validée et déjà exportée vers les blocs python.
+branches_require
 conf_require GH_REPO
 GH_REPO="$(conf_get GH_REPO)"
-TRUNK="$(conf_get FACTORY_TRUNK main)"
 
 if [ -n "${FACTORY_TOKEN:-}" ]; then TOKEN="$FACTORY_TOKEN"
 else TOKEN="$(bash "$HERE/gh-app-token.sh")" || exit 3
@@ -39,10 +49,10 @@ api() {
 branch_of() { printf 'card/%s' "$1"; }
 
 # --- base <issue> -------------------------------------------------------------
-# ON N'EMPILE QUE SUR CE DONT ON DÉPEND. Une carte se construit sur le TRONC par
-# défaut. Elle ne se pose sur une PR ouverte que si elle en DÉPEND vraiment,
-# c'est-à-dire si son corps porte « Bloquée par #M » (ou « Dépend de #M ») et
-# que le travail de #M n'est pas encore dans `main`.
+# ON N'EMPILE QUE SUR CE DONT ON DÉPEND. Une carte se construit sur la BRANCHE
+# DE TRAVAIL par défaut. Elle ne se pose sur une PR ouverte que si elle en
+# DÉPEND vraiment, c'est-à-dire si son corps porte « Bloquée par #M » (ou
+# « Dépend de #M ») et que le travail de #M n'y est pas encore.
 #
 # LA RÈGLE PRÉCÉDENTE — « toujours partir du sommet de la pile ouverte » — était
 # fausse, et coûteuse. Elle enchaînait des cartes ÉTRANGÈRES l'une à l'autre :
@@ -61,9 +71,12 @@ cmd_base() {
   body="$(api "repos/$GH_REPO/issues/$issue" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("body") or "")')"
   prs="$(api "repos/$GH_REPO/pulls?state=open&per_page=100")"
 
-  printf '%s' "$prs" | FACTORY_TRUNK="$TRUNK" FACTORY_BODY="$body" python3 -c '
+  printf '%s' "$prs" | FACTORY_BODY="$body" python3 -c '
 import json, os, re, sys
-trunk = os.environ.get("FACTORY_TRUNK", "main")
+# LECTURE STRICTE, SANS DEFAUT PYTHON. `branches_require` a deja valide et
+# exporte la valeur ; un `os.environ.get(..., "main")` serait un SECOND nom de
+# branche, invisible depuis factory.conf, et celui-la nommerait la production.
+staging = os.environ["FACTORY_STAGING"]
 body = os.environ.get("FACTORY_BODY", "")
 # Les deux formulations en usage sur le board. Une carte peut en declarer
 # plusieurs ; on ne peut se poser que sur UNE base, donc on prend la derniere
@@ -71,7 +84,7 @@ body = os.environ.get("FACTORY_BODY", "")
 deps = {int(m) for m in re.findall(r"(?:Bloqu\S*e par|D\S*pend de)\s+#(\d+)", body)}
 heads = {p["head"]["ref"]: p["number"] for p in json.load(sys.stdin)}
 cands = [n for n in deps if "card/%d" % n in heads]
-print("card/%d" % max(cands) if cands else trunk, end="")
+print("card/%d" % max(cands) if cands else staging, end="")
 '
 }
 
@@ -91,14 +104,14 @@ print("card/%d" % max(cands) if cands else trunk, end="")
 # Et on ne demande plus la liste à l'appelant : on la DÉDUIT, comme `base` déduit
 # déjà la base au lieu de l'hériter. Le sommet est le DERNIER argument — ce qui
 # garde valides les appels `link <pr-de-M> <ma-pr>` déjà écrits — et l'on
-# redescend de `base.ref` en `head.ref` jusqu'au tronc.
+# redescend de `base.ref` en `head.ref` jusqu'à la branche de travail.
 cmd_link() {
   [[ $# -ge 1 ]] || { echo "usage: gh-stack.sh link <votre-pr>" >&2; exit 2; }
   local top="${!#}" chain
   chain="$(api "repos/$GH_REPO/pulls?state=open&per_page=100" \
-    | FACTORY_TRUNK="$TRUNK" FACTORY_TOP="$top" python3 -c '
+    | FACTORY_TOP="$top" python3 -c '
 import json, os, sys
-trunk = os.environ["FACTORY_TRUNK"]
+staging = os.environ["FACTORY_STAGING"]
 top = int(os.environ["FACTORY_TOP"])
 prs = json.load(sys.stdin)
 by_number = {p["number"]: p for p in prs}
@@ -108,25 +121,26 @@ p = by_number.get(top)
 if p is None:
     sys.exit("GH-STACK-FAILED: aucune PR ouverte ne porte le numéro %d sur ce dépôt" % top)
 
-# On remonte du sommet vers le tronc. `seen` borne le parcours : deux PR qui se
-# serviraient mutuellement de base boucleraient sinon indéfiniment.
+# On remonte du sommet vers la branche de travail. `seen` borne le parcours :
+# deux PR qui se serviraient mutuellement de base boucleraient sinon
+# indefiniment.
 chain, seen = [], set()
 while True:
     chain.append(p["number"])
     seen.add(p["number"])
     base = p["base"]["ref"]
-    if base == trunk:
+    if base == staging:
         break
     nxt = by_head.get(base)
     if nxt is None:
         sys.exit("GH-STACK-FAILED: aucune PR ouverte pour la base %s de #%d : "
-                 "la chaîne se rompt avant %s" % (base, p["number"], trunk))
+                 "la chaîne se rompt avant %s" % (base, p["number"], staging))
     if nxt["number"] in seen:
         sys.exit("GH-STACK-FAILED: cycle de bases sur #%d" % nxt["number"])
     p = nxt
 
 if len(chain) < 2:
-    sys.exit("GH-STACK-FAILED: #%d part du tronc : aucune pile à déclarer" % top)
+    sys.exit("GH-STACK-FAILED: #%d part de la branche de travail : aucune pile à déclarer" % top)
 chain.reverse()   # de la BASE vers le SOMMET, ordre attendu par GitHub
 print(json.dumps(chain), end="")
 ')"
@@ -194,16 +208,69 @@ print("pile #%s sur %s : %s" % (s["number"], s["base"]["ref"], prs))
 # Appelé quand une couche reçoit de nouveaux commits (reprise, correction après
 # review). Les couches au-dessus portent encore l'ancienne base et divergeraient
 # en silence : leur PR afficherait un diff qui mélange les deux travaux.
+#
+# C'EST LE SEUL `git push` DU DÉPÔT, ET IL POUSSE EN FORCE. Tout le reste de
+# l'usine écrit par l'API ; ici on réécrit l'historique d'une branche de ce
+# dépôt-ci. La liste qui le nourrit, elle, est ouverte à tout le monde : `head.ref`
+# d'une PR de fork est le nom de branche CHEZ LE FORK. N'importe qui pousse
+# `card/99` sur son fork, ouvre une PR sur la base qu'on restacke, et ce script
+# rebase puis force-pousse `origin/card/99` — une branche de CE dépôt, écrasée
+# par le travail d'un inconnu, sous le nom d'une carte qui n'a rien demandé.
+# `gh-stage-pr.sh` et `gh-pr-attention.sh` filtrent déjà l'appartenance avant
+# d'agir ; celui qui écrit dans git ne peut pas être le seul à ne pas le faire.
+#
+# LA BRANCHE POUSSÉE EST RECONSTRUITE À PARTIR DU NUMÉRO, jamais recopiée de
+# `head.ref` : après le filtre il ne survit que des chiffres, et `branch_of` en
+# refait le seul nom que le restack ait le droit de toucher.
 cmd_restack() {
   local base="${1:?usage: gh-stack.sh restack <branche>}"
-  local dependents
-  dependents="$(api "repos/$GH_REPO/pulls?state=open&base=$base&per_page=100" \
-    | python3 -c 'import json,sys; [print(p["head"]["ref"]) for p in json.load(sys.stdin)]')"
-  [[ -n "$dependents" ]] || { echo "gh-stack: aucune couche posée sur $base"; return 0; }
+  local layers verdict n card detail br
+  # LA PROSE RESTE EN BASH, LE JSON EN PYTHON. Un verdict par ligne, et les
+  # messages s'écrivent là où les apostrophes sont permises : la source d'un
+  # `python3 -c` vit entre quotes simples, une seule apostrophe y fermerait la
+  # chaîne du shell. Quatre champs, aucun vide — un champ absent décalerait les
+  # colonnes et donnerait la provenance d'une PR au nom de branche d'une autre.
+  # LES LIGNES PYTHON RESTENT COLLÉES À GAUCHE : la source ne supporte aucune
+  # indentation, même uniforme.
+  layers="$(api "repos/$GH_REPO/pulls?state=open&base=$base&per_page=100" \
+    | REPO_FULL="$GH_REPO" python3 -c '
+import json, os, re, sys
+repo = os.environ["REPO_FULL"].lower()
+for p in sorted(json.load(sys.stdin), key=lambda p: p["number"]):
+    head = p.get("head") or {}
+    ref = head.get("ref") or "-"
+    # `head.repo` est NUL quand le fork a ete supprime : refuse aussi, c est le
+    # seul cas ou l on ne peut meme pas nommer la provenance.
+    full = (head.get("repo") or {}).get("full_name") or "-"
+    m = re.fullmatch(r"card/(\d+)", ref)
+    if not m:
+        print("notcard", p["number"], "-", ref)
+    elif full.lower() != repo:
+        print("fork", p["number"], m.group(1), full)
+    else:
+        print("ok", p["number"], m.group(1), "-")
+')" || {
+    echo "gh-stack: liste des PR de « $base » de forme inattendue — rien n'a été poussé." >&2
+    return 1
+  }
+  [[ -n "$layers" ]] || { echo "gh-stack: aucune couche posée sur $base"; return 0; }
 
   git fetch -q origin "$base" || true
-  while read -r br; do
-    [[ -n "$br" ]] || continue
+  while read -r verdict n card detail; do
+    [[ -n "${verdict:-}" ]] || continue
+    case "$verdict" in
+      notcard)
+        # Le cas qui ferait le plus de dégâts porte ce verdict-là : la PR de
+        # release a pour tête la branche de TRAVAIL. La rebaser sur la
+        # production la force-pousserait, et tout ce qui y a été intégré
+        # partirait avec.
+        echo "gh-stack: PR #$n — sa tête « $detail » n'est pas une branche de carte ; le restack ne touche que « card/<n> ». Laissée à un humain." >&2
+        continue ;;
+      fork)
+        echo "gh-stack: PR #$n vient d'un fork ($detail) — la tête « card/$card » d'un fork ne prouve rien sur ce dépôt : la rebaser force-pousserait une branche qui n'est pas la sienne. Ignorée." >&2
+        continue ;;
+    esac
+    br="$(branch_of "$card")"
     echo "gh-stack: rebase $br sur $base"
     git fetch -q origin "$br"
     # `git rebase <base> <branche>` rejoue les commits PROPRES à la branche : pas
@@ -219,7 +286,7 @@ cmd_restack() {
       echo "GH-STACK-CONFLIT: $br ne se rebase pas seul sur $base — à reprendre à la main." >&2
       return 1
     fi
-  done <<< "$dependents"
+  done <<< "$layers"
 }
 
 # --- show ---------------------------------------------------------------------
@@ -238,7 +305,7 @@ for s in stacks:
     print("pile #%s  base %s  %s" % (s["number"], s["base"]["ref"], prs))
 '
   echo "--- chaînage des bases (indépendant de la déclaration) ---"
-  api "repos/$GH_REPO/pulls?state=open&per_page=100" | FACTORY_TRUNK="$TRUNK" python3 -c '
+  api "repos/$GH_REPO/pulls?state=open&per_page=100" | python3 -c '
 import json, os, sys, collections
 prs = json.load(sys.stdin)
 kids = collections.defaultdict(list)
@@ -249,12 +316,12 @@ def walk(ref, depth=0):
         num, head, title = p["number"], p["head"]["ref"], p["title"][:52]
         print("  " * depth + "\u2514\u2500 #%s %s  %s" % (num, head, title))
         walk(head, depth + 1)
-trunk = os.environ.get("FACTORY_TRUNK", "main")
-print(trunk)
-walk(trunk)
+staging = os.environ["FACTORY_STAGING"]
+print(staging)
+walk(staging)
 heads = {q["head"]["ref"] for q in prs}
 for p in prs:
-    if p["base"]["ref"] != trunk and p["base"]["ref"] not in heads:
+    if p["base"]["ref"] != staging and p["base"]["ref"] not in heads:
         print("  (?) #%s basee sur %s, introuvable" % (p["number"], p["base"]["ref"]))
 '
 }

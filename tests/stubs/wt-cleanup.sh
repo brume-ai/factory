@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-exit 0
+printf 'wt-cleanup\n' >> "${LOOP_TEST_DIR:?}/menage.log"

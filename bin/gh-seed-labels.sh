@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
 # gh-seed-labels.sh : cree les labels factory:* sur le depot. Idempotent.
 #
-# La file est opt-out : les labels ne servent qu'a declarer l'EXCEPTION (pris,
-# livre, bloque, arbitrage humain, epopee, priorite). Les couleurs distinguent
-# d'un coup d'oeil ce qui travaille (bleu), ce qui attend un humain (orange),
-# ce qui est parque (gris).
+# LA FILE EST OPT-OUT, PAS OPT-IN : les labels ne servent qu'à déclarer
+# l'EXCEPTION — pris, bloqué, arbitrage humain, épopée, priorité, livré,
+# intégré. Une carte sans label est du travail à faire, et c'est le cas normal.
+# Les couleurs distinguent d'un coup d'œil ce qui travaille (bleu), ce qui
+# attend un humain (orange), ce qui est parqué (gris).
 #
-# LE JEU SEME DEPEND DU MODE DE LIVRAISON (docs/livraison.md) : `livre` est un
-# etat propre a `pull-request`, et c'est le seul ecart entre les deux jeux.
+# UN SEUL JEU, AUCUNE CONDITION. Il n'y a qu'un modèle : la carte part en PR, la
+# PR est intégrée à la branche de travail, la release la sort. Les sept labels
+# décrivent les sept états d'une carte dans CE modèle. Un jeu qui dépendait
+# d'une clé de configuration laissait un dépôt mal réglé avec un demi-jeu semé,
+# donc une file qui mentait sur un état qu'aucun script ne savait plus poser.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 . "$HERE/lib.sh"
 conf_require GH_REPO
-# Le mode est valide AVANT le premier POST : une configuration cassee ne doit pas
-# laisser un DEMI-JEU seme sur le depot, moitie d'un mode et moitie de rien. Et
-# l'appel est NU, jamais dans un $( ) : la substitution avalerait le code 3 et on
-# semerait le jeu pull-request sur une usine qui disait vouloir trunk.
-delivery_require
 GH_REPO="$(conf_get GH_REPO)"
 if [ -n "${FACTORY_TOKEN:-}" ]; then TOKEN="$FACTORY_TOKEN"
 else TOKEN="$(bash "$HERE/gh-app-token.sh")" || exit $?
@@ -36,25 +35,38 @@ seed() {  # <nom> <couleur> <description>
   esac
 }
 
-# LES NOMS SONT LUS, PAS CODES EN DUR : un depot qui a renomme un label
-# (FACTORY_*_LABEL) doit le voir seme sous SON nom, pas sous le defaut Brume.
-# Ces cinq-la decrivent l'etat d'une carte AVANT toute livraison, donc un etat
-# qui ne depend pas du transport : ils valent dans les deux modes. Ce sont
-# exactement les cinq que la copie PSR pose a la main aujourd'hui.
-seed "$(conf_get FACTORY_BUSY_LABEL     factory:in-progress)" "1d76db" "Un agent tient cette carte en ce moment"
-seed "$(conf_get FACTORY_BLOCKED_LABEL  factory:blocked)"     "d4c5f9" "Bloquee par une autre carte (voir le corps)"
-seed "$(conf_get FACTORY_HUMAN_LABEL    factory:needs-human)" "d93f0b" "Attend un arbitrage humain, hors file"
-seed "$(conf_get FACTORY_EPIC_LABEL     factory:epic)"        "5319e7" "Chapeau d'epopee : un fil, pas du travail"
-seed "$(conf_get FACTORY_PRIORITY_LABEL factory:priority)"    "b60205" "Passe devant la file"
+# LES NOMS SONT LUS, PAS CODÉS EN DUR : un dépôt qui a renommé un label doit le
+# voir semé sous SON nom, pas sous le défaut Brume. `label_get` est le seul
+# endroit où ces noms sont écrits (bin/lib.sh) — les redemander par
+# `conf_get FACTORY_*_LABEL <defaut>` redonnerait au défaut un second domicile,
+# et deux copies d'un nom de label finissent par diverger : le script qui pose
+# et celui qui retire ne parlent alors plus du même mot, et la carte sort de la
+# file pour toujours.
+#
+# RÉSOLUS TOUS LES SEPT AVANT LE PREMIER POST, en affectation NUE. `label_get`
+# rend 3 sur un rôle inconnu, mais `seed "$(label_get bsy)"` AVALE ce 3 — le
+# statut de la commande est celui de `seed` — et sèmerait un label au nom VIDE.
+# L'affectation nue, elle, propage le 3 sous `set -e` : une erreur ne laisse
+# pas un demi-jeu semé sur le dépôt.
+BUSY="$(label_get busy)"
+BLOCKED="$(label_get blocked)"
+HUMAN="$(label_get human)"
+EPIC="$(label_get epic)"
+PRIORITY="$(label_get priority)"
+DONE="$(label_get done)"
+STAGED="$(label_get staged)"
 
-# `factory:delivered` NOMME UN ETAT INTERMEDIAIRE (livree, pas encore mergee)
-# qui n'existe que parce qu'un humain doit encore merger. En `trunk` livrer et
-# fermer sont le meme evenement : la carte est fermee, un etat de plus ne dirait
-# rien de vrai. Un label seme pour rien n'est pas neutre : il apparait dans
-# l'interface, quelqu'un finit par le poser a la main, et la file se met a
-# mentir. C'est le ROLE qui disparait, pas le defaut Brume : la clef est lue ici
-# comme les cinq autres, pour qu'un depot qui l'a renommee ne voie pas SON nom
-# ressurgir en trunk.
-if [ "$FACTORY_DELIVERY" = pull-request ]; then
-  seed "$(conf_get FACTORY_DONE_LABEL   factory:delivered)"   "0e8a16" "PR livree, en attente d'une review humaine"
-fi
+seed "$BUSY"     "1d76db" "Un agent tient cette carte en ce moment"
+seed "$BLOCKED"  "d4c5f9" "Bloquee par une autre carte (voir le corps)"
+seed "$HUMAN"    "d93f0b" "Attend un arbitrage humain, hors file"
+seed "$EPIC"     "5319e7" "Chapeau d'epopee : un fil, pas du travail"
+seed "$PRIORITY" "b60205" "Passe devant la file"
+seed "$DONE"     "0e8a16" "PR livree, en attente d'integration"
+
+# LES DEUX ÉTATS D'ATTENTE NE SE CONFONDENT PAS, ET LA COULEUR LE DIT. `livré`
+# veut dire « la PR est posée, elle attend l'intégration » ; `intégré` veut dire
+# « le travail EST dans la branche de travail, il attend la release ». Ce sont
+# les deux que l'humain sépare quand il relit la file de relecture — la liste
+# des cartes intégrées du jalon en cours — donc deux verts voisins seraient
+# précisément la confusion à ne pas fabriquer : sarcelle, pas un second vert.
+seed "$STAGED"   "006b75" "Integree a la branche de travail, attend la release"

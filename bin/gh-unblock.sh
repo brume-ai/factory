@@ -21,48 +21,48 @@
 # retire le label QU'AU MOMENT où la ligne est devenue satisfaite, donc les deux
 # ne se contredisent jamais. Ne « corrigez » pas ce silence.
 #
-# CE QUE « LE BLOQUEUR A LIVRÉ » VEUT DIRE DÉPEND DU TRANSPORT, et les deux
-# réponses sont justes chacune chez elle. C'est `FACTORY_DELIVERY` qui tranche.
+# CE QUE « LE BLOQUEUR A LIVRÉ » VEUT DIRE, ET IL N'Y A PLUS QU'UNE RÉPONSE :
+# SON TRAVAIL EST DANS LA BRANCHE DE TRAVAIL. Il n'y a qu'un chemin — carte, pull
+# request, merge automatique dans la branche de travail, puis release — donc un
+# seul critère. Deux états le prouvent, et rien d'autre :
 #
-# En `pull-request`, UNE PR OUVERTE SUFFIT À DÉBLOQUER, autant qu'une issue
-# fermée. Ne libérer que sur fermeture paraissait prudent — c'était un
-# interblocage : une issue ne s'y ferme qu'au MERGE HUMAIN, donc toute épopée en
+#   la carte porte `factory:staged`  gh-stage-pr.sh l'y a posé AU MERGE : le
+#                                    travail est dans la branche de travail et
+#                                    attend la release.
+#   la carte est FERMÉE              c'est gh-release.sh qui ferme, à la sortie
+#                                    de version : le travail est donc passé par
+#                                    la branche de travail avant de sortir.
+#
+# UNE PULL REQUEST OUVERTE NE DÉBLOQUE PLUS, et c'est la simplification que le
+# modèle unique permet. L'ancien critère « une PR ouverte suffit » existait contre
+# un interblocage : la carte ne se fermait qu'au MERGE HUMAIN, donc une épopée en
 # lots s'arrêtait après son lot 1 et l'usine tombait à la file vide en attendant
-# quelqu'un. Observé le 3 août : les six lots du filtre souverain figés derrière
-# #37, dont la PR était livrée. Ce que la carte suivante attend, c'est le TRAVAIL
-# du bloqueur — pas sa cérémonie de merge. Une PR ouverte le porte sur `card/N`,
-# et `gh-stack.sh base` y pose la couche suivante : l'humain merge quand il veut,
-# sans que personne l'attende.
+# quelqu'un (observé le 3 août : les six lots du filtre souverain figés derrière
+# #37, dont la PR était livrée). Le merge n'attend plus personne, il est fait par
+# gh-stage-pr.sh dès que la CI est verte — donc une PR encore ouverte est une PR
+# qui n'a PAS prouvé son travail : suite rouge, conflit, ou arbitrage humain.
+# Relâcher la carte suivante dessus l'enverrait s'empiler sur du travail qui peut
+# encore disparaître. Ce qu'on y gagne en plus : un appel de moins par bloqueur,
+# l'état ET le label venant de la même réponse.
 #
-# En `trunk`, LA FERMETURE EST LE SEUL CRITÈRE, et c'est une simplification que
-# le transport permet, pas un raccourci. La carte n'y est pas fermée par un
-# humain qui merge : c'est le pipeline du dépôt qui la ferme, sur suite verte
-# puis déploiement — précisément l'événement que la carte suivante attend. La
-# fermeture a cessé d'être une cérémonie pour devenir la livraison elle-même. Y
-# débloquer sur une PR ouverte relâcherait la carte suivante sur du travail qui
-# n'a rien prouvé, et l'enverrait s'empiler sur une branche `card/N` que ce mode
-# ne crée jamais — la boucle y pousse sur le tronc de recette.
-#
-# ET L'USINE NE NOMME PAS L'INFRA DU CONSOMMATEUR. Le motif ci-dessous est écrit
-# dans le commentaire de déblocage, donc lu par l'agent qui reprendra la carte :
-# écrire « la preprod » y serait le vocabulaire d'un seul consommateur — chez PSR
-# c'est Laravel Cloud, ailleurs autre chose — et mentirait chez les autres.
-# L'usine sait seulement qu'en mode `trunk` une carte fermée est une carte que le
-# pipeline du dépôt a livrée (docs/livraison.md, « ce que la clé ne gouverne
-# pas »).
+# LE MOTIF EST LU PAR L'AGENT QUI REPRENDRA LA CARTE : il nomme des états de
+# l'usine — intégrée, sortie —, jamais l'infra du consommateur. Écrire « la
+# preprod » y serait le vocabulaire d'un seul consommateur et mentirait chez tous
+# les autres.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 . "$HERE/lib.sh"
 conf_require GH_REPO
 GH_REPO="$(conf_get GH_REPO)"
-# Lu AVANT le jeton et avant le premier appel : un mode mal orthographié doit
-# arrêter le script sans avoir touché au dépôt ni dépensé un aller-retour. Appel
-# NU, jamais `m="$(delivery_mode)"` : la substitution avalerait le code 3 et le
-# script continuerait en se croyant en `pull-request` (le piège est écrit dans
-# lib.sh). Ensuite on ne lit plus que $FACTORY_DELIVERY.
-delivery_require
-BLOCKED="${FACTORY_BLOCKED_LABEL:-factory:blocked}"
+# AFFECTATIONS NUES, jamais `local` ni `${FACTORY_*_LABEL:-…}` : le défaut de
+# chaque label n'a qu'un domicile, lib.sh. Lues AVANT le jeton et avant le premier
+# appel, parce qu'un rôle inconnu doit arrêter le script sans avoir touché au
+# dépôt. Un nom de label VIDE serait pire qu'un nom faux : `labels=` est ignoré
+# par GitHub, donc le script parcourrait TOUTES les cartes ouvertes au lieu des
+# bloquées, et frapperait un DELETE par carte sur un label sans nom.
+BLOCKED="$(label_get blocked)"
+STAGED="$(label_get staged)"
 # Aucun label « prêt » à reposer : la file du sondage est OPT-OUT, donc RETIRER
 # `factory:blocked` suffit à rendre la carte à la file. Reposer un laissez-passer
 # devenu inerte aurait laissé croire qu'il porte encore quelque chose.
@@ -83,30 +83,28 @@ api() {
 n=0
 while read -r issue blocker; do
   [[ -n "${issue:-}" && -n "${blocker:-}" ]] || continue
-  state="$(api "repos/$GH_REPO/issues/$blocker" | python3 -c 'import json,sys; print(json.load(sys.stdin)["state"])')" || continue
-  # La condition est prise par « PAS fermée » et non par « fermée » : c'est le
-  # seul agencement où le garde-fou `trunk` tient en UNE ligne AVANT l'appel aux
-  # PR. L'ordre inverse le rendrait inatteignable pour le cas ouvert, et un test
-  # qui passe pour cette raison-là ne prouve rien.
-  if [[ "$state" != "closed" ]]; then
-    # En `trunk`, rien d'autre que la fermeture ne prouve que le travail est
-    # livré : la carte reste bloquée, et on n'interroge même pas les PR —
-    # les consulter redonnerait le critère que ce mode a justement écarté.
-    [[ "$FACTORY_DELIVERY" == "pull-request" ]] || continue
-    # Pas fermée : son travail est-il livré sur une branche ? Une PR ouverte sur
-    # `card/N` suffit — la carte suivante s'y empile au lieu d'attendre le merge.
-    pr="$(api "repos/$GH_REPO/pulls?state=open&head=${GH_REPO%%/*}:card/$blocker&per_page=1" \
-          | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["number"] if d else "")')" || continue
-    [[ -n "$pr" ]] || continue
-    why="le travail de #$blocker est livré dans la PR #$pr — empilez-vous dessus (base \`card/$blocker\`) au lieu d'attendre le merge"
-  elif [[ "$FACTORY_DELIVERY" == "trunk" ]]; then
-    # « Fermée » ne prouve pas la même chose des deux côtés, et l'agent qui
-    # reprendra la carte lit ce motif : ici personne n'a mergé, c'est le pipeline
-    # du dépôt qui a fermé. L'envoyer chercher le travail dans une branche
-    # principale qui n'a rien reçu le ferait repartir de zéro.
-    why="#$blocker est fermée, et en mode \`trunk\` c'est le pipeline du dépôt qui ferme une carte — son travail est déployé"
+  # L'ÉTAT ET LE LABEL VIENNENT DE LA MÊME RÉPONSE : /issues/<n> porte `state` ET
+  # `labels`, donc le critère unique coûte UN appel par bloqueur, pas deux.
+  # `os.environ["STAGED"]` sans défaut : un défaut python serait un second nom du
+  # label, invisible depuis factory.conf — exactement la divergence que
+  # `label_get` existe pour tuer. Le bloqueur introuvable ou illisible fait sortir
+  # `api` en 3 : `|| continue` passe à la carte suivante au lieu de tuer le tour.
+  info="$(api "repos/$GH_REPO/issues/$blocker" | STAGED="$STAGED" python3 -c '
+import json, os, sys
+d = json.load(sys.stdin)
+staged = any((l or {}).get("name") == os.environ["STAGED"] for l in d.get("labels") or [])
+print(d["state"], "oui" if staged else "non")
+')" || continue
+  read -r state is_staged <<< "$info"
+  # Les deux branches rendent le même verdict — le travail est dans la branche de
+  # travail — mais pas au même agent : l'une l'envoie chercher du code déjà sorti,
+  # l'autre du code intégré qui attend la release. Seul le motif change.
+  if [[ "$state" == "closed" ]]; then
+    why="#$blocker est fermée : c'est la release qui ferme les cartes, son travail est donc passé par la branche de travail avant de sortir"
+  elif [[ "$is_staged" == "oui" ]]; then
+    why="#$blocker est intégrée à la branche de travail (\`$STAGED\`) et attend la release — partez de la branche de travail à jour, son travail y est"
   else
-    why="#$blocker est fermée, donc son travail est dans la branche principale"
+    continue
   fi
   # `%3A` : le deux-points d'un nom de label doit être encodé, sinon GitHub rend
   # 404 sur un label qui existe — et le déblocage échoue en silence.

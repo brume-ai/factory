@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # Extrait de Brume (tools/factory/deploy.sh) au SHA 12ac9e92 ; generalise ici.
-# deploy.sh — met le dépôt de l'usine au niveau de `origin/main`.
+# deploy.sh — met le dépôt de l'usine au niveau de la branche de TRAVAIL.
 #
 # POURQUOI CE N'EST PAS UN `git pull` LANCÉ À LA MAIN. Le dépôt est privé et le
 # distant ne porte aucun identifiant : sans jeton frappé au vol, un `pull` sur
 # l'usine répond 403. Et l'outillage de la boucle est versionné AVEC le produit
-# — `make loop` refuse d'ailleurs de tourner hors du tronc pour cette raison —
+# — `make loop` refuse d'ailleurs de tourner hors de la branche de travail —
 # donc une usine en retard exécute la version d'avant le dernier correctif, sans
 # que rien ne le signale : elle a l'air de marcher.
+#
+# LA BRANCHE DE TRAVAIL, JAMAIS LA PRODUCTION. Visé sur la production, ce
+# `reset --hard` poserait l'usine sur un outillage qui ignore tout ce qui est en
+# recette, et la garde citée ci-dessus l'arrêterait au tour suivant : elle
+# redémarrerait dans le vide en ayant l'air déployée.
 #
 # `reset --hard` et pas `pull`, comme install.sh : l'usine n'a pas de travail
 # local à préserver dans son arbre principal — les cartes vivent dans des
@@ -15,20 +20,26 @@
 # viendrait résoudre.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+# NUE, et avant tout le reste : elle pose $FACTORY_STAGING validée, et un
+# `reset --hard` sur la mauvaise branche n'est pas une erreur qu'on rattrape.
+branches_require
 FACTORY_NAME="$(conf_get FACTORY_NAME usine)"
 FACTORY_HOST="$(conf_get FACTORY_HOST)"; conf_require FACTORY_HOST FACTORY_KEY
 STATE="$(conf_get FACTORY_STATE /srv/factory)"
 conf_require GH_REPO
 REPO_DIR="$(conf_get FACTORY_REPO_DIR "$(conf_get FACTORY_STATE /srv/factory)/workspace/$(basename "$(conf_get GH_REPO)")")"
-TRUNK="$(conf_get FACTORY_TRUNK main)"
 
 B="$(tput bold 2>/dev/null || true)"; C="$(tput setaf 6 2>/dev/null || true)"
 D="$(tput dim 2>/dev/null || true)"; R="$(tput sgr0 2>/dev/null || true)"
 
 echo
-printf '%susine %s%s — déploiement de origin/main\n\n' "$B" "$FACTORY_NAME" "$R"
+# LA BANNIÈRE DIT LA VALEUR RÉSOLUE, PAS UN NOM ÉCRIT EN DUR. Elle affichait
+# « origin/main » pendant que le script réinitialisait sur la valeur lue : un
+# mensonge sans conséquence tant que les deux coïncidaient, et la désignation de
+# la PRODUCTION le jour où elles cessent de coïncider — c'est-à-dire maintenant.
+printf '%susine %s%s — déploiement de origin/%s\n\n' "$B" "$FACTORY_NAME" "$R" "$FACTORY_STAGING"
 
-factory_ssh "REPO_DIR='$REPO_DIR' TRUNK='$TRUNK' bash -s" <<'REMOTE'
+factory_ssh "REPO_DIR='$REPO_DIR' STAGING='$FACTORY_STAGING' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REPO_DIR"
 
@@ -46,17 +57,17 @@ GH_TOKEN="$(bash tools/factory/bin/gh-app-token.sh)"
 # 401 qu'il n'explique pas. `git -c` ne vaut que pour cette commande.
 git -c "http.https://github.com/.extraheader=Authorization: Basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
     fetch --quiet origin
-git reset --hard --quiet "origin/$TRUNK"
+git reset --hard --quiet "origin/$STAGING"
 
-# LE POINTEUR DU SUBMODULE A BOUGÉ AVEC LE TRONC, PAS SON CONTENU. `reset --hard`
-# écrit le gitlink ; l'arbre de travail du submodule, lui, reste au commit d'avant
-# — ou vide, si le dépôt vient tout juste d'acquérir ce submodule. La boucle
-# exécuterait alors l'outillage d'avant le dernier correctif, ou pas d'outillage
-# du tout : `make loop` s'arrête sur « l'usine partagée n'est pas déployée », et
-# c'est le DÉPLOIEMENT qui aurait dû le dire.
+# LE POINTEUR DU SUBMODULE A BOUGÉ AVEC LA BRANCHE, PAS SON CONTENU.
+# `reset --hard` écrit le gitlink ; l'arbre de travail du submodule, lui, reste
+# au commit d'avant — ou vide, si le dépôt vient tout juste d'acquérir ce
+# submodule. La boucle exécuterait alors l'outillage d'avant le dernier
+# correctif, ou pas d'outillage du tout : `make loop` s'arrête sur « l'usine
+# partagée n'est pas déployée », et c'est le DÉPLOIEMENT qui aurait dû le dire.
 #
 # AVANT la comparaison before/after, délibérément : un déploiement qui ne change
-# pas le tronc doit quand même réparer un submodule laissé à moitié par un run
+# pas la branche doit quand même réparer un submodule laissé à moitié par un run
 # interrompu. Sinon « déjà à jour » devient le message d'une machine cassée.
 #
 # PAS DE `|| true`, contrairement au tour de boucle (`factory.mk`) : la boucle

@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-exit 0
+printf 'gh-unblock\n' >> "${LOOP_TEST_DIR:?}/menage.log"

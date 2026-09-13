@@ -22,7 +22,31 @@ in
       description = "URL https du depot consommateur (clone par jeton d'App).";
       example = "https://github.com/mon-org/mon-depot.git";
     };
-    trunk = lib.mkOption { type = lib.types.str; default = "main"; };
+    # UNE SEULE BRANCHE EST UNE OPTION DU MODULE : CELLE QU'IL CLONE.
+    # Il a besoin du nom de la branche de TRAVAIL pour le `clone --branch` et le
+    # `checkout -B` plus bas. Il n'a AUCUN usage de la production : il ne la
+    # clone pas, ne la fetch pas, n'y ecrit pas. Une option `trunk` a donc vecu
+    # ici avec trois paragraphes de description et zero lecteur — `grep
+    # 'cfg\.trunk'` ne rendait rien — c'est-a-dire une cle qu'on pose et que
+    # personne ne lit : une configuration qui a l'air de marcher.
+    # La cabler n'aurait rien reveille : la boucle tourne dans un conteneur qui
+    # ne recoit que `--env-file` (bin/run-loop.sh), jamais l'environnement de
+    # l'unite. FACTORY_TRUNK se pose dans le factory.conf du depot, ou
+    # `branches_require` (bin/lib.sh) la lit et refuse de demarrer en 3 si elle
+    # vaut la branche de travail — verifier ca ICI ferait une deuxieme copie de
+    # la regle, et c'est toujours la copie qui diverge qui laisse passer.
+    staging = lib.mkOption {
+      type = lib.types.str;
+      default = "staging";
+      description = ''
+        Branche de TRAVAIL de l'usine, et la SEULE ou elle a le droit d'ecrire :
+        les cartes en partent, les PR y retournent, l'unite y place son arbre.
+
+        DOIT EXISTER SUR LE DEPOT AVANT LE PREMIER DEMARRAGE, et differer de la
+        branche de PRODUCTION (`FACTORY_TRUNK`, dans le factory.conf du depot) :
+        la garde de bin/lib.sh refuse de demarrer si les deux se confondent.
+      '';
+    };
     stateDir = lib.mkOption { type = lib.types.str; default = "/srv/factory"; };
     stateDevice = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -179,11 +203,23 @@ in
         [ -n "$token" ] || { echo "jeton d'installation impossible a frapper" >&2; exit 3; }
         auth="Authorization: Basic $(printf 'x-access-token:%s' "$token" | base64 -w0)"
         mkdir -p "$(dirname ${cfg.repoDir})"
+        # L'ARBRE DE L'USINE VIT SUR LA BRANCHE DE TRAVAIL, PAR LES DEUX CHEMINS.
+        # Un `clone` sans `--branch` atterrit sur la branche par defaut du depot,
+        # c'est-a-dire la PRODUCTION : une premiere installation aurait donc pose
+        # l'usine sur main, rien ne l'aurait deplacee — le reset ne vit que dans
+        # l'autre branche du `if` — et la garde de `make loop` aurait refuse de
+        # demarrer. L'unite tournerait dans le vide en ayant l'air installee.
+        #
+        # `checkout --force -B` et pas `reset --hard` : il jette les modifications
+        # locales COMME le reset, mais il place AUSSI HEAD sur la branche de
+        # travail. Un depot clone par une version anterieure du module est sur la
+        # production ; un `reset --hard origin/staging` y aurait recrit la branche
+        # de production locale sans jamais deplacer HEAD.
         if [ -d ${cfg.repoDir}/.git ]; then
           git -c "http.https://github.com/.extraheader=$auth" -C ${cfg.repoDir} fetch --quiet origin
-          git -C ${cfg.repoDir} reset --hard --quiet origin/${cfg.trunk}
+          git -C ${cfg.repoDir} checkout --quiet --force -B ${cfg.staging} origin/${cfg.staging}
         else
-          git -c "http.https://github.com/.extraheader=$auth" clone --quiet ${cfg.repoUrl} ${cfg.repoDir}
+          git -c "http.https://github.com/.extraheader=$auth" clone --quiet --branch ${cfg.staging} ${cfg.repoUrl} ${cfg.repoDir}
         fi
         git -c "http.https://github.com/.extraheader=$auth" -C ${cfg.repoDir} \
           submodule update --init --quiet
@@ -238,7 +274,7 @@ in
         FACTORY_REPO_DIR = cfg.repoDir;
         FACTORY_STATE = cfg.stateDir;
         FACTORY_IMAGE_TAG = cfg.imageTag;
-        FACTORY_TRUNK = cfg.trunk;
+        FACTORY_STAGING = cfg.staging;
       };
       # MEME RAISON QUE POUR factory-image, ET C'EST LA MEME PANNE : un `path`
       # systemd EST le PATH de l'unite. `ExecStart` nomme bash par son chemin

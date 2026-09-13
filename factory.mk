@@ -18,7 +18,6 @@ FACTORY_BIN ?= $(FACTORY_DIR)/bin
 
 -include $(CURDIR)/factory.conf
 
-FACTORY_TRUNK  ?= main
 # Attente entre deux SONDAGES quand la file est vide. Le sondage coûte une requête
 # HTTP, pas un agent : on peut donc attendre peu sans rien gaspiller. Une usine
 # n'a pas à s'arrêter quand la file se vide — elle attend du travail.
@@ -45,40 +44,26 @@ FACTORY_BOLD := $(shell tput bold 2>/dev/null)
 FACTORY_CYAN := $(shell tput setaf 6 2>/dev/null)
 FACTORY_RST  := $(shell tput sgr0 2>/dev/null)
 
-# `@ISSUE@` est substitué au lancement. Les prompts restent COURTS À DESSEIN :
-# toute la procédure vit dans le skill `github-loop` — un fait, un endroit. La
-# redire ici donnerait à l'agent deux copies concurrentes des mêmes ordres, ce
-# qui est précisément ce qui le fait argumenter et s'arrêter trop tôt.
+# `@ISSUE@` est substitué au lancement. UN SEUL JEU DE PROMPTS, parce qu'il n'y a
+# plus qu'un seul modèle : la carte devient une pull request, l'intégration la
+# merge dans la branche de travail, et c'est la RELEASE qui ferme la carte. Ils
+# restent COURTS À DESSEIN : toute la procédure vit dans le skill `github-loop` —
+# un fait, un endroit. La redire ici donnerait à l'agent deux copies concurrentes
+# des mêmes ordres, ce qui est précisément ce qui le fait argumenter et s'arrêter
+# trop tôt.
 LOOP_PROMPT_RESUME ?= github-loop : suis le skill. Un ENVIRONNEMENT existe déjà pour la carte \#@ISSUE@ dans .worktrees/card-@ISSUE@, avec du travail inachevé (@WHY@). Tu le REPRENDS — tu ne repars pas de zéro et tu ne recrées rien : lis ce qui y est fait, réconcilie, et mène la carte au bout. Tu ne rends JAMAIS la main en attendant un résultat. Puis stop.
 LOOP_PROMPT_PR ?= github-loop : suis le skill, section <Tend_A_Pull_Request>. La pull request \#@PR@ du dépôt $(GH_REPO) a un grief PRÉCIS : @WHY@. C'est CELUI-LÀ que tu traites, pas un autre. Remets-la en état, ou ferme-la en justifiant. Tu ne rends JAMAIS la main en attendant un résultat : tu bloques au premier plan jusqu'au verdict. Puis stop.
-LOOP_PROMPT   ?= github-loop : suis le skill. Travaille l'issue \#@ISSUE@ du dépôt $(GH_REPO). Une seule carte, menée jusqu'à une pull request prête à relire — ou son prérequis carvé, ou marquée bloquée, ou fermée si tu prouves qu'elle n'a plus d'objet. Tu ne rends JAMAIS la main en attendant un résultat : tu bloques au premier plan jusqu'au verdict. Tu ne fermes PAS une carte que tu as travaillee — c'est le merge qui la ferme. Tu fermes en revanche une carte dont tu PROUVES qu'il n'y a rien a faire. Puis stop.
-LOOP_PROMPT_CODEX ?= github-loop : suis le skill. Travaille l'issue \#@ISSUE@ du dépôt $(GH_REPO). Tu es l'agent principal et tu fais la carte de bout en bout toi-même. Une seule carte, menée jusqu'à une pull request prête à relire. Tu ne fermes PAS une carte que tu as travaillee — c'est le merge qui la ferme. Tu fermes en revanche une carte dont tu PROUVES qu'il n'y a rien a faire. Puis stop.
-
-# LES MÊMES, EN LIVRAISON `trunk`. Les trois prompts ci-dessus disent « menée
-# jusqu'à une pull request » et « c'est le merge qui la ferme » : les deux sont
-# FAUX en `trunk`, où la boucle pousse sur le tronc de recette et où c'est le
-# déploiement qui ferme la carte. Un agent à qui l'on donne le mauvais prompt
-# ouvre une PR que personne ne mergera, ou ferme lui-même une carte que le
-# pipeline devait fermer — et dans les deux cas la garantie du mode tombe.
-# Le mode est choisi DANS LA RECETTE, pas par un `ifeq` : il vient de
-# `bin/lib.sh` à l'exécution (voir la garde plus bas), pas d'une variable Make.
-# La reprise ne nomme AUCUN worktree : en `trunk` le travail inachevé est dans
-# l'arbre courant, et `wt-resume.sh` peut rendre « ? » quand le numéro de carte
-# ne se lit dans aucun commit — d'où la consigne de la retrouver par son label.
-LOOP_PROMPT_TRUNK ?= github-loop : suis le skill. Travaille l'issue \#@ISSUE@ du dépôt $(GH_REPO). Une seule carte, menée jusqu'à un commit poussé sur $(FACTORY_TRUNK) dont la CI est verte et le déploiement réussi — ou son prérequis carvé, ou marquée bloquée, ou fermée si tu prouves qu'elle n'a plus d'objet. Tu ne rends JAMAIS la main en attendant un résultat : tu bloques au premier plan jusqu'au verdict du pipeline. Tu ne fermes PAS une carte que tu as travaillee — c'est le déploiement qui la ferme. Tu fermes en revanche une carte dont tu PROUVES qu'il n'y a rien a faire. Puis stop.
-LOOP_PROMPT_CODEX_TRUNK ?= github-loop : suis le skill. Travaille l'issue \#@ISSUE@ du dépôt $(GH_REPO). Tu es l'agent principal et tu fais la carte de bout en bout toi-même. Une seule carte, menée jusqu'à un commit poussé sur $(FACTORY_TRUNK) dont la CI est verte et le déploiement réussi. Tu ne fermes PAS une carte que tu as travaillee — c'est le déploiement qui la ferme. Tu fermes en revanche une carte dont tu PROUVES qu'il n'y a rien a faire. Puis stop.
-LOOP_PROMPT_RESUME_TRUNK ?= github-loop : suis le skill. L'arbre porte du travail INACHEVÉ pour la carte \#@ISSUE@ (@WHY@). Tu le REPRENDS — tu ne repars pas de zéro et tu ne recrées rien : lis ce qui est fait, réconcilie, et mène la carte au bout. Si le numéro de carte est « ? », retrouve-la : c'est celle qui porte factory:in-progress. Tu ne rends JAMAIS la main en attendant un résultat. Puis stop.
+LOOP_PROMPT   ?= github-loop : suis le skill. Travaille l'issue \#@ISSUE@ du dépôt $(GH_REPO). Une seule carte, menée jusqu'à une pull request vérifiée — ou son prérequis carvé, ou marquée bloquée, ou fermée si tu prouves qu'elle n'a plus d'objet. Tu ne rends JAMAIS la main en attendant un résultat : tu bloques au premier plan jusqu'au verdict. Tu ne fermes PAS une carte que tu as travaillée — l'intégration la merge, et c'est la release qui la ferme. Tu fermes en revanche une carte dont tu PROUVES qu'il n'y a rien à faire. Puis stop.
+LOOP_PROMPT_CODEX ?= github-loop : suis le skill. Travaille l'issue \#@ISSUE@ du dépôt $(GH_REPO). Tu es l'agent principal et tu fais la carte de bout en bout toi-même. Une seule carte, menée jusqu'à une pull request vérifiée. Tu ne fermes PAS une carte que tu as travaillée — l'intégration la merge, et c'est la release qui la ferme. Tu fermes en revanche une carte dont tu PROUVES qu'il n'y a rien a faire. Puis stop.
 
 ifeq ($(MAIN),codex)
 LOOP_MAIN_BIN    := codex
 LOOP_PROMPT_TPL   = $(LOOP_PROMPT_CODEX)
-LOOP_PROMPT_TRUNK_TPL = $(LOOP_PROMPT_CODEX_TRUNK)
 LOOP_RUN_VERBOSE  = $(CODEX_LAUNCH) --json "$$prompt"
 LOOP_RUN_QUIET    = $(CODEX_LAUNCH) "$$prompt"
 else
 LOOP_MAIN_BIN    := claude
 LOOP_PROMPT_TPL   = $(LOOP_PROMPT)
-LOOP_PROMPT_TRUNK_TPL = $(LOOP_PROMPT_TRUNK)
 LOOP_RUN_VERBOSE  = $(CLAUDE_LAUNCH) --output-format stream-json --verbose -p "$$prompt" | "$(FACTORY_BIN)/claude-stream.sh"
 LOOP_RUN_QUIET    = $(CLAUDE_LAUNCH) -p "$$prompt"
 endif
@@ -88,17 +73,6 @@ endif
 loop:
 	@command -v $(LOOP_MAIN_BIN) >/dev/null 2>&1 || { echo "$(LOOP_MAIN_BIN) CLI introuvable dans le PATH"; exit 1; }
 	@[ -n "$(GH_REPO)" ] || { echo "factory.mk: GH_REPO absent (factory.conf a la racine du depot)"; exit 3; }
-	@# LE MODE DE LIVRAISON, LU PAR bin/lib.sh ET PAR PERSONNE D'AUTRE.
-	@# Make POURRAIT le lire seul — le `-include factory.conf` ci-dessus lui donne
-	@# la variable, comme FACTORY_TRUNK. Il ne le fait pas, parce que ce serait un
-	@# SECOND lecteur, et un lecteur strictement plus faible : `conf_get` lit
-	@# factory.conf PUIS .env, tolere `export`, les guillemets et un commentaire
-	@# de fin de ligne ; Make ne lit que factory.conf et rien de tout cela. Une
-	@# cle posee dans le .env — l'emplacement que la doc recommande — donnerait
-	@# alors `trunk` a tous les scripts et `pull-request` a la boucle, sans un mot.
-	@# Un basculement de mode SILENCIEUX, produit par le lecteur du mode.
-	@# Donc : une seule liste de valeurs, un seul message, un seul verdict.
-	@bash -c '. "$(FACTORY_DIR)/bin/lib.sh" ; FACTORY_ROOT="$(CURDIR)" delivery_mode >/dev/null'
 	@# IDENTITÉ DE COMMIT DE L'USINE. Une CI de dépôt consommateur qui vérifie
 	@# l'auteur des commits (allowlist bot, check CLA...) refuse tout auteur
 	@# qu'elle ne reconnaît pas. Sans identité explicite, l'agent signe avec
@@ -110,18 +84,35 @@ loop:
 	@# donc l'identité est bonne dès le premier commit, sans que l'agent ait
 	@# à y penser.
 	@[ -n "$(FACTORY_GIT_NAME)" ] && [ -n "$(FACTORY_GIT_EMAIL)" ] || { echo "factory.mk: FACTORY_GIT_NAME / FACTORY_GIT_EMAIL absents (factory.conf)"; exit 3; }
-	@# GARDE : la boucle ne tourne QUE depuis le tronc. Son outillage (Makefile,
-	@# skills, tools/factory) est versionné avec le produit : sur une branche de
-	@# carte, elle exécute la version d'AVANT le dernier correctif. Observé le
-	@# 2 août — un agent avait laissé l'arbre sur `card/7`, et la boucle a tourné
-	@# avec un Makefile qui ignorait `gh-unblock.sh`, donc sans résoudre aucune
-	@# dépendance. Rien ne le signalait : elle avait l'air de marcher.
-	@# La vraie correction est ailleurs (les agents travaillent en worktree, ils ne
-	@# déplacent jamais l'arbre principal) ; cette garde attrape le jour où l'un
-	@# d'eux l'oublie.
-	@b="$$(git -C "$(CURDIR)" branch --show-current)" ; \
-	if [ "$$b" != "$(FACTORY_TRUNK)" ]; then \
-		echo "$(FACTORY_CYAN)— l'arbre est sur « $$b », pas sur « $(FACTORY_TRUNK) » : la boucle tournerait avec un outillage périmé. Revenez au tronc. —$(FACTORY_RST)" ; \
+	@# LES DEUX BRANCHES SONT LUES PAR bin/lib.sh, ET PAR PERSONNE D'AUTRE.
+	@# Make POURRAIT les lire seul — le `-include factory.conf` ci-dessus lui
+	@# donnerait les variables — mais ce serait un SECOND lecteur, et un lecteur
+	@# strictement plus faible : `conf_get` lit factory.conf PUIS .env, tolere
+	@# `export`, les guillemets et un commentaire de fin de ligne ; Make ne lit
+	@# que factory.conf et rien de tout cela. Une cle posee dans le .env —
+	@# l'emplacement que la doc recommande — donnerait une branche aux scripts et
+	@# une AUTRE a la boucle, sans un mot. SUR UN NOM DE BRANCHE, CE DESACCORD
+	@# SILENCIEUX EST UN CHEMIN D'ECRITURE VERS LA PRODUCTION : ce fichier ne
+	@# definit donc plus aucune variable Make de branche, et n'en expanse aucune.
+	@# LES DEUX GARDES TIENNENT DANS LE MÊME SHELL, à dessein. `branches_require`
+	@# refuse en 3 quand la branche de PRODUCTION et la branche de TRAVAIL sont la
+	@# même — l'usine publierait en production à chaque carte — puis NORMALISE
+	@# (rognage, réapplication du défaut) et exporte ; son export meurt avec le
+	@# shell qui l'appelle. Valider ici et comparer ailleurs ferait qu'avec
+	@# FACTORY_STAGING = « staging » suivi d'une espace, la valeur qui gouverne ne
+	@# serait jamais celle qui a été contrôlée.
+	@# CE QUE LA SECONDE GARDE ATTRAPE : la boucle ne tourne QUE depuis la branche
+	@# de TRAVAIL, parce que son outillage est versionné avec le produit. Observé
+	@# le 2 août — un agent avait laissé l'arbre sur `card/7`, et la boucle a
+	@# tourné avec un Makefile qui ignorait `gh-unblock.sh`, donc sans résoudre
+	@# aucune dépendance. Rien ne le signalait : elle avait l'air de marcher. La
+	@# vraie correction est ailleurs (les agents travaillent en worktree) ; cette
+	@# garde attrape le jour où l'un d'eux l'oublie.
+	@. "$(FACTORY_DIR)/bin/lib.sh" || { echo "factory.mk: $(FACTORY_DIR)/bin/lib.sh illisible" >&2 ; exit 3 ; } ; \
+	FACTORY_ROOT="$(CURDIR)" branches_require ; \
+	b="$$(git -C "$(CURDIR)" branch --show-current)" ; \
+	if [ "$$b" != "$$FACTORY_STAGING" ]; then \
+		echo "$(FACTORY_CYAN)— l'arbre est sur « $$b », pas sur la branche de travail « $$FACTORY_STAGING » : la boucle tournerait avec un outillage périmé. Revenez à la branche de travail. —$(FACTORY_RST)" ; \
 		exit 5 ; \
 	fi
 	@echo "$(FACTORY_BOLD)github-loop$(FACTORY_RST) — $(GH_REPO) · agent : $(LOOP_MAIN_BIN) (MAIN=$(MAIN)).$(if $(VERBOSE), streaming ON.,) 'make loop-stop' pour finir la carte puis s'arrêter · Ctrl-C pour couper net."
@@ -132,10 +123,12 @@ loop:
 	@# demandé pendant les $(LOOP_SLEEP)s, un arrêt lu trop tôt ferait partir une carte
 	@# de plus, en silence. Ctrl-C ne peut pas rendre ce service — le SIGINT part au
 	@# groupe entier, donc l'agent meurt au milieu de sa carte ; un trap n'y change rien.
-	@# `|| rc=$$?` est OBLIGATOIRE : .SHELLFLAGS porte `-e`, donc une affectation
-	@# dont la substitution échoue fait sortir le shell AVANT le test du code
-	@# retour. Sans lui, « file vide » (code 1) tuait la boucle au lieu de la
-	@# faire dormir — exactement le contraire de ce qu'une usine doit faire.
+	@# `|| rc=$$?` est OBLIGATOIRE, et l'ancienne raison écrite ici — « .SHELLFLAGS
+	@# porte `-e` » — était fausse : ce fichier ne définit .SHELLFLAGS NULLE PART,
+	@# donc rien n'arrête ce shell sauf un `exit`. La vraie raison est plus bête et
+	@# plus dangereuse : `x="$$(cmd)" && rc=0` seul laisse `rc` à la valeur du tour
+	@# PRÉCÉDENT quand la substitution échoue, donc « file vide » serait lue comme
+	@# « carte servie » et un agent partirait sur un numéro vide.
 	@# ORDRE DES PRIORITÉS, et il compte : ménage, puis ENTRETIEN DES PR, puis
 	@# reprise d'un environnement inachevé, puis carte neuve.
 	@# Les PR passent devant la reprise parce qu'une PR bloquée bloque TOUTE la
@@ -143,37 +136,58 @@ loop:
 	@# une base en conflit produit du travail invérifiable. Le travail non commité
 	@# d'un worktree, lui, ne risque rien à attendre — wt-cleanup ne touche pas un
 	@# worktree sans PR, et l'agent d'entretien travaille dans le sien.
-	@# Avant tout sondage, deux ménages. Détruire les environnements dont le travail
-	@# a atterri : une pile abandonnée coûte 3 Go, une base, une route, et surtout
-	@# UNE VOIE — le hook worktree-up du projet refuse d'en fabriquer une de trop, donc un worktree oublié
-	@# empêche la carte suivante de démarrer. Le skill demande à l'agent de nettoyer
-	@# en partant, mais un agent tué en route ne nettoie pas : c'est justement le cas
-	@# qui laisse des restes.
-	@# UN RATÉ PASSAGER NE TUE PLUS L'USINE. Les sondages rendaient 3 — « mal
-	@# configuré », donc arrêt — pour un DNS qui bafouille, un HTTP/2 déchiré, une
-	@# réponse coupée en plein JSON. Cinq arrêts en sept jours, sous un message qui
-	@# envoyait vérifier des `GH_APP_*` parfaitement bons. Le code 4 dit « réessaie
-	@# plus tard » : la boucle dort comme sur une file vide, mais elle le DIT.
-	@# Le 3 garde son sens strict — un refus de l'API qu'un humain doit réparer.
-	@# LA SÉCURITÉ EST DU MÉNAGE, PAS UN SÉLECTEUR DE TRAVAIL. `gh-security-triage`
-	@# ne rend aucun numéro et ne lance aucun agent : il transpose les alertes des
-	@# onglets Security en ISSUES, puis se tait. C'est `gh-next-issue` qui les
-	@# prend ensuite, sans nouveau chemin ni nouveau prompt — elles portent
-	@# `factory:priority`, donc elles passent devant. Sa place est donc ici, avec
-	@# wt-cleanup et gh-unblock, et non dans la chaîne de sondage.
-	@# Ces alertes ne sont dans AUCUNE file : ni `gh-next-issue` (qui lit les
-	@# issues) ni `gh-pr-attention` (qui lit les PR) ne les voit. 232 Dependabot et
-	@# 14 CodeQL y dormaient sans que personne ne soit envoyé.
+	@# AVANT TOUT SONDAGE, LE MÉNAGE — ET IL COMMENCE PAR L'INTÉGRATION.
+	@# `gh-stage-pr` merge dans la branche de travail les pull requests de carte
+	@# qui ont tout prouvé, et pose `factory:staged`. Il passe EN PREMIER parce que
+	@# TOUT ce qui suit lit ce qu'il produit : `wt-cleanup` ne détruit un
+	@# environnement que si sa PR est mergée, `gh-unblock` rend à la file les cartes
+	@# dont le bloqueur est intégré, et `gh-pr-attention` ne carve une carte neuve
+	@# que sur une PR mergée. Placé en dernier, chacune de ces trois choses
+	@# attendrait le tour suivant — donc un LOOP_SLEEP entier, et une voie de
+	@# parallélisme tenue pour rien.
+	@# Puis détruire les environnements dont le travail a atterri : une pile
+	@# abandonnée coûte 3 Go, une base, une route, et surtout UNE VOIE — le hook
+	@# worktree-up du projet refuse d'en fabriquer une de trop, donc un worktree
+	@# oublié empêche la carte suivante de démarrer. Le skill demande à l'agent de
+	@# nettoyer en partant, mais un agent tué en route ne nettoie pas : c'est
+	@# justement le cas qui laisse des restes.
 	@# Puis : rendre à la file les cartes dont le bloqueur est FERMÉ.
 	@# Une carte déclare sa dépendance en tête de corps (« Bloquée par #N ») — bon
 	@# endroit, lisible et durable — mais personne ne la résolvait quand #N tombait.
 	@# Le 2 août, retirer les LABELS sans retirer le TEXTE a produit pire que
 	@# l'immobilisme : cinq tours d'affilée à relire « Bloquée par », vérifier que
 	@# c'était vrai, et re-bloquer. Zéro ligne de code, et aucun agent en tort.
+	@# LA SÉCURITÉ EST DU MÉNAGE, PAS UN SÉLECTEUR DE TRAVAIL. `gh-security-triage`
+	@# ne rend aucun numéro et ne lance aucun agent : il transpose les alertes des
+	@# onglets Security en ISSUES, puis se tait. C'est `gh-next-issue` qui les
+	@# prend ensuite, sans nouveau chemin ni nouveau prompt — elles portent
+	@# `factory:priority`, donc elles passent devant. Sa place est donc ici, en
+	@# queue de ménage, et non dans la chaîne de sondage.
+	@# Ces alertes ne sont dans AUCUNE file : ni `gh-next-issue` (qui lit les
+	@# issues) ni `gh-pr-attention` (qui lit les PR) ne les voit. 232 Dependabot et
+	@# 14 CodeQL y dormaient sans que personne ne soit envoyé.
+	@# IL NE PEUT PAS SOURCER lib.sh : c'est donc SON APPELANT qui résout les noms
+	@# de label et les lui passe, et le Python les lit sans défaut. Un défaut écrit
+	@# en Python serait un second domicile pour un nom de label, invisible depuis
+	@# factory.conf — le défaut même que `label_get` existe pour supprimer.
+	@# UN RATÉ PASSAGER NE TUE PLUS L'USINE. Les sondages rendaient 3 — « mal
+	@# configuré », donc arrêt — pour un DNS qui bafouille, un HTTP/2 déchiré, une
+	@# réponse coupée en plein JSON. Cinq arrêts en sept jours, sous un message qui
+	@# envoyait vérifier des `GH_APP_*` parfaitement bons. Le code 4 dit « réessaie
+	@# plus tard » : la boucle dort comme sur une file vide, mais elle le DIT.
+	@# Le 3 garde son sens strict — un refus de l'API qu'un humain doit réparer.
 	@# Le sondage : UN seul appel. stdout porte le numéro (capturé), stderr porte
 	@# l'explication (laissée filer vers le terminal). Sonder deux fois pour
 	@# récupérer les deux flux exposerait à une carte qui change d'état entre les
 	@# deux appels — et paierait deux requêtes pour une réponse.
+	@# ET SUR UNE PR DÉJÀ INTÉGRÉE, `gh-pr-attention` CARVE AU LIEU DE RÉVEILLER.
+	@# On ne rouvre JAMAIS une PR mergée : ses commits sont dans la branche de
+	@# travail, et la rouvrir serait un nœud de rebase pour rien. Il carve donc une
+	@# carte NEUVE, liée à l'originale, et accuse réception sur la PR — sans cet
+	@# accusé il en carverait une de plus à chaque tour, et la garde anti-tourniquet
+	@# ci-dessous, qui compte les répétitions d'un MÊME sujet, ne verrait rien
+	@# puisque le sujet changerait à chaque fois. Ce carve ne rend AUCUN numéro : la
+	@# carte neuve entre dans la file, et c'est le sondage qui la prendra.
 	@# UN JETON PAR CARTE, frappé juste avant de lancer l'agent et exporté. Chaque
 	@# appel Bash d'un agent est un shell NEUF : un `export` posé par l'agent ne
 	@# survit pas à son propre outil. Faute de quoi il choisit entre deux mauvaises
@@ -182,15 +196,15 @@ loop:
 	@# trentaine de fois sur la carte #32. Frappé ici, il est hérité par tous les
 	@# shells du tour. Il vit une heure ; une carte qui dépasse voit un 401, et le
 	@# skill dit alors de le refrapper.
-	@# LE TRONC LOCAL AVANCE À CHAQUE TOUR, et pas seulement au démarrage. La garde
-	@# ci-dessus compare le NOM de la branche à « $(FACTORY_TRUNK) » ; elle ne dit rien de sa
-	@# FRAÎCHEUR. Vous mergez une PR sur GitHub, l'arbre local reste au commit
-	@# d'avant, et la boucle continue à exécuter l'outillage d'AVANT le correctif —
-	@# scripts de `tools/factory/` et skill `github-loop` — sans que rien ne le
-	@# signale. C'est le défaut du 2 août (l'arbre laissé sur `card/7`) par une
-	@# autre porte : bonne branche, contenu périmé. Les CARTES, elles, n'ont jamais
-	@# souffert de ça — le skill fabrique chaque worktree depuis `origin/<base>`
-	@# fraîchement fetché.
+	@# LA BRANCHE DE TRAVAIL LOCALE AVANCE À CHAQUE TOUR, et pas seulement au
+	@# démarrage. La garde du démarrage compare le NOM de la branche à la branche
+	@# de travail, résolue par bin/lib.sh dans la recette ; elle ne dit rien de sa
+	@# FRAÎCHEUR. Une PR est intégrée, l'arbre local reste au commit d'avant, et la
+	@# boucle continue à exécuter l'outillage d'AVANT le correctif — scripts de
+	@# `tools/factory/` et skill `github-loop` — sans que rien ne le signale. C'est
+	@# le défaut du 2 août (l'arbre laissé sur `card/7`) par une autre porte : bonne
+	@# branche, contenu périmé. Les CARTES, elles, n'ont jamais souffert de ça — le
+	@# skill fabrique chaque worktree depuis `origin/<base>` fraîchement fetché.
 	@# `merge --ff-only` et pas `reset --hard` : `deploy.sh` peut se permettre le
 	@# second parce que la VM d'usine n'a aucun travail humain, mais `make loop` se
 	@# lance aussi depuis un poste, où l'arbre principal porte des modifications à
@@ -200,8 +214,21 @@ loop:
 	@# skill sont relus à chaque invocation, donc ils prennent effet dès ce tour-ci.
 	@# Le Makefile, lui, est déjà parsé par le `make` en cours : un correctif qui le
 	@# touche n'entre qu'au prochain démarrage de la boucle.
+	@# `branches_require` EST RAPPELÉ ICI, et ce n'est pas une redite : l'export de
+	@# la garde du démarrage est mort avec son sous-shell. Appel NU — dans un $$( )
+	@# le 3 serait avalé et l'export n'atteindrait personne. Après lui,
+	@# $$FACTORY_STAGING est la seule valeur lue par le fetch, le ff-only, les
+	@# scripts de ménage et l'agent.
+	@# FACTORY_IN_LOOP REND EXÉCUTABLE « LA RELEASE EST UN GESTE HUMAIN ». Ce n'est
+	@# pas une clé de configuration — personne ne la pose dans factory.conf, un
+	@# seul script la lit, `gh-release.sh`, et il refuse de partir quand elle est
+	@# là. Sans elle la phrase n'est qu'une ligne de doc : l'agent hérite de
+	@# GH_TOKEN, frappé plus bas, tourne en --dangerously-skip-permissions, et
+	@# rien ne l'empêcherait de fermer des dizaines de cartes non relues.
 	@last="" ; same=0 ; \
-	FACTORY_DELIVERY="$$(bash -c '. "$(FACTORY_DIR)/bin/lib.sh" ; FACTORY_ROOT="$(CURDIR)" delivery_mode')" ; export FACTORY_DELIVERY ; \
+	. "$(FACTORY_DIR)/bin/lib.sh" || { echo "factory.mk: $(FACTORY_DIR)/bin/lib.sh illisible" >&2 ; exit 3 ; } ; \
+	FACTORY_ROOT="$(CURDIR)" branches_require ; \
+	export FACTORY_IN_LOOP=1 ; \
 	export GIT_AUTHOR_NAME="$(FACTORY_GIT_NAME)" GIT_AUTHOR_EMAIL="$(FACTORY_GIT_EMAIL)" ; \
 	export GIT_COMMITTER_NAME="$(FACTORY_GIT_NAME)" GIT_COMMITTER_EMAIL="$(FACTORY_GIT_EMAIL)" ; \
 	stop_asked() { \
@@ -212,27 +239,32 @@ loop:
 	} ; \
 	while true; do \
 		if stop_asked ; then break ; fi ; \
-		if git -C "$(CURDIR)" fetch -q origin $(FACTORY_TRUNK) 2>/dev/null && \
-		   ! git -C "$(CURDIR)" merge --ff-only -q origin/$(FACTORY_TRUNK) 2>/dev/null ; then \
-			echo "$(FACTORY_CYAN)— le tronc local ne peut pas avancer jusqu'à origin/$(FACTORY_TRUNK) (arbre sale, ou divergence). La boucle tourne avec l'outillage qu'elle a. —$(FACTORY_RST)" ; \
+		if git -C "$(CURDIR)" fetch -q origin "$$FACTORY_STAGING" 2>/dev/null && \
+		   ! git -C "$(CURDIR)" merge --ff-only -q "origin/$$FACTORY_STAGING" 2>/dev/null ; then \
+			echo "$(FACTORY_CYAN)— la branche de travail locale ne peut pas avancer jusqu'à origin/$$FACTORY_STAGING (arbre sale, ou divergence). La boucle tourne avec l'outillage qu'elle a. —$(FACTORY_RST)" ; \
 		fi ; \
-		# L'OUTILLAGE AUSSI DOIT ETRE FRAIS. Le tronc vient d'avancer ; si \
-		# l'usine vit dans un submodule, son pointeur a peut-etre bouge avec. \
-		# Sans cette ligne on recree le defaut du 2 aout (outillage perime qui \
-		# a l'air de marcher) par une nouvelle porte. \
+		# L'OUTILLAGE AUSSI DOIT ETRE FRAIS. La branche de travail vient \
+		# d'avancer ; si l'usine vit dans un submodule, son pointeur a peut-etre \
+		# bouge avec. Sans cette ligne on recree le defaut du 2 aout (outillage \
+		# perime qui a l'air de marcher) par une nouvelle porte. \
 		git -C "$(CURDIR)" submodule update --init --quiet 2>/dev/null || true ; \
 		# `|| true` SAUF SUR LE 3. Le ménage a le droit de rater — un DNS qui \
 		# bafouille, une carte qui a bougé sous le script — et un tour ne meurt \
 		# pas pour ça. Mais 3 ne veut pas dire « ça a raté », il veut dire « la \
 		# configuration est cassée, arrête-toi » : c'est le code que \
-		# `conf_require` et `delivery_require` rendent. Avalé par un `|| true`, \
-		# un FACTORY_DELIVERY mal écrit ferait tourner la boucle en silence, \
-		# sans jamais débloquer ni nettoyer, avec l'air de marcher. \
+		# `conf_require` et `branches_require` rendent. Avalé par un `|| true`, \
+		# un FACTORY_STAGING mal écrit ferait tourner la boucle en silence, sans \
+		# jamais intégrer, débloquer ni nettoyer, avec l'air de marcher. \
+		hk=0 ; GH_REPO=$(GH_REPO) bash "$(FACTORY_BIN)/gh-stage-pr.sh" || hk=$$? ; \
+		[ "$$hk" != 3 ] || { echo "$(FACTORY_CYAN)— gh-stage-pr : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ; } ; \
 		hk=0 ; GH_REPO=$(GH_REPO) bash "$(FACTORY_BIN)/wt-cleanup.sh" || hk=$$? ; \
 		[ "$$hk" != 3 ] || { echo "$(FACTORY_CYAN)— wt-cleanup : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ; } ; \
 		hk=0 ; GH_REPO=$(GH_REPO) bash "$(FACTORY_BIN)/gh-unblock.sh" || hk=$$? ; \
 		[ "$$hk" != 3 ] || { echo "$(FACTORY_CYAN)— gh-unblock : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ; } ; \
-		command -v python3 >/dev/null && GH_REPO=$(GH_REPO) python3 "$(FACTORY_BIN)/gh-security-triage.py" || true ; \
+		command -v python3 >/dev/null && GH_REPO=$(GH_REPO) \
+		  PRIO="$$(label_get priority)" BUSY="$$(label_get busy)" \
+		  DONE="$$(label_get done)" STAGED="$$(label_get staged)" \
+		  python3 "$(FACTORY_BIN)/gh-security-triage.py" || true ; \
 		# LE MÉNAGE DU CONSOMMATEUR, s'il en a. Un projet a des alertes que \
 		# l'usine ne connaît pas — les erreurs de production de SON schéma \
 		# d'événements, ses files à lui — et qui doivent devenir des cartes au \
@@ -252,7 +284,7 @@ loop:
 			rz="$$(bash "$(FACTORY_BIN)/wt-resume.sh")" && rzc=0 || rzc=$$? ; \
 			if [ "$$rzc" = 0 ]; then \
 				why="$${rz#*$$(printf '\t')}" ; issue="$${rz%%$$(printf '\t')*}" ; \
-				if [ "$$FACTORY_DELIVERY" = trunk ]; then prompt="$(LOOP_PROMPT_RESUME_TRUNK)" ; else prompt="$(LOOP_PROMPT_RESUME)" ; fi ; \
+				prompt="$(LOOP_PROMPT_RESUME)" ; \
 				prompt="$${prompt//@ISSUE@/$$issue}" ; prompt="$${prompt//@WHY@/$$why}" ; \
 				echo "$(FACTORY_CYAN)— reprise : carte #$$issue ($$why) —$(FACTORY_RST)" ; \
 				prc=9 ; \
@@ -276,7 +308,7 @@ loop:
 			1) echo "$(FACTORY_CYAN)— file vide · nouveau sondage dans $(LOOP_SLEEP)s —$(FACTORY_RST)" ; \
 			   sleep $(LOOP_SLEEP) ; continue ;; \
 		esac ; \
-		if [ "$$FACTORY_DELIVERY" = trunk ]; then prompt="$(LOOP_PROMPT_TRUNK_TPL)" ; else prompt="$(LOOP_PROMPT_TPL)" ; fi ; \
+		prompt="$(LOOP_PROMPT_TPL)" ; \
 		prompt="$${prompt//@ISSUE@/$$issue}" ; \
 		echo "$(FACTORY_CYAN)— issue #$$issue —$(FACTORY_RST)" ; \
 		fi ; \
@@ -325,7 +357,19 @@ factory-status:
 factory-log:
 	@bash "$(FACTORY_BIN)/factory" log $(if $(FOLLOW),-f,$(or $(N),200))
 
-## factory-deploy: met le depot de l'usine au niveau de origin/$(FACTORY_TRUNK)
+## factory-deploy: met le depot de l'usine au niveau de la branche de travail (FACTORY_STAGING)
 .PHONY: factory-deploy
 factory-deploy:
 	@bash "$(FACTORY_BIN)/deploy.sh"
+
+## factory-release: a blanc — les cartes que la derniere release fermerait (--apply se lance a la main)
+# Pure delegation, comme ses trois voisines : revalider ici donnerait deux copies
+# de la meme regle dans deux langages, qui finissent par diverger. La cible ne
+# passe AUCUN argument, donc gh-release.sh tourne a blanc : fermer des cartes que
+# personne ne rouvrira demande de taper `--apply` soi-meme.
+# ET C'EST LA PORTE HUMAINE : la recette `loop` exporte FACTORY_IN_LOOP=1, que
+# `gh-release.sh` refuse. Lancee a la main, la variable n'est pas la ; lancee par
+# un agent de la boucle, elle l'est, et le script s'arrete.
+.PHONY: factory-release
+factory-release:
+	@bash "$(FACTORY_BIN)/gh-release.sh"

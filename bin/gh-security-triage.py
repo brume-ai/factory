@@ -43,12 +43,46 @@ if not os.environ.get("GH_REPO"):
           file=sys.stderr)
     sys.exit(3)
 REPO = os.environ["GH_REPO"]
-PRIORITY = os.environ.get("FACTORY_PRIORITY_LABEL", "factory:priority")
-# Une carte prise par un agent, ou déjà livrée, a sa spec GELÉE : on n'y touche
-# plus. Réécrire le corps sous les pieds de qui travaille dessus ferait diverger
-# la PR en cours de sa propre carte, en silence.
-FROZEN = {os.environ.get("FACTORY_BUSY_LABEL", "factory:in-progress"),
-          os.environ.get("FACTORY_DONE_LABEL", "factory:delivered")}
+
+
+def label(var: str) -> str:
+    """Le nom d'un label, tel que l'APPELANT l'a résolu. Aucun défaut ici.
+
+    Ce script ne peut pas sourcer bin/lib.sh : c'est factory.mk qui résout les
+    rôles par `label_get` et lui passe les noms (PRIO, BUSY, DONE, STAGED). Un
+    `os.environ.get("…", "factory:priority")` serait un SECOND domicile pour le
+    nom, invisible depuis factory.conf : renommer le label de priorité marcherait
+    dans les six scripts shell et pas ici, et le triage poserait sa priorité sous
+    l'ANCIEN nom — la carte de sécurité tomberait hors de la file que
+    `gh-next-issue` lit, sans que rien ne le dise. C'est le défaut même que
+    `label_get` existe pour supprimer, et l'écrire en Python le rendrait
+    seulement plus difficile à voir.
+
+    Le vide vaut l'absence : dans factory.mk la valeur passe par un `$(…)` qui
+    avale le code 3 d'un rôle inconnu, et il n'en reste alors qu'une chaîne
+    vide. Un label vide est pire qu'un label faux — `factory:` vide fait
+    correspondre n'importe quoi côté GitHub comme côté grep.
+    """
+    v = os.environ.get(var)
+    if not v:
+        print(f"gh-security-triage: {var} absent de l'environnement "
+              "(le pilote factory.mk le résout par label_get et le passe)",
+              file=sys.stderr)
+        sys.exit(3)
+    return v
+
+
+PRIORITY = label("PRIO")
+# UNE SPEC PRISE, LIVRÉE OU INTÉGRÉE EST GELÉE : on n'y touche plus. Réécrire le
+# corps sous les pieds de qui travaille dessus ferait diverger la PR en cours de
+# sa propre carte, en silence.
+# L'ÉTAT INTÉGRÉ EN FAIT PARTIE DEPUIS QUE LA RELEASE EXISTE. Une carte marquée
+# « intégrée » est dans la branche de travail et attend d'être relue puis fermée
+# par la release : son corps est précisément ce que l'humain relit. Le laisser
+# hors du jeu gelé ferait réécrire, sous les yeux du relecteur et entre deux
+# tours de ménage, la spec de ce qui est DÉJÀ intégré — la file de relecture ne
+# dirait plus ce qui a été livré.
+FROZEN = {label("BUSY"), label("DONE"), label("STAGED")}
 
 
 def token() -> str:

@@ -8,7 +8,12 @@
 # a rien à faire. Ce sondage répond à la même question pour le prix d'une requête
 # HTTP, et l'agent n'est lancé que s'il y a effectivement une carte.
 #
-#   n="$(bash tools/factory/gh-next-issue.sh)" && lancer_agent "$n"
+#   n="$(bash tools/factory/bin/gh-next-issue.sh)" && lancer_agent "$n"
+#
+# Le `bin/` de cette ligne n'est pas cosmétique : chez Brume les scripts étaient
+# à plat sous `tools/factory/` (voir la ligne d'extraction ci-dessus), ici ils
+# sont sous `bin/`, et c'est ce que `FACTORY_BIN` résout dans factory.mk. Copié
+# sans le segment, l'exemple rend « No such file or directory ».
 #
 # Codes de sortie : 0 = un numéro est sur stdout · 1 = rien à faire · 3 = mal
 # configuré · 4 = raté passager. Le 1 et le 3 sont DISTINCTS à dessein : « rien à
@@ -18,23 +23,20 @@
 # ARRÊTAIT l'usine — cinq fois en sept jours — sous un message qui accusait la
 # configuration. Il fait dormir la boucle comme le 1, mais il se DIT.
 #
-# DEUX MODES DE LIVRAISON, DONC DEUX DÉFINITIONS DE « DÉJÀ LIVRÉE » (voir
-# docs/livraison.md). En `pull-request`, la carte livrée reste OUVERTE jusqu'au
-# merge humain : ce qui la retire de la file, c'est une PR ouverte sur sa
-# branche `card/N`, doublée du label `factory:delivered` qui affiche cet état
-# sur le tableau. En `trunk`, il n'y a AUCUN état intermédiaire à marquer — le
-# pipeline du consommateur ferme la carte quand son commit est déployé, donc
-# une carte livrée n'est déjà plus dans `issues?state=open`. Rien à demander à
-# `pulls` (il n'y en a pas sur le chemin d'une carte), rien à lire d'un label.
-#
-# CE QUE `trunk` DOIT DEMANDER À LA PLACE. Une carte PRISE dont le déploiement
-# est encore en vol n'est ni livrée (le pipeline n'a pas conclu, donc il ne l'a
-# pas fermée) ni interrompue (son travail est peut-être déjà poussé) : la rendre
-# à un agent neuf lui fait refaire un travail déjà fait, et le push de cet agent
-# ANNULE le run en cours — `concurrency: cancel-in-progress` — si bien que la
-# carte d'avant ne se ferme plus jamais. C'est la panne du 2 août (trois tours
-# d'affilée sur #27 après livraison) telle qu'elle se rejoue quand il n'y a plus
-# de PR pour la trahir : sans PR, c'est le pipeline qu'il faut interroger.
+# CE QUI RETIRE UNE CARTE DE LA FILE (docs/release.md). La carte reste OUVERTE de
+# bout en bout : c'est `gh-release.sh` qui la ferme à la sortie de version, et
+# personne d'autre. Entre les deux, trois façons d'être hors file, et chacune se
+# DIT — une carte écartée en silence est précisément le défaut que ce script
+# existe pour supprimer :
+#   — une PR ouverte sur `card/N` : le travail est fait, il attend la CI et le
+#     merge automatique de gh-stage-pr.sh. La rendre à un agent neuf lui ferait
+#     refaire un travail déjà fait — la panne du 2 août, trois tours d'affilée
+#     sur #27 après livraison ;
+#   — un label de mise de côté, `factory:staged` compris : la PR est intégrée à
+#     la branche de travail et la carte attend la release. Elle est alors dans la
+#     file de RELECTURE humaine, qui n'est pas la file de travail ;
+#   — le JALON : une carte portant un jalon AUTRE que celui en cours appartient à
+#     une release future, donc pas à ce tour-ci.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
@@ -42,61 +44,75 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 . "$HERE/lib.sh"
 conf_require GH_REPO
 GH_REPO="$(conf_get GH_REPO)"
-# LE MODE GOUVERNE TOUT CE QUI SUIT : la définition de « déjà livrée », les
-# labels qu'on lit, et les requêtes qui partent. Appel NU, à côté de
-# `conf_require` : dans un `$( )` la substitution avalerait le code 3 d'une
-# valeur inconnue, la variable serait vide et le script continuerait en se
-# croyant en `pull-request` (voir lib.sh). Ensuite on ne lit plus que
-# $FACTORY_DELIVERY — une seule lecture, donc une seule réponse par tour.
-delivery_require
+# CE SCRIPT NE NOMME AUCUNE BRANCHE, donc pas de `branches_require` ici : il lit
+# un tableau, il ne pousse ni ne merge nulle part. Une clé de branche cassée n'a
+# pas à empêcher l'usine de constater qu'il n'y a rien à faire.
+
 # LA FILE EST OPT-OUT, PAS OPT-IN. `factory:ready` a longtemps été le laissez-
 # passer : sans lui, une carte n'existait pas pour la machine. C'était un défaut
 # de conception, pas une sécurité — l'oubli était SILENCIEUX et par défaut, et
 # l'usine dormait à côté de quatre cartes ouvertes pendant que le tableau
 # paraissait vide (8 août). Une issue ouverte EST du travail ; ce qu'il faut
-# déclarer, c'est l'exception : livrée, bloquée, ou en attente d'un humain.
-# Il n'y a donc plus de variable pour ce label : ne rien conditionner, c'est ne
-# pas être lu. Un `factory:ready` resté sur une vieille carte est inerte.
+# déclarer, c'est l'exception : livrée, intégrée, bloquée, ou en attente d'un
+# humain. Il n'y a donc plus de variable pour ce label : ne rien conditionner,
+# c'est ne pas être lu. Un `factory:ready` resté sur une vieille carte est inerte.
+#
 # MISES DE CÔTÉ EXPLICITES. Un label ici retire la carte de la file ; c'est le
 # SEUL geste qui demande une main, et son absence ne peut plus rien cacher.
-BLOCKED_LABEL="${FACTORY_BLOCKED_LABEL:-factory:blocked}"
+#
+# LES NOMS VIENNENT DE `label_get`, ET DE NULLE PART AILLEURS. Ils étaient lus par
+# expansion directe de l'environnement, défaut écrit au site d'appel : les poser
+# dans factory.conf ne suffisait donc PAS, il fallait AUSSI les exporter. Le
+# renommage marchait à moitié, et la moitié qui ne marchait pas était silencieuse.
+# Le défaut de chaque label n'a plus qu'un domicile, bin/lib.sh.
+BLOCKED_LABEL="$(label_get blocked)"
 # L'ISSUE CHAPEAU D'UNE ÉPOPÉE N'EST PAS EXÉCUTABLE : elle porte le design
 # d'ensemble et la liste des lots, elle est le fil, pas le travail. Elle restait
 # hors file par ABSENCE de `factory:ready` — ce qui ne tient plus une fois la
 # file en opt-out. Elle a donc son propre mot, plutôt qu'un mot voisin détourné :
 # ce n'est ni une décision en attente (`needs-human`) ni une dépendance qui
 # tombera (`blocked`). Emprunter le mot d'à côté est ce qui a enterré #5 et #8.
-EPIC_LABEL="${FACTORY_EPIC_LABEL:-factory:epic}"
+EPIC_LABEL="$(label_get epic)"
 # LE VERROU DE PRISE EST UN LABEL, PAS L'ASSIGNATION. L'assignation aurait été
 # plus élégante — un seul champ, visible partout — mais GitHub REFUSE d'assigner
 # une issue à un compte `[bot]` : POST /assignees rend 403 pour
 # eva-brume-agent[bot]. Un label, lui, se pose sans difficulté.
-BUSY_LABEL="${FACTORY_BUSY_LABEL:-factory:in-progress}"
+BUSY_LABEL="$(label_get busy)"
 # SORTIE TERMINALE DE LA MACHINE. Une carte dont la prémisse est fausse — le
-# travail est déjà sur `main`, la demande n'a plus d'objet — n'est ni « prête »
-# ni « bloquée » : aucune fermeture ne la libérera jamais. L'agent n'avait pas de
+# travail est déjà sorti, la demande n'a plus d'objet — n'est ni « prête » ni
+# « bloquée » : aucune fermeture ne la libérera jamais. L'agent n'avait pas de
 # mot pour ça et retombait sur `blocked`, ce qui la rendait éternellement muette.
 # Elle attend une DÉCISION, donc on la sort de la file au lieu de la reproposer.
-HUMAN_LABEL="${FACTORY_HUMAN_LABEL:-factory:needs-human}"
+HUMAN_LABEL="$(label_get human)"
 # LIVRÉE ≠ EN COURS. `factory:in-progress` recouvrait deux états opposés : une
-# carte QUE L AGENT TIENT, et une carte dont la PR attend une review. Le tableau
-# affichait alors deux cartes « en cours » pour un seul agent au travail, et
-# personne ne pouvait dire laquelle était vivante. La livraison a son propre mot.
-# CE MOT N'EXISTE QU'EN `pull-request`. En `trunk`, rien dans l'usine ne le pose
-# — `gh-seed-labels.sh` ne le sème pas, la carte est FERMÉE par le déploiement de
-# son commit — donc rien ne le retirerait non plus : l'honorer ferait qu'une pose
-# à la main sortirait la carte de la file POUR TOUJOURS, sans qu'aucun geste de
-# l'usine puisse l'y rendre. Vide, donc inerte partout en aval, plutôt qu'honoré
-# à moitié. (Il reste un second lecteur, `gh-security-triage.py` : voir sa carte.)
-if [[ "$FACTORY_DELIVERY" == pull-request ]]; then
-  DONE_LABEL="${FACTORY_DONE_LABEL:-factory:delivered}"
-else
-  DONE_LABEL=""
-fi
-# LE LABEL DE PRIORITE, lui aussi lu directement dans l'environnement (au lieu
-# de conf_get) pour rester coherent avec les cinq labels ci-dessus : le
-# renommer suppose de l'exporter, pas seulement de le poser dans factory.conf.
-PRIO_LABEL="${FACTORY_PRIORITY_LABEL:-factory:priority}"
+# carte QUE L AGENT TIENT, et une carte dont la PR attend son intégration. Le
+# tableau affichait alors deux cartes « en cours » pour un seul agent au travail,
+# et personne ne pouvait dire laquelle était vivante. La livraison a son mot.
+DONE_LABEL="$(label_get done)"
+# INTÉGRÉE ≠ LIVRÉE, et c'est l'état qui manquait. `factory:delivered` dit « la PR
+# est ouverte, la CI tourne » ; `factory:staged` dit « c'est dans la branche de
+# travail, ça tourne en ligne, ça attend la release ». Les confondre remettrait
+# dans la file de TRAVAIL les cartes qui composent la file de RELECTURE — la
+# seule porte humaine du dispositif — et un agent neuf repartirait sur un travail
+# déjà intégré. Posé par gh-stage-pr.sh au merge, retiré par gh-release.sh.
+STAGED_LABEL="$(label_get staged)"
+PRIO_LABEL="$(label_get priority)"
+
+# LE JALON NOMME LA RELEASE, ET C'EST LE SONDAGE QUI LE FAIT RESPECTER. Sortir
+# une carte d'une version, c'est la déplacer vers le jalon suivant : un clic, et
+# la file obéit au tour d'après — tant que la carte n'est pas intégrée, cela ne
+# coûte rien, alors qu'un retrait après coup demande un revert.
+# LE FILTRAGE EST CÔTÉ CLIENT, sur le champ `milestone` que la réponse /issues
+# porte DÉJÀ : zéro requête de plus, zéro permission neuve, et les cartes écartées
+# restent visibles du bloc de justification, plus bas.
+# VIDE SIGNIFIE AUCUN FILTRE, PAS « JALON SANS NOM » : chez un consommateur qui
+# n'utilise pas les jalons, ce script doit se comporter au byte près comme avant
+# que cette clé existe — mêmes requêtes, même carte servie.
+# ET UNE CARTE SANS JALON RESTE EN FILE. La file est OPT-OUT : exiger un jalon
+# ferait d'un oubli d'étiquetage une carte invisible et par défaut, soit
+# exactement le `factory:ready` qu'on vient de supprimer. Ce qui écarte, c'est un
+# jalon AUTRE — le geste explicite « pas dans cette version-ci ».
+MILESTONE="$(conf_get FACTORY_MILESTONE)"
 
 # Le code du frappeur est PROPAGÉ, pas écrasé : 4 (réseau) doit rester 4.
 # FACTORY_TOKEN court-circuite la frappe : tests hors ligne, ou usage a la main
@@ -147,23 +163,14 @@ api() {  # <chemin> — imprime le corps · 3 = refus de l'API · 4 = raté pass
   if [[ "$code" != 2* ]]; then
     echo "gh-next-issue: HTTP $code sur /$1" >&2
     # Le 403 a UNE cause dominante : l'App n'a pas la permission. On la nomme,
-    # plutôt que de laisser chercher côté jeton ou réseau — et ce n'est pas la
-    # même selon l'endpoint. `Actions: Read` n'est demandée qu'en mode `trunk`,
-    # où le pipeline remplace la PR : envoyer chercher `Issues` là serait
-    # exactement le message qui a coûté cinq arrêts d'usine en sept jours.
+    # plutôt que de laisser chercher côté jeton ou réseau. Ce script ne touche
+    # plus qu'une seule surface — Issues et Pull requests, toutes deux couvertes
+    # par la même permission — donc l'indice n'a plus à être choisi selon
+    # l'endpoint : le motif qui le faisait envoyait chercher « Actions: Read »
+    # sur le 403 des ISSUES de tout dépôt nommé `actions/…`, la classe même de
+    # mauvais diagnostic que ce script existe pour supprimer.
     if [[ "$code" == 403 || "$code" == 404 ]]; then
-      # LE MOTIF EST ANCRÉ SUR L'ENDPOINT DE CE DÉPÔT, PAS SUR LE CHEMIN ENTIER.
-      # `*/actions/*` attrapait aussi le 403 des ISSUES de tout dépôt dont le
-      # propriétaire ou le nom est `actions` — github.com/actions est une vraie
-      # organisation — et envoyait alors chercher une permission qui n'a rien à
-      # voir avec la panne : la classe même de mauvais diagnostic que ce script
-      # existe pour supprimer. C'était aussi la SEULE différence de comportement
-      # que ce chantier introduisait en `pull-request`, mesurée par A/B contre
-      # l'avant-chantier sur `actions/runner`.
-      case "$1" in
-        "repos/$GH_REPO/actions/"*) echo "  → l'App a-t-elle « Actions: Read », et la permission a-t-elle été ACCEPTÉE sur l'installation ?" >&2 ;;
-        *)                          echo "  → l'App a-t-elle « Issues: Read and write », et la permission a-t-elle été ACCEPTÉE sur l'installation ?" >&2 ;;
-      esac
+      echo "  → l'App a-t-elle « Issues: Read and write », et la permission a-t-elle été ACCEPTÉE sur l'installation ?" >&2
     fi
     return 3
   fi
@@ -181,8 +188,15 @@ api() {  # <chemin> — imprime le corps · 3 = refus de l'API · 4 = raté pass
 
 # UNE seule requête, partition côté client. L'API n'a pas de « sans ce label »,
 # et deux requêtes exposeraient à une carte qui change d'état entre les deux.
+# UN SEUL ENDROIT OÙ UN ÉTAT ATTERRIT. Ce filtre a longtemps existé en DEUX
+# copies — celle-ci et une jumelle réservée aux cartes prises : mêmes labels mis
+# de côté, même `rank`, même défaut de priorité. Deux copies d'une règle finissent
+# par diverger, et le jour où un état s'ajoute il faut penser à éditer les deux.
+# Ce jour-là est arrivé avec `factory:staged` : il n'y a plus qu'une copie.
 choose() {  # lit du JSON d'issues sur stdin ; imprime "<busy|ready> <numéro>" ou rien
-  BUSY="$BUSY_LABEL" HUMAN="$HUMAN_LABEL" DONE="$DONE_LABEL" BLOCKED="$BLOCKED_LABEL" EPIC="$EPIC_LABEL" DELIVERED="$delivered" PRIO="$PRIO_LABEL" python3 -c '
+  BUSY="$BUSY_LABEL" HUMAN="$HUMAN_LABEL" DONE="$DONE_LABEL" BLOCKED="$BLOCKED_LABEL" \
+  EPIC="$EPIC_LABEL" STAGED="$STAGED_LABEL" DELIVERED="$delivered" PRIO="$PRIO_LABEL" \
+  MILESTONE="$MILESTONE" python3 -c '
 import json, os, sys
 busy_label = os.environ["BUSY"]
 # L endpoint /issues renvoie AUSSI les pull requests — elles portent une clé
@@ -192,26 +206,37 @@ done = set(os.environ.get("DELIVERED", "").split())
 human = os.environ["HUMAN"]
 # La file étant OPT-OUT, cette liste est la seule chose qui retire une carte.
 # `blocked` DOIT y figurer : sans lui, la bascule opt-in→opt-out rendrait à la
-# file toutes les cartes que `gh-unblock` tient justement à l écart.
-# `DONE` EST LU STRICTEMENT, sans defaut python : en `trunk` il est vide A
-# DESSEIN — aucun label ne dit qu une carte est livree, une carte livree est
-# FERMEE, donc absente de la liste qui arrive sur stdin — et un defaut
-# "factory:delivered" ici ressusciterait le label la ou on vient de decider qu il
-# ne veut plus rien dire. C etait aussi un second nom du label, invisible depuis
-# factory.conf. Un nom vide n ecarte personne : aucune carte ne porte le label "".
+# file toutes les cartes que `gh-unblock` tient justement à l écart. `staged` y
+# est arrivé avec la release : la carte est intégrée à la branche de travail,
+# elle attend une relecture humaine et pas un agent de plus.
+# LES NOMS SONT LUS STRICTEMENT, sans defaut python : un defaut ici serait un
+# SECOND nom du label, invisible depuis factory.conf, et deux noms pour un meme
+# label finissent par diverger — le script qui pose et celui qui retire ne
+# parlent alors plus du meme mot, et la carte sort de la file pour toujours.
 # (Aucune apostrophe ici, comme dans les commentaires voisins : cette source vit
 # entre quotes simples, une seule fermerait la chaine du shell.)
 shelved = {human, os.environ["DONE"],
            os.environ["BLOCKED"],
-           os.environ["EPIC"]}
+           os.environ["EPIC"],
+           os.environ["STAGED"]}
+milestone = os.environ["MILESTONE"]
+# VIDE = AUCUN FILTRE, et une carte SANS jalon reste en file : ce qui ecarte,
+# c est un jalon AUTRE que celui en cours. Exiger un jalon ferait de son oubli
+# une carte invisible, soit le `factory:ready` qu on vient de supprimer.
+def in_release(i):
+    if not milestone:
+        return True
+    m = i.get("milestone")
+    return not m or m.get("title") == milestone
 issues = [i for i in json.load(sys.stdin)
           if "pull_request" not in i and str(i["number"]) not in done
+          and in_release(i)
           and not any(l["name"] in shelved for l in i["labels"])]
 def has(i, name): return any(l["name"] == name for l in i["labels"])
 # `factory:priority` existait sur le board mais NE FAISAIT RIEN : la file était
 # purement chronologique, donc marquer une carte prioritaire ne la faisait pas
 # passer. Elle passe devant, à ancienneté égale par ailleurs.
-def rank(i): return (not has(i, os.environ.get("PRIO", "factory:priority")), i["created_at"])
+def rank(i): return (not has(i, os.environ["PRIO"]), i["created_at"])
 # Une carte DÉJÀ prise passe avant une carte neuve : un agent tué en cours de
 # route (Ctrl-C, panne, reboot) laisse son label posé, et sans cette priorité
 # l issue resterait orpheline pendant que la file avance sans elle.
@@ -224,11 +249,12 @@ elif free: print("ready", min(free, key=rank)["number"])
 '
 }
 
-# DEUX requêtes, et c'est délibéré. Une carte prise peut avoir PERDU son label
-# `ready` — l'agent le retire parfois en la prenant — et elle deviendrait alors
-# invisible d'une requête qui ne cherche que `ready` : la reprise après
+# DEUX requêtes, et c'est délibéré. La liste générale, plus bas, est plafonnée à
+# 100 : une carte prise il y a longtemps peut en être tombée, et c'est justement
+# celle qu'un tour tué en route a laissée orpheline — la reprise après
 # interruption, premier cas que ce script doit couvrir, cesserait de marcher.
-# On interroge donc `in-progress` pour lui-même, indépendamment de `ready`.
+# On interroge donc le label de prise pour lui-même, et on tranche son sort AVANT
+# de regarder la file.
 # UNE CARTE QUI A DÉJÀ UNE PR OUVERTE EST LIVRÉE, quel que soit son label. Le
 # test porte sur la PR, pas sur la discipline de pose des labels : un label mal
 # remis — ou remis à la main — ne doit pas faire reprendre un travail déjà fait.
@@ -240,17 +266,14 @@ elif free: print("ready", min(free, key=rank)["number"])
 # qui remontait — « rien à faire ». Un 404 de configuration devenait donc une
 # file vide, et l'usine dormait paisiblement au lieu de crier. Vérifié : sur un
 # dépôt inexistant, le script rendait 1 avec « HTTP 404 » juste au-dessus.
-# POSÉE AVANT LA GARDE, ET PAS DEDANS : `choose` l'exporte dans les DEUX modes,
-# et `set -u` tuerait le script sur une variable jamais définie. En `trunk` elle
-# reste vide tant que rien n'est en vol — voir la garde du pipeline, plus bas.
+# POSÉE AVANT L'APPEL, ET PAS DEDANS : `choose` l'exporte toujours, et `set -u`
+# tuerait le script sur une variable jamais définie.
 delivered=""
-# EN `trunk`, RIEN À DEMANDER ICI : la carte livrée est fermée, donc déjà hors de
-# `issues?state=open`. Interroger `pulls` y coûterait une requête pour une liste
-# toujours vide, et surtout ferait croire au lecteur qu'une PR compte quelque
-# part sur le chemin d'une carte.
-if [[ "$FACTORY_DELIVERY" == pull-request ]]; then
-  prs_raw="$(api "repos/$GH_REPO/pulls?state=open&per_page=100")" || exit $?
-  delivered="$(printf '%s' "$prs_raw" | python3 -c '
+# LES LIGNES PYTHON RESTENT COLLÉES À GAUCHE, ici comme partout : la source d'un
+# `python3 -c` ne supporte aucune indentation, même uniforme — la décaler avec
+# le shell qui l'entoure rend un IndentationError dès la première ligne.
+prs_raw="$(api "repos/$GH_REPO/pulls?state=open&per_page=100")" || exit $?
+delivered="$(printf '%s' "$prs_raw" | python3 -c '
 import json, re, sys
 out = []
 for p in json.load(sys.stdin):
@@ -258,131 +281,34 @@ for p in json.load(sys.stdin):
     if m: out.append(m.group(1))
 print(" ".join(out))
 ')" || exit $?
-  [[ -n "${delivered// }" ]] && echo "gh-next-issue: déjà livrées (PR ouverte) : ${delivered// /, }" >&2
-fi
+[[ -n "${delivered// }" ]] && echo "gh-next-issue: déjà livrées (PR ouverte) : ${delivered// /, }" >&2
 
-# CE BLOC N'A D'OBJET QU'EN `pull-request` : c'est le seul endroit du script qui
-# interroge une PR carte par carte, et en `trunk` il n'y a aucune PR à
-# interroger. Ce qui départage là-bas une carte prise, c'est le pipeline, et
-# c'est la garde qui suit `issues_raw`.
-# LES LIGNES PYTHON RESTENT COLLÉES À GAUCHE, ici comme partout : la source d'un
-# `python3 -c` ne supporte aucune indentation, même uniforme — la décaler avec
-# le shell qui l'entoure rend un IndentationError dès la première ligne.
-if [[ "$FACTORY_DELIVERY" == pull-request ]]; then
-  choose_first() {
-    DELIVERED="$delivered" python3 -c '
-import json, os, sys
-done = set(os.environ.get("DELIVERED", "").split())
-issues = [i for i in json.load(sys.stdin)
-          if "pull_request" not in i and str(i["number"]) not in done
-          and not any(l["name"] in {os.environ["HUMAN"],
-                                    os.environ["DONE"],
-                                    os.environ["BLOCKED"],
-                                    os.environ["EPIC"]} for l in i["labels"])]
-def rank(i): return (not any(l["name"] == os.environ.get("PRIO", "factory:priority") for l in i["labels"]), i["created_at"])
-print(min(issues, key=rank)["number"] if issues else "", end="")
-'
-  }
-
-  busy_raw="$(api "repos/$GH_REPO/issues?state=open&labels=$BUSY_LABEL&per_page=100")" || exit $?
-  busy="$(printf '%s' "$busy_raw" | HUMAN="$HUMAN_LABEL" DONE="$DONE_LABEL" BLOCKED="$BLOCKED_LABEL" EPIC="$EPIC_LABEL" PRIO="$PRIO_LABEL" choose_first)"
-  if [[ -n "$busy" ]]; then
-    # `factory:in-progress` seul recouvre DEUX états très différents : un tour tué
-    # en route (à reprendre) et une carte LIVRÉE qui attend sa review (à laisser
-    # tranquille). Ce qui les sépare, c'est l'existence d'une PR ouverte sur sa
-    # branche. Sans ce test, une carte livrée est reprise indéfiniment : observé le
-    # 2 août, trois tours d'affilée sur #27 après livraison, chacun se contentant
-    # de constater qu'il n'y avait rien à faire.
-    pr_raw="$(api "repos/$GH_REPO/pulls?state=open&head=${GH_REPO%%/*}:card/$busy&per_page=1")" || exit $?
-    pr="$(printf '%s' "$pr_raw" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["number"] if d else "")')"
-    if [[ -n "$pr" ]]; then
-      echo "gh-next-issue: #$busy est livrée (PR #$pr ouverte) — elle attend une review, pas un agent" >&2
-    else
-      echo "gh-next-issue: reprise de l'issue #$busy (tour interrompu, aucune PR)" >&2
-      printf '%s' "$busy"; exit 0
-    fi
+busy_raw="$(api "repos/$GH_REPO/issues?state=open&labels=$BUSY_LABEL&per_page=100")" || exit $?
+# `busy_raw` est DÉJÀ filtré côté serveur sur le label de prise, donc `choose` y
+# rend toujours « busy <n> » : le mot est jeté par le `read`, et c'est tout ce
+# qui séparait l'ancienne copie jumelle de cette fonction-ci.
+busy=""
+read -r _ busy <<<"$(printf '%s' "$busy_raw" | choose)" || true
+if [[ -n "$busy" ]]; then
+  # `factory:in-progress` seul recouvre DEUX états très différents : un tour tué
+  # en route (à reprendre) et une carte LIVRÉE qui attend son intégration (à
+  # laisser tranquille). Ce qui les sépare, c'est l'existence d'une PR ouverte sur
+  # sa branche. Sans ce test, une carte livrée est reprise indéfiniment : observé
+  # le 2 août, trois tours d'affilée sur #27 après livraison, chacun se contentant
+  # de constater qu'il n'y avait rien à faire.
+  pr_raw="$(api "repos/$GH_REPO/pulls?state=open&head=${GH_REPO%%/*}:card/$busy&per_page=1")" || exit $?
+  pr="$(printf '%s' "$pr_raw" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["number"] if d else "")')"
+  if [[ -n "$pr" ]]; then
+    echo "gh-next-issue: #$busy est livrée (PR #$pr ouverte) — elle attend son intégration, pas un agent" >&2
+  else
+    echo "gh-next-issue: reprise de l'issue #$busy (tour interrompu, aucune PR)" >&2
+    printf '%s' "$busy"; exit 0
   fi
 fi
-
 
 # TOUTES les issues ouvertes, pas seulement les étiquetées : `choose` écarte les
 # mises de côté. Interroger `labels=$READY_LABEL` ici était le cœur du défaut.
 issues_raw="$(api "repos/$GH_REPO/issues?state=open&per_page=100")" || exit $?
-
-# EN `trunk`, CE QUI REMPLACE LA SONDE DE PR, C'EST LE PIPELINE LUI-MÊME — et il
-# en dit plus que ce qu'il remplace. Une carte prise dont le déploiement est
-# encore en vol n'est ni livrée (le pipeline n'a pas conclu, donc il ne l'a pas
-# fermée) ni interrompue (son travail est peut-être déjà poussé) : rendue à un
-# agent neuf, elle lui fait refaire ce travail, et le push de cet agent ANNULE le
-# run en cours — `concurrency: cancel-in-progress` — si bien que la carte d'avant
-# ne se ferme JAMAIS et que personne ne peut dire pourquoi. On attend, et on le
-# DIT : sortir en 1 fait dormir la boucle et resonder, ce qui est exactement le
-# geste juste — trois minutes plus tard, le pipeline aura tranché à notre place.
-# UNE REQUÊTE, ET SEULEMENT SI UNE CARTE EST PRISE : sur un tableau sans carte en
-# cours il n'y a rien à départager, et le tour reste à sa seule lecture des
-# issues. Dès qu'une carte est prise, c'est UN appel de plus, pas zéro : une
-# première version de ce commentaire annonçait « un seul appel HTTP » quoi qu'il
-# arrive, ce qui est faux et ferait chercher ailleurs le jour où le quota serre.
-#
-# ET OUI, C'EST BIEN LA SÉRIALISATION — la conséquence 6 de docs/livraison.md, et
-# elle atterrit ici plutôt que dans la boucle. Une première version de ce
-# commentaire prétendait le contraire (« on ne refuse pas de prendre une carte
-# pendant qu'un run tourne ») ; le code, lui, sortait en 1 et endormait toute la
-# file. Le code avait raison, le commentaire mentait.
-#
-# Le sondage est le SEUL endroit qui décide s'il y a du travail, et « il y en a,
-# mais le pipeline n'a pas tranché » est naturellement « pas encore ». En le
-# mettant ici on évite un second mécanisme d'attente dans `factory.mk` — avec son
-# délai de garde à inventer, sa branche d'expiration et son état à porter — pour
-# un fait que la boucle sait déjà traiter : le code 1 la fait dormir et resonder.
-# Un fait, un endroit.
-if [[ "$FACTORY_DELIVERY" == trunk ]]; then
-  # LES MISES DE CÔTÉ SONT ÉCARTÉES ICI AUSSI, exactement comme `choose_first` les
-  # écarte. Sans ça, une carte laissée en `factory:in-progress` + `needs-human` —
-  # un agent qui a rendu la main sur une décision, le cas le plus banal — gèlerait
-  # la file entière au premier run qui passe sur le tronc, y compris des runs qui
-  # ne livrent rien. La file dormirait indéfiniment sur une carte que personne
-  # n'attend, et le message accuserait le pipeline.
-  taken="$(printf '%s' "$issues_raw" \
-    | BUSY="$BUSY_LABEL" HUMAN="$HUMAN_LABEL" BLOCKED="$BLOCKED_LABEL" EPIC="$EPIC_LABEL" python3 -c '
-import json, os, sys
-busy = os.environ["BUSY"]
-aside = {os.environ["HUMAN"], os.environ["BLOCKED"], os.environ["EPIC"]}
-print(" ".join(str(i["number"]) for i in json.load(sys.stdin)
-               if "pull_request" not in i
-               and any(l["name"] == busy for l in i["labels"])
-               and not any(l["name"] in aside for l in i["labels"])))
-')" || exit $?
-  if [[ -n "${taken// }" ]]; then
-    # LE TRONC EST CELUI DU CONSOMMATEUR, lu comme deploy.sh et gh-stack.sh le
-    # lisent : aucune branche en dur, un dépôt qui recette sur `staging` doit
-    # être sondé sur `staging`.
-    TRUNK="$(conf_get FACTORY_TRUNK main)"
-    # L'ÉVÉNEMENT EST FILTRÉ CÔTÉ CLIENT, PAS DANS L'URL. `event=push` seul rate
-    # le workflow qui FERME la carte : il est déclenché en cascade
-    # (`workflow_run`) et porte le même `head_branch`, donc conclure « rien en
-    # vol » entre les deux rendrait la carte à un agent une seconde avant sa
-    # fermeture. Tout compter, à l'inverse, ferait bloquer l'usine sur un run
-    # planifié ou lancé à la main, qui ne livre aucune carte.
-    runs_raw="$(api "repos/$GH_REPO/actions/runs?branch=$TRUNK&per_page=20")" || exit $?
-    live="$(printf '%s' "$runs_raw" | python3 -c '
-import json, sys
-runs = json.load(sys.stdin).get("workflow_runs", [])
-live = [r for r in runs
-        if r.get("event") in ("push", "workflow_run")
-        and r.get("status") in ("queued", "in_progress", "waiting", "requested", "pending")]
-if live:
-    r = min(live, key=lambda r: r.get("id") or 0)
-    print("%s\t%s" % (r.get("name") or "le pipeline", r.get("html_url") or ""))
-')" || exit $?
-    if [[ -n "$live" ]]; then
-      echo "gh-next-issue: #${taken// /, #} prise(s), et « ${live%%	*} » tourne encore sur $TRUNK — c'est le pipeline qui dira si ce travail est livré, pas un agent neuf." >&2
-      url="${live#*	}"
-      if [[ -n "$url" ]]; then echo "  $url" >&2; fi
-      exit 1
-    fi
-  fi
-fi
 
 # `|| true` : `read` rend 1 sur une entrée vide, et c'est le cas NORMAL — aucune
 # carte à prendre. Sans lui, `set -e` sortirait en 1 ici même, en sautant le bloc
@@ -398,17 +324,22 @@ if [[ -n "${n:-}" ]]; then
 fi
 
 # « RIEN À FAIRE » DOIT SE JUSTIFIER. La file étant opt-out, une file vide veut
-# dire que TOUTE carte ouverte a été mise de côté — par un label, ou parce
-# qu'elle est déjà livrée. On énumère qui, pour que « rien à faire » ne puisse
-# plus jamais recouvrir « personne n'a pensé à moi ».
-api "repos/$GH_REPO/issues?state=open&per_page=100" \
-  | HUMAN="$HUMAN_LABEL" DONE="$DONE_LABEL" BLOCKED="$BLOCKED_LABEL" EPIC="$EPIC_LABEL" python3 -c '
+# dire que TOUTE carte ouverte a été mise de côté — par un label, par son jalon,
+# ou parce qu'elle est déjà livrée. On énumère qui, pour que « rien à faire » ne
+# puisse plus jamais recouvrir « personne n'a pensé à moi ».
+# LA MÊME LECTURE QUE CELLE QUI A DÉCIDÉ, pas une seconde requête : entre deux
+# appels une carte change d'état, et la justification décrirait alors un tableau
+# que `choose` n'a jamais vu. Une requête de moins par tour drainé, aussi.
+printf '%s' "$issues_raw" \
+  | HUMAN="$HUMAN_LABEL" DONE="$DONE_LABEL" BLOCKED="$BLOCKED_LABEL" \
+    EPIC="$EPIC_LABEL" STAGED="$STAGED_LABEL" MILESTONE="$MILESTONE" python3 -c '
 import json, os, sys
 issues = [i for i in json.load(sys.stdin) if "pull_request" not in i]
 def labels(i): return {l["name"] for l in i["labels"]}
 def ns(xs): return ", ".join("#%d" % i["number"] for i in xs)
 groups = [
-    (os.environ["DONE"],    "livrée(s), en attente d’un merge humain — l’usine est à jour, c’est la review qui est le goulot"),
+    (os.environ["DONE"],    "livrée(s) — PR ouverte, en attente de CI et du merge automatique"),
+    (os.environ["STAGED"],  "intégrée(s) à la branche de travail, en attente de la release — c’est la file de relecture, pas la file de travail"),
     (os.environ["BLOCKED"], "bloquée(s) par une autre carte — voir gh-unblock.sh"),
     (os.environ["HUMAN"],   "en attente d’une décision humaine"),
     (os.environ["EPIC"],    "chapeau(x) d’épopée — un fil, pas du travail exécutable"),
@@ -419,19 +350,31 @@ for label, why in groups:
     if xs:
         seen = True
         print("gh-next-issue: %d %s : %s" % (len(xs), why, ns(xs)), file=sys.stderr)
+# LE JALON N EST PAS UN LABEL, MAIS IL ÉCARTE COMME UN LABEL, donc il se dit ici
+# comme les autres. Sans cette ligne, déplacer une carte vers la version suivante
+# la ferait disparaître du tableau SANS UN MOT — et ce bloc existe justement pour
+# qu aucune mise de côté ne soit muette.
+milestone = os.environ["MILESTONE"]
+if milestone:
+    xs = [i for i in issues if i.get("milestone") and i["milestone"].get("title") != milestone]
+    if xs:
+        seen = True
+        print("gh-next-issue: %d carte(s) d’un autre jalon que « %s » : %s"
+              % (len(xs), milestone, ns(xs)), file=sys.stderr)
 if not seen:
-    print("gh-next-issue: aucune issue ouverte — le tableau est réellement drainé.", file=sys.stderr)
+    # Il reste un cas, et un seul : la carte est écartée par sa PR OUVERTE, dite
+    # plus haut par « déjà livrées (PR ouverte) ». Dire « le tableau est drainé »
+    # alors que des cartes sont ouvertes serait le mensonge que ce bloc combat.
+    if issues:
+        print("gh-next-issue: %d carte(s) ouverte(s), toutes déjà livrées (PR ouverte, voir ci-dessus) : %s"
+              % (len(issues), ns(issues)), file=sys.stderr)
+    else:
+        print("gh-next-issue: aucune issue ouverte — le tableau est réellement drainé.", file=sys.stderr)
 ' || true
 
-# LA PHRASE DE SORTIE ÉNUMÈRE LES SEULES RAISONS POSSIBLES, donc celles DE CE
-# MODE : en `trunk`, « livrée » n'en est pas une — une carte livrée y est fermée,
-# donc jamais comptée ici. La garder enverrait chercher, sur le tableau, un état
-# qui n'y existe pas.
-if [[ "$FACTORY_DELIVERY" == pull-request ]]; then
-  echo "gh-next-issue: rien à faire (toute carte ouverte est livrée, bloquée ou en attente d'un humain)" >&2
-else
-  echo "gh-next-issue: rien à faire (toute carte ouverte est bloquée ou en attente d'un humain)" >&2
-fi
+# LA PHRASE DE SORTIE ÉNUMÈRE LES SEULES RAISONS POSSIBLES, et elles sont
+# désormais les mêmes pour tout le monde : un seul modèle, une seule phrase.
+echo "gh-next-issue: rien à faire (toute carte ouverte est livrée, intégrée, bloquée, hors jalon ou en attente d'un humain)" >&2
 exit 1
 
 # NOTE — l'index de liste de GitHub a un léger retard sur les écritures : fermer
