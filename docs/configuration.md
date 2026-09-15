@@ -13,7 +13,8 @@ aucune valeur d'infrastructure Brume ne doit rester dans les scripts (voir
 `conf_get NOM [defaut]` cherche d'abord `$NOM` dans l'environnement du
 process, puis `factory.conf`, puis `.env`, a la racine du depot resolue par
 `factory_root()` (`$FACTORY_ROOT`, sinon `$CLAUDE_PROJECT_DIR`, sinon
-`git rev-parse --show-toplevel`, sinon le repertoire courant). `conf_require`
+le parent du repertoire git COMMUN — l'arbre principal, meme depuis un worktree de
+carte — sinon le repertoire courant). `conf_require`
 fait la meme chose mais sort en code 3 si la valeur manque.
 
 **Sans exception.** Les labels `factory:*` en étaient une jusqu'au modèle de
@@ -42,11 +43,11 @@ les deux sont la même**. Le pourquoi est dans [`docs/release.md`](release.md).
 
 | Cle | Defaut | Lue via | Consommateur |
 |---|---|---|---|
-| `GH_REPO` | *(requise)* | `conf_get`/`conf_require`, transmise explicitement par `factory.mk` a chaque script qu'il appelle | `gh-next-issue.sh`, `gh-unblock.sh`, `gh-stack.sh`, `gh-seed-labels.sh`, `gh-stage-pr.sh`, `gh-release.sh`, `wt-cleanup.sh`, `gh-pr-attention.sh`, `run-loop.sh`, `deploy.sh`, `bin/factory stop`, garde de `factory.mk` |
+| `GH_REPO` | *(requise)* | `conf_get`/`conf_require` ; `factory.mk` la lit par `conf_get` et l'exporte pour le tour | `gh-next-issue.sh`, `gh-unblock.sh`, `gh-stack.sh`, `gh-seed-labels.sh`, `gh-stage-pr.sh`, `gh-release.sh`, `wt-cleanup.sh`, `gh-pr-attention.sh`, `run-loop.sh`, `deploy.sh`, `bin/factory stop`, garde de `factory.mk` |
 | `FACTORY_TRUNK` | `main` | `conf_get`, via `branches_require` | la branche de **PRODUCTION**, cible de la release. **L'usine n'y écrit jamais.** Lue par `bin/lib.sh` (la garde) et `bin/gh-release.sh` (le tag à partir duquel les cartes sont fermées) — et par personne d'autre : aucun script d'écriture ne la nomme. Son NOM, en revanche, **est** dans l'environnement de l'agent : `branches_require` exporte la paire normalisée, et `factory.mk` l'appelle dans le shell même qui lance l'agent (le pourquoi de cet export est écrit dans `bin/lib.sh`). Ce n'est pas un trou : ce qui protège la production, c'est la protection de branche, jamais l'ignorance de son nom |
-| `FACTORY_STAGING` | `staging` | `conf_get`, via `branches_require` | la branche de **TRAVAIL**, la seule où l'usine écrit : base par défaut de `gh-stack.sh`, cible du merge de `gh-stage-pr.sh`, garde de branche et `fetch`/`merge --ff-only` de `factory.mk`, `reset --hard` de `deploy.sh`, branche que suit l'environnement en ligne. Jamais lue par une variable Make |
+| `FACTORY_STAGING` | `staging` | `conf_get`, via `branches_require` | la branche de **TRAVAIL**, la seule où l'usine écrit : base par défaut de `gh-stack.sh`, cible du merge de `gh-stage-pr.sh`, garde de branche et `fetch`/`merge --ff-only` de `factory.mk`, `checkout --force -B` de `deploy.sh`, point de comparaison de `wt-resume.sh`, branche que suit l'environnement en ligne. Jamais lue par une variable Make |
 | `FACTORY_MILESTONE` | *(vide = aucun filtre)* | `conf_get` | `gh-next-issue.sh`, et personne d'autre : **le jalon nomme la release et le sondage le fait respecter**. Filtrage côté client sur le champ `milestone` déjà présent dans la réponse — aucun appel de plus. Vide signifie *aucun filtre*, pas « jalon sans nom » |
-| `FACTORY_GIT_NAME` | *(requise)* | variable Make (`-include factory.conf`), verifiee au demarrage de `make loop` | `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` exportes par `factory.mk` avant chaque tour |
+| `FACTORY_GIT_NAME` | *(requise)* | `conf_get`/`conf_require`, au demarrage de `make loop` | `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` exportes par `factory.mk` avant chaque tour |
 | `FACTORY_GIT_EMAIL` | *(requise)* | idem | `GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_EMAIL` idem |
 | `FACTORY_HUMAN_LOGIN` | *(requise)* | `conf_get`/`conf_require` | `gh-pr-attention.sh` (qui traite sa parole comme une instruction : il réveille une PR ouverte, il CARVE sur une PR déjà intégrée) et le canal de confiance du skill `github-loop` |
 | `FACTORY_BOT_LOGIN` | *(requise)* | `conf_require`/`conf_get` | `gh-pr-attention.sh` : le login sous lequel l'usine PARLE. C'est sa réponse qui marque un retour du relecteur comme traité — sans défaut possible, une valeur fausse rendrait chaque PR soit muette, soit éternellement réveillée |
@@ -61,11 +62,14 @@ les deux sont la même**. Le pourquoi est dans [`docs/release.md`](release.md).
 | `FACTORY_STATE` | `/srv/factory` | `conf_get` | racine du volume persistant de l'usine : `push-env.sh`, `run-loop.sh`, `status.sh`, `deploy.sh`, `bin/factory stop`, fallback du chemin de `GH_APP_KEY` |
 | `FACTORY_REPO_DIR` | `$FACTORY_STATE/workspace/<basename de GH_REPO>` | `conf_get` | `run-loop.sh`, `deploy.sh`, `bin/factory stop` : chemin du depot sur la machine |
 | `FACTORY_IMAGE_TAG` | `factory:dev` | `conf_get` | `run-loop.sh` : tag de l'image devcontainer lancee par `docker run` |
+| `FACTORY_CONTAINER_USER` | `vscode` | `conf_get` | `run-loop.sh` : utilisateur du conteneur (`-u`), celui dont le home recoit les authentifications d'agent |
+| `FACTORY_CONTAINER_HOME` | `/home/$FACTORY_CONTAINER_USER` | `conf_get` | `run-loop.sh` : home de cet utilisateur, ou sont montes `.claude`, `.codex`, `.gemini` |
+| `FACTORY_DOCKER_BIN` | *(vide = `docker` reel)* | environnement direct | `run-loop.sh` : remplace le binaire docker, utilise par les tests |
 | `FACTORY_HOST` | *(requise avec `FACTORY_KEY`)* | `conf_get`/`conf_require` | `bin/lib.sh` (`factory_ssh`), `status.sh`, `deploy.sh`, `bin/factory log`/`ssh` |
 | `FACTORY_KEY` | *(requise avec `FACTORY_HOST`)* | `conf_get`/`conf_require` | idem : chemin de la cle privee SSH vers l'usine |
 | `FACTORY_SSH_OPTS` | *(vide)* | `conf_get`, expansion non quotee dans la commande `ssh` | `bin/lib.sh` (`factory_ssh`), `bin/factory log`/`ssh` : options `ssh` supplementaires (ex. `-o ProxyJump=...`) |
 | `FACTORY_NAME` | `usine` | `conf_get` | `status.sh`, `deploy.sh` : nom affiche dans les messages |
-| `FACTORY_ENV_DENY` | *(vide)* | `conf_get` | `push-env.sh` : liste blanc-separee de variables du `.env` racine qui NE traversent PAS vers l'usine (en plus du motif universel `^(PROD_|.*_SUDO_)`) |
+| `FACTORY_ENV_DENY` | *(vide)* | `conf_get` | `push-env.sh` : liste blanc-separee de variables du `.env` racine qui NE traversent PAS vers l'usine (en plus du motif universel `^(PROD_|.*_SUDO_|FACTORY_(KEY|HOST|SSH_|NAS_|POOL))` — un secret de production, un sudo, ou la cle qui ouvre l'usine elle-meme) |
 | `FACTORY_ENV_DENY_PATTERN` | *(vide)* | `conf_get` | `push-env.sh` : motif regex etendu supplementaire, propre au consommateur |
 | `FACTORY_ENV_PATH` | `$FACTORY_STATE/secrets/env` | environnement direct (`${FACTORY_ENV_PATH:-...}`) | `push-env.sh` : chemin distant ou le `.env` compose est depose |
 | `LOOP_SLEEP` | `60` | variable Make (`?=`, surchargeable sur la ligne de commande `make loop LOOP_SLEEP=30`) | `factory.mk` : attente entre deux sondages quand la file est vide |
@@ -75,7 +79,7 @@ les deux sont la même**. Le pourquoi est dans [`docs/release.md`](release.md).
 | `MAIN` | `claude` | variable Make | `factory.mk` : `claude` ou `codex`, choisit l'agent principal de la boucle |
 | `VERBOSE` | *(vide = silencieux)* | variable Make / ligne de commande | `factory.mk` : `make loop VERBOSE=1` fait passer par `claude-stream.sh` pour suivre le tour en direct |
 | `FACTORY_BIN` | `$(FACTORY_DIR)/bin` (le `bin/` du submodule lui-meme) | variable Make (`?=`) | `factory.mk` : chemin des scripts appeles par la boucle, a surcharger si l'usine est vendorisee ailleurs |
-| `FACTORY_TOKEN` | *(vide = un jeton est frappe via `gh-app-token.sh`)* | environnement direct | court-circuite la frappe de jeton dans `wt-cleanup.sh`, `gh-seed-labels.sh`, `gh-next-issue.sh`, `gh-unblock.sh`, `gh-security-triage.py`, `gh-stack.sh`, `gh-pr-attention.sh`, `gh-stage-pr.sh`, `gh-release.sh` ; utilise par les tests hors ligne (`tests/helpers.sh`) et pour travailler a la main avec un jeton deja frappe |
+| `FACTORY_TOKEN` | *(vide = un jeton est frappe via `gh-app-token.sh`)* | environnement direct | **pose par `factory.mk` a chaque tour**, un jeton pour tout le tour ; court-circuite la frappe de jeton dans `wt-cleanup.sh`, `gh-seed-labels.sh`, `gh-next-issue.sh`, `gh-unblock.sh`, `gh-security-triage.py`, `gh-stack.sh`, `gh-pr-attention.sh`, `gh-stage-pr.sh`, `gh-release.sh` ; utilise par les tests hors ligne (`tests/helpers.sh`) et pour travailler a la main avec un jeton deja frappe |
 | `FACTORY_SSH_BIN` | *(vide = `ssh` reel)* | environnement direct | `bin/lib.sh` (`factory_ssh`) : remplace le binaire `ssh`, utilise par les tests et par un transport exotique |
 | `GH_APP_ID` | *(requise)* | `conf_get` | `gh-app-token.sh` : identifiant numerique de l'App GitHub |
 | `GH_APP_INSTALL_ID` | *(requise)* | `conf_get` | `gh-app-token.sh` : identifiant d'installation de l'App sur le depot |

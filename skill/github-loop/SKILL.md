@@ -46,7 +46,8 @@ mémoire.
 </Use_When>
 
 <Do_Not_Use_When>
-- Vous voulez *créer* des cartes → `plan-to-github`
+- Vous voulez *créer* des cartes → ce n'est pas un tour de boucle ; carvez-les
+  à la main, ou avec l'outil de planification de votre dépôt s'il en a un
 - Le dépôt n'est pas joignable, ou le jeton d'App est absent → dites-le et arrêtez
 </Do_Not_Use_When>
 
@@ -59,8 +60,16 @@ d'App GitHub**. `make loop` le frappe et l'exporte avant de vous lancer :
 [ -n "$GH_TOKEN" ] || export GH_TOKEN="$(bash tools/factory/bin/gh-app-token.sh)"
 ```
 
-Le jeton vit une heure. Si une commande rend un **401**, il a expiré : refrappez-le
-avec la ligne ci-dessus et reprenez. C'est le seul cas.
+Le jeton vit une heure. Si une commande rend un **401**, il a expiré. **Un
+`export` ne survit pas à l'appel d'outil qui l'a posé** — chaque commande que
+vous lancez est un shell neuf — donc on refrappe **par commande**, en préfixe,
+jusqu'à la fin du tour :
+
+```bash
+GH_TOKEN="$(bash tools/factory/bin/gh-app-token.sh)" gh pr checks "card/$N" --watch
+```
+
+C'est le seul cas, et il est rare : une carte qui dépasse l'heure.
 
 **Ne l'écrivez jamais dans un fichier** — pas dans `/tmp`, nulle part. C'est un
 secret, et un tour qui meurt le laisse sur disque. **Ne le refrappez pas non plus
@@ -233,6 +242,16 @@ CI complet (payé deux fois de suite chez Brume, sur #33 et #34).
 **UN WORKTREE PAR CARTE. Vous ne déplacez JAMAIS l'arbre principal, et vous
 n'empruntez JAMAIS le worktree d'un autre.**
 
+**Regardez d'abord ce qui existe.** Un tour bloqué, un entretien, un agent tué
+en route laissent un worktree `.worktrees/card-$N` ou une branche `card/$N`
+derrière eux, et `worktree add -b` refuse alors de démarrer — ou pire, le hook
+en fabrique un second à côté. Ce qui existe se REPREND, il ne se recrée pas :
+
+```bash
+git worktree list | grep -q "\.worktrees/card-$N" && echo "environnement existant : reprenez-le"
+git branch --list "card/$N"    # une branche sans worktree : `git worktree add ".worktrees/card-$N" "card/$N"`
+```
+
 ```bash
 base="$(bash tools/factory/bin/gh-stack.sh base "$N")"
 [ -n "$base" ] || { echo 'factory: base de PR illisible (voir gh-stack.sh)' >&2 ; exit 3 ; }
@@ -247,16 +266,17 @@ cd ".worktrees/card-$N"
 ```
 
 **Le submodule de l'usine est VIDE dans un worktree neuf** (git worktree ne
-clone pas les submodules), et le `.env` (gitignore) n'y existe pas non plus.
-Initialisez l'outillage et pointez la configuration sur l'arbre principal :
+clone pas les submodules). Initialisez l'outillage :
 
 ```bash
 git submodule update --init tools/factory
-export FACTORY_ROOT="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
 ```
 
-(`FACTORY_ROOT` est lu par `conf_get` avant toute lecture de fichier, donc
-`factory.conf`/`.env` se résolvent depuis l'arbre principal.)
+Le `.env` (gitignoré) n'existe pas non plus dans le worktree, et ce n'est pas
+un problème : les scripts de l'usine résolvent leur configuration depuis
+l'**arbre principal** (le répertoire git commun), où vivent `factory.conf` et
+`.env`. Rien à exporter — un `export` ne survivrait de toute façon pas à
+l'appel d'outil qui l'a posé.
 
 Si le dépôt porte un hook `worktree-up`, c'est qu'un `git worktree add` nu ne
 suffit pas ici (il faut une base, une pile, une route) : utilisez le hook,
@@ -571,10 +591,17 @@ pour ça que l'entretien passe avant la production.
 
 Trois griefs, trois réponses.
 
-**Conflit.** Rebasez la couche sur sa base, puis propagez :
+**Conflit.** Rebasez la couche sur sa base, **dans le worktree de la carte**,
+puis propagez. `git rebase <base> <branche>` fait un checkout de `<branche>`
+là où on le lance : depuis l'arbre principal, il laisserait la boucle sur
+`card/N` — et la boucle refuse de repartir de là. L'environnement existe déjà
+(voir l'étape 5 : on reprend, on ne recrée pas) ; sinon fabriquez-le :
 
 ```bash
-git fetch origin && git rebase "origin/$BASE" "card/$N"
+cd ".worktrees/card-$N"     # JAMAIS depuis l'arbre principal
+base="$(bash tools/factory/bin/gh-stack.sh base "$N")"
+[ -n "$base" ] || { echo 'factory: base de PR illisible (voir gh-stack.sh)' >&2 ; exit 3 ; }
+git fetch origin && git rebase "origin/$base"
 git push --force-with-lease origin "card/$N"
 bash tools/factory/bin/gh-stack.sh restack "card/$N"
 ```
@@ -627,9 +654,10 @@ rouvrir une propre — c'est ce qu'un humain ferait — à trois conditions :
 2. **Jamais une PR qui porte une review du login FACTORY_HUMAN_LOGIN.** Fermer
    un travail que quelqu'un a relu, c'est jeter sa relecture. Traitez-la, ou dites pourquoi
    vous ne pouvez pas.
-3. **Rendez la carte à la file** : retirez `factory:in-progress` de son issue,
-   sinon elle reste invisible pour toujours — le sondage écarte les cartes qui
-   ont une PR ouverte, et vous venez de fermer la sienne.
+3. **Rendez la carte à la file** : retirez `factory:delivered` **et**
+   `factory:in-progress` de son issue, sinon elle reste invisible pour
+   toujours — `factory:delivered` la met de côté à lui seul, et vous venez de
+   fermer la PR qui justifiait ce label.
 
 **APRÈS UN PUSH, VOUS ATTENDEZ LE VERDICT — DANS CE TOUR.** C'est la règle
 commune, et sa commande est dans `<Never_End_A_Turn_With_Work_Pending>`. Elle a
@@ -641,9 +669,11 @@ qui repart de zéro — sans savoir que le correctif était peut-être bon.
 Ici, le numéro que vous surveillez est celui de la **PR que le pilote vous a
 donnée**, pas celui d'une carte.
 
-**Si vous n'y arrivez pas**, dites-le sur la PR et arrêtez-vous. Le sondage
-retient l'état tenté : il ne vous la redonnera que si son contenu ou son grief a
-bougé. Ne bouclez pas dessus.
+**Si vous n'y arrivez pas**, dites-le sur la PR, posez `factory:needs-human`
+sur la PR **et** sur sa carte, et arrêtez-vous. C'est le label qui la sort de
+l'entretien — l'entretien n'a aucune mémoire de ce qui a été tenté, il
+réévalue tout à chaque tour, et sans le label la même PR revient jusqu'à ce que
+la garde anti-tourniquet arrête l'usine entière. Ne bouclez pas dessus.
 
 **UNE PROPOSITION DÉJÀ INTÉGRÉE NE S'ENTRETIENT PAS, ET NE SE ROUVRE JAMAIS.**
 Ses commits sont dans la branche de travail ; la rouvrir ne produirait qu'un nœud
@@ -803,8 +833,9 @@ invisible tourne en rond.
   vérification de porte, pas de `factory:staged`, donc il n'entre jamais dans la
   file que l'humain relit avant une release : du code que personne n'a lu sort en
   production.
-- **Écrire `Closes #N`**, dans un commit comme dans le corps d'une proposition.
-  C'est `Refs #N`, toujours : la fermeture appartient à la release.
+- **Écrire `Closes #N`, `Fixes #N` ou `Resolves #N`**, dans un commit comme
+  dans le corps d'une proposition. Les trois ferment ; c'est `Refs #N`,
+  toujours : la fermeture appartient à la release.
 - **Lancer une release** (`gh-release.sh`, `make factory-release`). Ce n'est pas
   votre geste : elle ferme des cartes que vous n'avez pas relues, et le script
   refuse de toute façon de démarrer depuis la boucle.

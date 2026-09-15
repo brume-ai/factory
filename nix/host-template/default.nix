@@ -17,6 +17,10 @@
     enable = true;
     repoUrl = "https://github.com/CHANGEZ-MOI/CHANGEZ-MOI.git";
   };
+  # L'utilisateur d'usine est dans `wheel` : sans mot de passe sudo, on peut
+  # deposer les prerequis et lire les journaux depuis son compte. Decision de
+  # l'HOTE, pas du module.
+  security.sudo.wheelNeedsPassword = false;
 
   networking.useDHCP = lib.mkDefault true;
   networking.firewall.allowedTCPPorts = [ 22 ];

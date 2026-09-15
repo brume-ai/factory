@@ -171,18 +171,37 @@ la liste sert à **cadrer**, chaque PR retenue est **relue** juste avant le `PUT
   `factory:needs-human`, ou que l'agent n'a pas déclarée prête, n'est pas
   intégrée : la merger l'enterrerait dans la branche de travail, où plus rien ne
   la distingue.
+- **LA CARTE, pas seulement la PR.** Fermée à la main, ou portant
+  `factory:needs-human` — c'est sur la carte que le skill fait poser
+  l'arbitrage — la proposition n'est pas intégrée.
+- **UN MOT DU RELECTEUR SANS RÉPONSE.** L'intégration passe AVANT l'entretien
+  dans le tour ; un mot posé sur la proposition pendant sa CI serait mergé sous
+  les pieds de `gh-pr-attention.sh`, qui ne carve que l'après-merge. Le login
+  de confiance a le dernier mot : on attend que l'usine ait répondu.
 - **`mergeable` STRICTEMENT `true`.** `null` veut dire que GitHub n'a pas fini
-  de calculer, pas « oui » : on attend le tour suivant.
+  de calculer, pas « oui » : on relit trois fois à trois secondes, puis on
+  attend le tour suivant.
 - **LA CI, et l'absence de CI est un REFUS.** C'est la seule chose qui ait vu ce
-  code tourner. Rouge : `gh-pr-attention.sh` enverra un agent la réparer. En
-  cours : au tour où elle conclura. **Aucun contrôle** : refusé aussi, et dit à
-  chaque tour — on ne peut pas distinguer « ce dépôt n'a pas de CI » de « les
-  runs ne sont pas encore enregistrés », et traiter l'absence comme un feu vert
-  mergerait tôt ou tard un travail dont rien n'a jamais tourné.
+  code tourner. Le verdict est une **liste blanche** — `success`, `neutral`,
+  `skipped` — écrite une fois dans `bin/lib.sh` et lue par l'intégration et
+  l'entretien : `cancelled`, `timed_out`, `action_required`, `stale` sont rouges,
+  pas verts. Rouge : `gh-pr-attention.sh` enverra un agent la réparer. En
+  cours : au tour où elle conclura. **Aucun contrôle**, ou tous ignorés :
+  refusé aussi, et dit à chaque tour — on ne peut pas distinguer « ce dépôt n'a
+  pas de CI » de « les runs ne sont pas encore enregistrés », et traiter
+  l'absence comme un feu vert mergerait tôt ou tard un travail dont rien n'a
+  jamais tourné. Plus de cent contrôles : la page est incomplète, on ne juge pas.
+- **LE `sha` VOYAGE AVEC LE MERGE.** La CI a été jugée sur une tête ; c'est
+  cette tête que GitHub merge, ou 409 si elle a bougé entre-temps.
 
 Le merge est un **squash**, et le message est composé par l'usine :
 `Refs #<carte>`. Le lien carte↔commit ne dépend donc pas de ce qu'un agent a
 bien voulu écrire dans les siens — c'est ce que la release relira.
+
+La branche `card/<n>` est **supprimée** après le merge : les consommateurs ont
+`delete_branch_on_merge` à false, et une proposition posée DESSUS (une couche
+de pile) garderait sinon une base que plus aucune file ne liste — GitHub la
+rebase lui-même sur la branche de travail quand la base disparaît.
 
 Puis `factory:staged` est posé **avant** que `factory:delivered` soit retiré :
 dans l'ordre inverse, un échec entre les deux laisserait la carte sans aucun
@@ -215,9 +234,11 @@ par accident, un copier-coller ou une complétion de shell. La liste est la mêm
 dans les deux modes — deux sorties différentes rendraient le mode à blanc inutile.
 
 Le script n'accepte **aucun argument de version** : il la dérive. `V` est le
-dernier tag de `origin/$FACTORY_TRUNK`, lu **après un fetch** — un dépôt local en
-retard nommerait la version précédente et fermerait les cartes de la release
-d'avant, avec un numéro faux. Il refuse en 3 s'il n'y a aucun tag (« la release
+tag **le plus récemment créé parmi ceux que `origin/$FACTORY_TRUNK` contient**
+(pas le plus proche dans le graphe : un `rc` ou un `latest` posé sur la branche
+de travail n'est pas sorti et ne compte pas), lu **après un fetch** — un dépôt
+local en retard nommerait la version précédente et fermerait les cartes de la
+release d'avant, avec un numéro faux. Il refuse en 3 s'il n'y a aucun tag (« la release
 se FERME après le geste humain, elle ne l'annonce pas ») et en 3 si `V` n'est pas
 dans la branche de production (« rien n'est sorti, aucune carte n'est fermée »).
 La plage est « tag précédent `..` V », à défaut toute l'histoire jusqu'à `V`, en
@@ -337,9 +358,27 @@ offre un contrôle que personne ne tient.
    le faire à votre place quand vous mergez vous-même, et la release ne voit que
    ce qui est écrit dans les commits.
 7. **La release est un geste humain** : merge, tag, puis la lecture à blanc, puis
-   `--apply`. Dans cet ordre.
-8. **Un jalon par release**, si l'on veut pouvoir en scinder une. Facultatif :
-   sans jalon, tout ce qui est ouvert est dans la file.
+   `--apply`. Dans cet ordre. **Et le merge est un merge commit ou une avance
+   rapide, jamais un squash** : `gh-release.sh` relit les `Refs #n` des COMMITS
+   de la plage, et un squash de la PR de release les remplacerait par un seul
+   message — la release fermerait zéro carte. (« Squash and merge » est ce que
+   l'usine fait sur les PR de carte ; sur la PR de release, c'est l'inverse.)
+8. **L'App porte les permissions que le modèle lit et écrit** : `Contents:
+   Read and write` (le merge, la suppression de la branche de carte), `Pull
+   requests: Read and write`, `Issues: Read and write`, `Checks: Read` (les
+   contrôles d'une PR — sur un dépôt privé, sans elle, `check-runs` rend 403 et
+   rien ne s'intègre), et `Metadata: Read`. Le triage de sécurité ajoute
+   `Dependabot alerts: Read`, `Code scanning alerts: Read`, `Secret scanning
+   alerts: Read` ; une surface sans permission est laissée de côté, elle ne
+   ferme rien.
+9. **La branche par défaut du dépôt est la production, ou alors on le sait.**
+   GitHub honore les mots-clés de fermeture (`Closes`, `Fixes`, `Resolves`)
+   sur la branche par DÉFAUT : chez un consommateur dont la branche par défaut
+   est la branche de TRAVAIL, un `Fixes #n` écrit dans un corps de PR fermerait
+   la carte à l'intégration, avant toute release. Le skill interdit ces trois
+   mots ; sur un tel dépôt, l'interdiction porte vraiment.
+10. **Un jalon par release**, si l'on veut pouvoir en scinder une. Facultatif :
+    sans jalon, tout ce qui est ouvert est dans la file.
 
 ## Ce que le modèle ne résout pas
 
@@ -348,9 +387,10 @@ offre un contrôle que personne ne tient.
   réellement protégée. Une usine correctement configurée dont la protection
   aurait sauté fonctionnerait exactement pareil — et plus rien ne tiendrait.
   C'est le métier de `factory doctor`, qui n'existe pas encore (`EVOL.md`).
-- **La pagination.** Les scripts posent `per_page=100` et ne suivent pas
-  l'en-tête `Link` : au-delà de cent issues ouvertes, la file perd sa traîne en
-  silence. Orthogonal à ce modèle, et resté dans `EVOL.md`.
+- **La pagination, partout sauf au sondage.** `gh-next-issue.sh` suit l'en-tête
+  `Link` sur la liste des cartes — la tête de la file ne tombe plus. Les autres
+  listes (PR ouvertes, commentaires du dépôt, PR de toutes sortes pour le
+  ménage) restent bornées à cent ; `EVOL.md` le garde.
 - **Les PR de fork ne sont écartées qu'à l'intégration.** `gh-next-issue.sh`
   reconnaît encore une tête `card/<n>` sans regarder de quel dépôt elle vient ;
   il ne merge rien, donc le trou n'est pas exploitable, mais il est là.
