@@ -115,26 +115,42 @@ in
         # montee lie le repertoire VIDE du dessous. Docker demarre, ne voit aucune
         # image, en reconstruit une de onze gigaoctets — sur le disque racine — et
         # rien ne signale que le volume, monte entre-temps, est ailleurs.
+        # `nofail` ICI AUSSI, sinon le `nofail` du volume ne sert a rien : un
+        # bind dont la source manque est un montage en echec, et un montage en
+        # echec sans `nofail` envoie la machine en mode emergency — sans SSH.
+        # L'incident de stockage redevenait un incident d'acces par cette
+        # porte-ci.
         "/var/lib/docker" = {
           device = "${cfg.stateDir}/docker";
           fsType = "none";
-          options = [ "bind" ];
+          options = [ "bind" "nofail" ];
           depends = [ cfg.stateDir ];
         };
         "/var/lib/containerd" = {
           device = "${cfg.stateDir}/containerd";
           fsType = "none";
-          options = [ "bind" ];
+          options = [ "bind" "nofail" ];
           depends = [ cfg.stateDir ];
         };
       }
     ];
 
+    # L'UID EST EPINGLE A 1000, ET CE N'EST PAS UN DETAIL : le conteneur tourne
+    # en `vscode`, uid 1000 dans l'image devcontainer, et lit les secrets et les
+    # homes d'agent que CET utilisateur possede sur le volume. Sans epinglage,
+    # NixOS attribue le premier uid libre par ordre de nom d'utilisateur : le
+    # jour ou l'hote declare un `admin` ou un `deploy`, `factory` devient 1001
+    # et le conteneur ne peut plus rien lire — apres un login humain reussi.
+    # `mkDefault` : un hote qui a une raison de faire autrement peut.
     users.users.${cfg.user} = {
       isNormalUser = true;
+      uid = lib.mkDefault 1000;
       extraGroups = [ "wheel" "docker" ];
     };
-    security.sudo.wheelNeedsPassword = false;
+    # PAS DE `security.sudo.wheelNeedsPassword = false` ICI : c'est un reglage
+    # GLOBAL de l'hote, et un module de service qui retire le mot de passe sudo
+    # a tous les administrateurs de la machine outrepasse son sujet. C'est a
+    # l'hote de le decider (le gabarit le fait).
 
     services.openssh = {
       enable = true;

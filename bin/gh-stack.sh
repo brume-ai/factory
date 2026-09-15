@@ -272,6 +272,13 @@ for p in sorted(json.load(sys.stdin), key=lambda p: p["number"]):
     esac
     br="$(branch_of "$card")"
     echo "gh-stack: rebase $br sur $base"
+    # LA POINTE ATTENDUE EST RELEVÉE AVANT LE FETCH. `--force-with-lease` sans
+    # argument compare à la référence de suivi LOCALE — que le `fetch` juste
+    # avant vient de mettre à jour : la garde était donc toujours satisfaite, et
+    # un commit poussé par quelqu'un d'autre entre-temps était écrasé en
+    # silence. On fixe la pointe qu'on croit connaître, et GitHub refuse si
+    # elle a bougé.
+    expected="$(git rev-parse -q --verify "origin/$br" 2>/dev/null || true)"
     git fetch -q origin "$br"
     # `git rebase <base> <branche>` rejoue les commits PROPRES à la branche : pas
     # besoin de connaître l'ancienne base, contrairement à --onto qui l'exige et
@@ -279,7 +286,7 @@ for p in sorted(json.load(sys.stdin), key=lambda p: p["number"]):
     if git rebase "origin/$base" "$br"; then
       # --force-with-lease, JAMAIS --force : le premier refuse d'écraser un
       # travail poussé entre-temps, le second le détruit sans le dire.
-      git push --force-with-lease origin "$br"
+      git push --force-with-lease="$br:${expected:-$(git rev-parse "origin/$br")}" origin "$br"
       cmd_restack "$br"   # la pile est récursive : les couches au-dessus suivent
     else
       git rebase --abort || true

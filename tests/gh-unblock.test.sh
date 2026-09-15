@@ -18,6 +18,9 @@ H="$FAKE_HTTP_DIR"
 Q="$H/repos_o_r_issues_state_open_labels_factory_blocked_per_page_100.json"
 printf '[{"number":10,"labels":[{"name":"factory:blocked"}],"body":"Bloquée par #4"}]' > "$Q"
 D="DELETE repos/o/r/issues/10/labels/factory%3Ablocked"
+# LE RETRAIT DU LABEL DOIT RÉUSSIR pour que le commentaire parte : GitHub rend
+# 200 (la liste des labels restants). Sans fixture, le faux curl rend 404.
+printf '[]' > "$H/repos_o_r_issues_10_labels_factory_3Ablocked.json"
 
 # --- a) LE BLOQUEUR EST INTÉGRÉ À LA BRANCHE DE TRAVAIL ----------------------
 # `factory:staged`, posé par gh-stage-pr.sh au merge : le travail est là, la
@@ -113,4 +116,37 @@ set +e; err="$(env -u GH_REPO bash "$S" 2>&1 >/dev/null)"; rc=$?; set -e
 assert_rc 3 "$rc" "GH_REPO absent = configuration cassée = 3"
 assert_contains "$err" "GH_REPO" "le message nomme la clé fautive"
 assert_eq "" "$(cat "$H/calls.log")" "et le dépôt n'est pas touché"
+# --- PLUSIEURS BLOQUEURS : TOUS DOIVENT ÊTRE TOMBÉS ---------------------------
+# « Bloquée par #4 et #5 » était relâchée dès que #4 tombait, sur un travail
+# (#5) qui n'était nulle part.
+printf '[{"number":10,"labels":[{"name":"factory:blocked"}],"body":"Bloquée par #4 et #5"}]' > "$Q"
+printf '{"state":"closed","labels":[]}' > "$H/repos_o_r_issues_4.json"
+printf '{"state":"open","labels":[]}' > "$H/repos_o_r_issues_5.json"
+: > "$H/calls.log"; bash "$S" 2>/dev/null
+assert_file_lacks "$H/calls.log" "$D" "deux bloqueurs, un seul tombe : la carte reste bloquee"
+printf '{"state":"open","labels":[{"name":"factory:staged"}]}' > "$H/repos_o_r_issues_5.json"
+: > "$H/calls.log"; bash "$S" 2>/dev/null
+assert_contains "$H/calls.log" "$D" "les deux tombes : la carte est rendue a la file"
+assert_contains "$H/calls.log" "#5 est intégrée" "et le motif nomme le second bloqueur"
+# L'anglais aussi, et la virgule.
+printf '[{"number":10,"labels":[{"name":"factory:blocked"}],"body":"Blocked by #4, #5"}]' > "$Q"
+: > "$H/calls.log"; bash "$S" 2>/dev/null
+assert_contains "$H/calls.log" "$D" "« Blocked by #4, #5 » est lu aussi"
+
+# --- LE RETRAIT DU LABEL QUI RATE NE COMMENTE PAS ----------------------------
+# Un « Débloquée » posé à chaque tour sur une carte toujours bloquée était un
+# mensonge répété.
+printf '[{"number":10,"labels":[{"name":"factory:blocked"}],"body":"Bloquée par #4"}]' > "$Q"
+printf '403' > "$H/repos_o_r_issues_10_labels_factory_3Ablocked.code"
+: > "$H/calls.log"; err="$(bash "$S" 2>&1 >/dev/null)"
+assert_file_lacks "$H/calls.log" "POST repos/o/r/issues/10/comments" "pas de commentaire si le label n'est pas retire"
+assert_contains "$err" "n'a pas pu être retiré" "et le rate se dit"
+rm -f "$H/repos_o_r_issues_10_labels_factory_3Ablocked.code"
+
+# --- UN RATÉ RÉSEAU EST UN 4, PAS UN 3 ----------------------------------------
+printf '500' > "$Q.code"; mv "$Q.code" "${Q%.json}.code"
+set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
+assert_rc 4 "$rc" "5xx sur la liste = rate passager"
+rm -f "${Q%.json}.code"
+
 echo ok

@@ -24,6 +24,10 @@ vide_journal() {
 # Vide = aucun retour en attente.
 RETOURS="$H/repos_o_r_issues_comments_sort_updated_direction_desc_per_page_100.json"
 printf '[]' > "$RETOURS"
+# ET LES COMMENTAIRES DE LIGNE, dépôt-entier eux aussi : un mot de ligne
+# post-merge est la forme la plus fréquente d'un grief précis.
+LIGNES="$H/repos_o_r_pulls_comments_sort_updated_direction_desc_per_page_100.json"
+printf '[]' > "$LIGNES"
 # La liste des PR est interrogee sur la branche de TRAVAIL : le nom du fixture
 # porte le filtre, donc un script qui oublierait `base=` ne trouverait rien.
 PRS="$H/repos_o_r_pulls_state_open_base_staging_per_page_100.json"
@@ -56,7 +60,7 @@ assert_rc 1 "$rc" "aucune PR = 1"
 # c) PR en conflit -> "5<TAB>conflit"
 printf '[{"number":5,%s}]' "$(tete 5)" > "$PRS"
 printf '{"number":5,"labels":[],"head":{"sha":"abc"},"mergeable":false}' > "$H/repos_o_r_pulls_5.json"
-printf '{"check_runs":[]}' > "$H/repos_o_r_commits_abc_check-runs.json"
+printf '{"check_runs":[]}' > "$H/repos_o_r_commits_abc_check-runs_per_page_100.json"
 printf '[]' > "$H/repos_o_r_pulls_5_reviews_per_page_100.json"
 printf '[]' > "$H/repos_o_r_issues_5_comments_per_page_100.json"
 printf '[]' > "$H/repos_o_r_pulls_5_comments_per_page_100.json"
@@ -113,7 +117,7 @@ rm -f "$TESTTMP/factory.conf"
 # reveiller. La pointe de branche porte une date POSTERIEURE a ce mot, comme
 # apres un rebase : c'est precisement le cas qui l'enterrait avant le correctif.
 printf '{"number":5,"labels":[],"head":{"sha":"abc"},"mergeable":true}' > "$H/repos_o_r_pulls_5.json"
-printf '{"check_runs":[{"conclusion":"success"}]}' > "$H/repos_o_r_commits_abc_check-runs.json"
+printf '{"check_runs":[{"conclusion":"success","status":"completed"}],"total_count":1}' > "$H/repos_o_r_commits_abc_check-runs_per_page_100.json"
 printf '{"commit":{"committer":{"date":"2026-09-08T08:17:29Z"}}}' > "$H/repos_o_r_commits_abc.json"
 
 # Les corps se composent SANS `tr -d '[]'` : le login de l'usine contient des
@@ -167,9 +171,16 @@ retour() {  # <numero> <horodate> [<horodate de l'accuse>]
     "$1" "$2" "$GRIEF" "$a" > "$RETOURS"
 }
 
+# LE CARVE A LE MEME PERIMETRE QUE LE REVEIL : une PR de carte du depot, sur la
+# branche de travail. Le fixture `pulls/<n>` le dit.
+carte_pr() {  # <numero> <tete> <depot> <base>
+  printf '{"number":%s,"head":{"ref":"%s","sha":"abc","repo":{"full_name":"%s"}},"base":{"ref":"%s"}}' "$@" > "$H/repos_o_r_pulls_$1.json"
+}
+
 # k) LE CARVE. La PR #9 est mergee le 09 a midi, le chef parle le 10.
 retour 9 2026-09-10T10:00:00Z
 printf '{"number":9,"pull_request":{"merged_at":"2026-09-09T12:00:00Z"}}' > "$H/repos_o_r_issues_9.json"
+carte_pr 9 card/9 o/r staging
 printf '{"number":42}' > "$H/repos_o_r_issues.json"
 printf '{"id":7}' > "$H/repos_o_r_issues_9_comments.json"
 vide_journal
@@ -226,6 +237,55 @@ vide_journal
 set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
 assert_rc 1 "$rc" "un mot d'avant le merge ne carve pas"
 assert_file_lacks "$H/calls.log" 'POST' "aucune carte neuve pour une parole deja traitee"
+
+# p) LA PR DE RELEASE NE CARVE PAS : un mot du chef sur la proposition
+# branche de travail -> production est la discussion d'une release, pas un
+# grief. Sans perimetre, chaque mot y produisait une carte prioritaire.
+retour 14 2026-09-10T10:00:00Z
+printf '{"number":14,"pull_request":{"merged_at":"2026-09-09T12:00:00Z"}}' > "$H/repos_o_r_issues_14.json"
+carte_pr 14 staging o/r main
+vide_journal
+set +e; err="$(bash "$S" 2>&1 >/dev/null)"; rc=$?; set -e
+assert_rc 1 "$rc" "la PR de release ne carve pas"
+assert_file_lacks "$H/calls.log" 'POST' "aucune carte neuve sur la PR de release"
+assert_contains "$err" "n'est pas une proposition de carte" "l'ecart est dit"
+# Ni une PR de fork mergee par un humain.
+carte_pr 14 card/14 attaquant/r staging
+vide_journal
+set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
+assert_file_lacks "$H/calls.log" 'POST' "aucune carte neuve sur une PR de fork"
+
+# q) UN COMMENTAIRE DE LIGNE POST-MERGE CARVE AUSSI : `pulls/comments` est
+# depot-entier, et c'est la forme la plus frequente d'un grief precis.
+printf '[]' > "$RETOURS"
+printf '[{"pull_request_url":"https://api.github.com/repos/o/r/pulls/9","user":{"login":"le-chef"},"created_at":"2026-09-10T10:00:00Z","body":"cette ligne-la"}]' > "$LIGNES"
+vide_journal
+set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
+assert_rc 1 "$rc" "un mot de ligne carve sans rendre de numero"
+assert_contains "$H/calls.log" 'POST repos/o/r/issues {' "un commentaire de ligne post-merge carve une carte"
+assert_contains "$H/calls.log" 'cette ligne-la' "avec son texte"
+printf '[]' > "$LIGNES"
+
+# r) LA CI ANNULEE REVEILLE, ET UN RATE SUR LES CONTROLES EST UN 4, PAS UN 1.
+printf '[{"number":5,%s,"labels":[],"mergeable":true}]' "$(tete 5)" > "$PRS"
+printf '{"number":5,%s,"labels":[],"mergeable":true}' "$(tete 5)" > "$H/repos_o_r_pulls_5.json"
+printf '[]' > "$H/repos_o_r_pulls_5_reviews_per_page_100.json"
+printf '[]' > "$H/repos_o_r_issues_5_comments_per_page_100.json"
+printf '[]' > "$H/repos_o_r_pulls_5_comments_per_page_100.json"
+printf '{"check_runs":[{"conclusion":"cancelled","status":"completed"}],"total_count":1}' > "$H/repos_o_r_commits_abc_check-runs_per_page_100.json"
+vide_journal
+set +e; out="$(bash "$S" 2>/dev/null)"; rc=$?; set -e
+assert_rc 0 "$rc" "une CI annulee demande du travail"
+assert_contains "$out" "CI rouge" "annulee = rouge, pas verte"
+printf '500' > "$H/repos_o_r_commits_abc_check-runs_per_page_100.code"
+set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
+assert_rc 4 "$rc" "un 5xx sur les controles est un rate passager, pas « rien a faire »"
+printf '403' > "$H/repos_o_r_commits_abc_check-runs_per_page_100.code"
+printf '{"message":"Resource not accessible by integration"}' > "$H/repos_o_r_commits_abc_check-runs_per_page_100.json"
+set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
+assert_rc 3 "$rc" "un 403 sur les controles est une permission, pas « rien a faire »"
+rm -f "$H/repos_o_r_commits_abc_check-runs_per_page_100.code"
+printf '[]' > "$PRS"
 
 # j) la pointe de branche n'est plus lue du tout, de toute la session
 vide_journal

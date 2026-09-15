@@ -10,18 +10,18 @@
 # que rien ne le signale : elle a l'air de marcher.
 #
 # LA BRANCHE DE TRAVAIL, JAMAIS LA PRODUCTION. Visé sur la production, ce
-# `reset --hard` poserait l'usine sur un outillage qui ignore tout ce qui est en
+# `checkout --force` poserait l'usine sur un outillage qui ignore tout ce qui est en
 # recette, et la garde citée ci-dessus l'arrêterait au tour suivant : elle
 # redémarrerait dans le vide en ayant l'air déployée.
 #
-# `reset --hard` et pas `pull`, comme install.sh : l'usine n'a pas de travail
+# `checkout --force -B` et pas `pull` :  : l'usine n'a pas de travail
 # local à préserver dans son arbre principal — les cartes vivent dans des
 # worktrees. Un `pull` y produirait un conflit de fusion qu'aucun humain ne
 # viendrait résoudre.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 # NUE, et avant tout le reste : elle pose $FACTORY_STAGING validée, et un
-# `reset --hard` sur la mauvaise branche n'est pas une erreur qu'on rattrape.
+# `checkout --force` sur la mauvaise branche n'est pas une erreur qu'on rattrape.
 branches_require
 FACTORY_NAME="$(conf_get FACTORY_NAME usine)"
 FACTORY_HOST="$(conf_get FACTORY_HOST)"; conf_require FACTORY_HOST FACTORY_KEY
@@ -57,10 +57,17 @@ GH_TOKEN="$(bash tools/factory/bin/gh-app-token.sh)"
 # 401 qu'il n'explique pas. `git -c` ne vaut que pour cette commande.
 git -c "http.https://github.com/.extraheader=Authorization: Basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
     fetch --quiet origin
-git reset --hard --quiet "origin/$STAGING"
+# `checkout --force -B` ET PAS UN RESET DUR : celui-ci écrit l'arbre de la
+# branche de travail mais laisse HEAD sur la branche où il se trouve. Une
+# machine clonée sur la branche par défaut — la PRODUCTION — restait donc sur
+# `main` avec le contenu de `staging`, et `make loop` refusait de partir en 5 à
+# chaque redémarrage (« l'arbre est sur main ») en ayant l'air déployée. Le
+# checkout jette les modifications locales COMME le reset, et place AUSSI HEAD
+# sur la branche de travail. Même geste que le module NixOS.
+git checkout --quiet --force -B "$STAGING" "origin/$STAGING"
 
 # LE POINTEUR DU SUBMODULE A BOUGÉ AVEC LA BRANCHE, PAS SON CONTENU.
-# `reset --hard` écrit le gitlink ; l'arbre de travail du submodule, lui, reste
+# le checkout écrit le gitlink ; l'arbre de travail du submodule, lui, reste
 # au commit d'avant — ou vide, si le dépôt vient tout juste d'acquérir ce
 # submodule. La boucle exécuterait alors l'outillage d'avant le dernier
 # correctif, ou pas d'outillage du tout : `make loop` s'arrête sur « l'usine

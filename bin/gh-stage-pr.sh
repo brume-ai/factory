@@ -47,8 +47,15 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 # dans l'usine : une paire de branches invalide doit arrêter le script avant le
 # premier aller-retour, et non après.
 branches_require
-conf_require GH_REPO
+conf_require GH_REPO FACTORY_HUMAN_LOGIN FACTORY_BOT_LOGIN
 GH_REPO="$(conf_get GH_REPO)"
+# Les deux logins que l'entretien lit aussi : celui dont un mot sans réponse
+# tient une proposition ouverte, et celui sous lequel l'usine répond. Requis,
+# comme dans gh-pr-attention.sh, et pour la même raison — un défaut faux
+# rendrait chaque PR soit mergée par-dessus un mot du relecteur, soit jamais
+# mergée.
+HUMAN_LOGIN="$(conf_get FACTORY_HUMAN_LOGIN)"
+BOT_LOGIN="$(conf_get FACTORY_BOT_LOGIN)"
 
 # L'ÉTAT QUI MANQUAIT. `delivered` veut dire « la PR est posée, la CI tourne » ;
 # le rôle `staged` veut dire « c'est DANS la branche de travail, ça tourne en
@@ -110,13 +117,24 @@ api() {  # <chemin> [méthode] [corps] — imprime le corps · 3 = refus · 4 = 
     return 4
   fi
   if [[ "$code" != 2* ]]; then
-    echo "gh-stage-pr: HTTP $code sur /$1" >&2
+    # UN 403 DE QUOTA N'EST PAS UN 403 DE PERMISSION. GitHub rend le même code
+    # pour « l'App n'a pas le droit » et pour « trop de requêtes » (limite
+    # primaire ou secondaire) ; le second se répare tout seul en attendant, le
+    # premier jamais. Classé en 3, un quota atteint arrêtait l'usine sur
+    # « configuration cassée », avec un indice qui envoyait vérifier des
+    # permissions parfaitement bonnes. Le corps le dit : on le lit.
+    if [[ "$code" == 403 ]] && grep -qi 'rate limit' "$body"; then
+      echo "gh-stage-pr: HTTP 403 (quota d'API atteint) sur /$1 — raté passager, on reprendra" >&2
+      return 4
+    fi
+    echo "gh-stage-pr: HTTP $code sur /$1 — $(head -c 300 "$body" | tr '\n' ' ')" >&2
     # Le 403 a UNE cause dominante, et elle n'est pas la même pour un script qui
     # MERGE : il lui faut le droit d'écrire le contenu, en plus de celui de lire
-    # et d'écrire les tickets. Nommer la permission évite de chercher côté jeton
-    # ou côté réseau, où il n'y a rien.
+    # et d'écrire les tickets, et de LIRE les contrôles — `check-runs` exige
+    # « Checks: Read » sur un dépôt privé. Nommer les permissions évite de
+    # chercher côté jeton ou côté réseau, où il n'y a rien.
     if [[ "$code" == 403 || "$code" == 404 ]]; then
-      echo "  → l'App a-t-elle « Contents: Read and write », « Pull requests: Read and write » et « Issues: Read and write », et ces permissions ont-elles été ACCEPTÉES sur l'installation ?" >&2
+      echo "  → l'App a-t-elle « Contents: Read and write », « Pull requests: Read and write », « Issues: Read and write » et « Checks: Read », et ces permissions ont-elles été ACCEPTÉES sur l'installation ?" >&2
     fi
     return 3
   fi
@@ -244,11 +262,83 @@ print(head.get("ref") or "-",
     echo "gh-stage-pr: PR #$n est encore un brouillon — l'agent ne l'a pas déclarée prête." >&2
     continue
   fi
+
+  # LA CARTE EST RELUE, PAS SEULEMENT LA PR. L'arbitrage humain se pose sur la
+  # CARTE — c'est là que le skill dit à l'agent de le poser, et là qu'un humain
+  # le pose quand il tranche — et une carte peut avoir été FERMÉE à la main
+  # pendant que sa proposition attendait sa CI. Intégrer la proposition d'une
+  # carte fermée ou en arbitrage enterrerait dans la branche de travail un
+  # travail que quelqu'un vient précisément de retirer de la file. Un 404 ici
+  # est une carte qui n'existe pas : même refus, et il se dit.
+  carte="$(api "repos/$GH_REPO/issues/$card")" || {
+    rc=$?
+    [ "$rc" = 3 ] || exit "$rc"
+    echo "gh-stage-pr: PR #$n — la carte #$card est illisible ; on n'intègre pas une proposition sans carte." >&2
+    continue
+  }
+  read -r c_state c_human <<<"$(printf '%s' "$carte" | HUMAN="$HUMAN_LABEL" python3 -c '
+import json, os, sys
+d = json.load(sys.stdin)
+print(d.get("state") or "-", any(l.get("name") == os.environ["HUMAN"] for l in d.get("labels") or []))
+')" || { echo "gh-stage-pr: carte #$card de forme inattendue — PR #$n écartée pour ce tour." >&2; continue; }
+  if [[ "$c_state" != "open" ]]; then
+    echo "gh-stage-pr: PR #$n — la carte #$card est « $c_state », pas ouverte : on n'intègre pas le travail d'une carte retirée de la file." >&2
+    continue
+  fi
+  if [[ "$c_human" == "True" ]]; then
+    echo "gh-stage-pr: PR #$n — la carte #$card porte « $HUMAN_LABEL » : elle attend un arbitrage, l'usine ne l'intègre pas." >&2
+    continue
+  fi
+
+  # UN MOT DU RELECTEUR SANS RÉPONSE TIENT LA PROPOSITION OUVERTE. Le ménage
+  # intègre EN PREMIER, avant l'entretien (voir factory.mk) : un mot posé sur la
+  # proposition ouverte pendant que sa CI tournait serait donc mergé sous les
+  # pieds de gh-pr-attention.sh — qui ne carve que les mots POSTÉRIEURS au
+  # merge — et perdu sans trace ni accusé. C'est la panne exacte que l'entretien
+  # existe pour empêcher, reproduite par l'ordre du ménage. Même règle que
+  # l'entretien (le login, sous toutes ses formes ; l'approbation muette ne
+  # demande rien ; ce qui répond est un mot de l'usine, jamais un commit), et
+  # trois lectures de plus par candidate seulement — celles-ci sont rares.
+  rev="$(api "repos/$GH_REPO/pulls/$n/reviews?per_page=100")" || exit $?
+  con="$(api "repos/$GH_REPO/issues/$n/comments?per_page=100")" || exit $?
+  lin="$(api "repos/$GH_REPO/pulls/$n/comments?per_page=100")" || exit $?
+  pending_word="$(printf '[%s,%s,%s]' "$rev" "$con" "$lin" | HUMAN="$HUMAN_LOGIN" BOT="$BOT_LOGIN" python3 -c '
+import json, os, sys
+human, bot = os.environ["HUMAN"], os.environ["BOT"]
+said = answered = ""
+for corps in json.load(sys.stdin):
+    for it in corps:
+        login = (it.get("user") or {}).get("login")
+        ts = it.get("submitted_at") or it.get("created_at") or ""
+        if login == human:
+            if it.get("state") == "APPROVED" and not (it.get("body") or "").strip():
+                continue
+            said = max(said, ts)
+        elif login == bot:
+            answered = max(answered, ts)
+print("yes" if said and said > answered else "no")
+')" || { echo "gh-stage-pr: fils de la PR #$n de forme inattendue — écartée pour ce tour." >&2; continue; }
+  if [[ "$pending_word" == "yes" ]]; then
+    echo "gh-stage-pr: PR #$n — $HUMAN_LOGIN a le dernier mot dessus et l'usine n'a pas répondu : gh-pr-attention.sh la réveille, on n'intègre pas par-dessus." >&2
+    continue
+  fi
+
   # `mergeable` EST TESTÉ STRICTEMENT CONTRE « True ». GitHub rend `null` tant
   # qu'il n'a pas fini de calculer la fusion, et `null` n'est PAS « fusionnable » :
   # le prendre pour un oui ferait tenter le merge d'une PR en conflit à chaque
-  # tour, et le refus de GitHub deviendrait le régime normal du script. On attend
-  # le tour suivant, où le calcul sera fait.
+  # tour, et le refus de GitHub deviendrait le régime normal du script.
+  # LE CALCUL PREND QUELQUES SECONDES, PAS UN TOUR. Mesuré : `null` à la
+  # première lecture, `true` trois secondes après. Renvoyer au tour suivant
+  # coûtait un LOOP_SLEEP entier par proposition fraîche — et la branche de
+  # travail qui vient d'avancer (un merge) rend `null` TOUTES les autres, donc
+  # un lot de dix PR vertes s'intégrait à une par tour. On relit trois fois, à
+  # trois secondes ; ce qui reste `null` après ça attend vraiment le tour suivant.
+  tries=0
+  while [[ "$f_merge" == "None" && "$tries" -lt 3 ]]; do
+    sleep 3; tries=$((tries+1))
+    fresh="$(api "repos/$GH_REPO/pulls/$n")" || exit $?
+    f_merge="$(printf '%s' "$fresh" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("mergeable"))')" || f_merge="None"
+  done
   if [[ "$f_merge" == "None" ]]; then
     echo "gh-stage-pr: PR #$n — GitHub n'a pas fini de calculer la fusion, on la reprendra au tour suivant." >&2
     continue
@@ -262,25 +352,20 @@ print(head.get("ref") or "-",
   # PR reste une porte : sans relecture humaine par PR, l'intégration
   # automatique n'a que ce feu vert. Même agrégat que gh-pr-attention.sh, pour
   # que l'usine n'ait qu'un seul vocabulaire de CI.
-  runs="$(api "repos/$GH_REPO/commits/$f_sha/check-runs")" || exit $?
-  ci="$(printf '%s' "$runs" | python3 -c '
-import json, sys
-runs = json.load(sys.stdin).get("check_runs", [])
-concs = [r.get("conclusion") for r in runs]
-if not runs: print("none")
-elif any(c == "failure" for c in concs): print("failure")
-elif any(c is None for c in concs): print("pending")
-else: print("ok")
-')" || {
+  runs="$(api "repos/$GH_REPO/commits/$f_sha/check-runs?per_page=100")" || exit $?
+  ci="$(printf '%s' "$runs" | python3 -c "$CI_VERDICT_PY")" || {
     echo "gh-stage-pr: contrôles de $f_sha de forme inattendue — PR #$n écartée pour ce tour." >&2
     continue
   }
   case "$ci" in
     failure)
-      echo "gh-stage-pr: PR #$n a une CI rouge — écartée. gh-pr-attention.sh enverra un agent la réparer." >&2
+      echo "gh-stage-pr: PR #$n a une CI rouge (ou annulée, ou expirée) — écartée. gh-pr-attention.sh enverra un agent la réparer." >&2
       continue ;;
     pending)
       echo "gh-stage-pr: PR #$n — la CI tourne encore, on l'intégrera au tour où elle conclura." >&2
+      continue ;;
+    truncated)
+      echo "gh-stage-pr: PR #$n — plus de cent contrôles sur $f_sha, la liste est incomplète : on ne juge pas une CI qu'on n'a pas lue en entier." >&2
       continue ;;
     none)
       # AUCUN CONTRÔLE N'EST UN REFUS, PAS UN FEU VERT. On ne peut pas distinguer
@@ -308,9 +393,14 @@ else: print("ok")
   # puis sort en SUCCÈS. Écrit d'abord ainsi sur le bloc de labels ci-dessous, où
   # le cas (k) de tests/gh-stage-pr.test.sh l'a attrapé — une carte intégrée sans
   # son label, annoncée, et un tour de ménage qui se déclarait réussi.
+  # LE `sha` EST PASSÉ AU MERGE, ET C'EST CE QUI LIE LE FEU VERT AU CODE MERGÉ.
+  # La CI a été jugée sur $f_sha ; sans ce champ, GitHub merge LA TÊTE DU MOMENT,
+  # qui peut avoir reçu un commit entre la relecture et le PUT — un commit que
+  # rien n'a vu tourner. Avec lui, une tête qui a bougé rend 409, qu'on classe
+  # ci-dessous comme « on la reverra au tour suivant ».
   rc=0
   api "repos/$GH_REPO/pulls/$n/merge" PUT \
-    "$(printf '{"merge_method":"squash","commit_message":"Refs #%s"}' "$card")" \
+    "$(printf '{"merge_method":"squash","commit_message":"Refs #%s","sha":"%s"}' "$card" "$f_sha")" \
     >/dev/null || rc=$?
   if [ "$rc" -ne 0 ]; then
     case "$API_CODE" in
@@ -318,14 +408,35 @@ else: print("ok")
       # dépôt n'autorise pas le squash) · 409 : la tête a bougé pendant qu'on
       # regardait · 422 : la demande ne s'applique plus. Aucun n'est une
       # configuration cassée, donc aucun n'arrête l'usine : on le dit et on passe
-      # à la PR suivante. Tout le reste — 401, 403, 404 — est un refus de l'API
-      # que seul un humain répare, et remonte tel quel.
+      # à la PR suivante.
       405|409|422)
         echo "gh-stage-pr: PR #$n a été refusée au merge par GitHub (HTTP $API_CODE) — écartée pour ce tour. Si le dépôt n'autorise pas le squash, l'intégration automatique ne peut pas fonctionner." >&2
+        continue ;;
+      # UN 403 AU MERGE NE CONCERNE PAS FORCÉMENT L'APP. GitHub refuse aussi par
+      # 403 le merge synchrone d'une PR qui appartient à une PILE déclarée
+      # (« Merging stacked PRs via this endpoint is not supported ») — donc une
+      # pile posée par `gh-stack.sh link` arrêterait l'usine sur « configuration
+      # cassée » à chaque tour. Le corps a été imprimé par `api` ; on écarte
+      # CETTE PR et on continue : une permission manquante se répète sur toutes
+      # les PR et se voit, une pile se répare sans arrêter le reste de la file.
+      403)
+        echo "gh-stage-pr: PR #$n — merge refusé (HTTP 403, corps ci-dessus). Si c'est une pile déclarée, retirez-la de la pile ou mergez-la à la main ; si c'est une permission, elle manquera sur toutes les PR." >&2
         continue ;;
       *) exit "$rc" ;;
     esac
   fi
+
+  # LA BRANCHE DE CARTE EST SUPPRIMÉE APRÈS LE MERGE, ET CE N'EST PAS DU MÉNAGE
+  # COSMÉTIQUE. Les deux consommateurs ont `delete_branch_on_merge` à false ;
+  # sans ce geste, `card/<n>` survit à son merge, et une proposition posée
+  # DESSUS (une couche de pile) garde une base qui n'existe plus dans aucune
+  # file : ni l'intégration ni l'entretien ne listent les PR dont la base n'est
+  # pas la branche de travail. En supprimant la branche, GitHub REBASE lui-même
+  # ces propositions sur la base de celle qu'on vient de merger — la branche de
+  # travail — et elles redeviennent visibles. Un échec ici est toléré et dit :
+  # la branche restera, un humain la verra.
+  api "repos/$GH_REPO/git/refs/heads/card/$card" DELETE >/dev/null 2>&1 \
+    || echo "gh-stage-pr: la branche card/$card n'a pas pu être supprimée après le merge (HTTP ${API_CODE:-?}) — sans conséquence, sauf pour une pile posée dessus." >&2
 
   # L'ÉTAT NEUF EST POSÉ AVANT QUE L'ANCIEN SOIT RETIRÉ, ET L'ORDRE EST LE POINT.
   # Entre les deux appels la carte porte deux labels — un défaut d'affichage,

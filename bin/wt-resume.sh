@@ -16,20 +16,23 @@
 # de carte, et les compter rendrait une reprise PERMANENTE sur une carte « ? » que
 # rien ne vient jamais clore — la boucle repartirait dessus à chaque tour.
 #
-# IL NE NOMME AUCUNE BRANCHE, et c'est la raison pour laquelle il n'appelle pas
-# `branches_require` : le numéro de carte est le NOM DU RÉPERTOIRE, et la
-# comparaison « poussé / non poussé » se fait contre l'amont du worktree, qui est
-# `card/<n>`. Ni la branche de travail ni celle de production n'ont à être lues
-# ici, et un lecteur de nom de branche de moins est une cible de moins.
+# IL NE NOMME JAMAIS LA PRODUCTION. Le numéro de carte est le NOM DU RÉPERTOIRE,
+# et la comparaison « poussé / non poussé » se fait contre l'amont du worktree,
+# `card/<n>`. Une branche, et une seule, est lue : celle de TRAVAIL, comme point
+# de comparaison d'un worktree jamais poussé — d'où l'appel à `branches_require`,
+# nu, qui la valide avant qu'on la lise.
 #
-# Codes : 0 = une carte à reprendre sur stdout · 1 = rien. PAS DE 3 : ce script ne
-# lit aucune clé, donc rien ne peut y être mal configuré — et l'absence de
-# `.worktrees` est une réponse juste (« rien à reprendre »), pas une panne.
+# Codes : 0 = une carte à reprendre sur stdout · 1 = rien · 3 = les deux branches
+# se confondent (la garde). L'absence de `.worktrees` est une réponse juste
+# (« rien à reprendre »), pas une panne.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 . "$HERE/lib.sh"
 ROOT="$(factory_root)"
+# Il nomme finalement UNE branche — la branche de travail, comme point de
+# comparaison d'un worktree jamais poussé — donc il passe par la garde, nue.
+branches_require
 
 # La phrase rendue à la boucle, qui la recopie telle quelle dans le prompt.
 # « non commité(s) » et pas « modifié(s) » : `--porcelain` compte AUSSI les
@@ -56,11 +59,25 @@ for dir in "$ROOT"/.worktrees/card-*; do
   branch="$(git -C "$dir" branch --show-current 2>/dev/null || echo '')"
   # Commits locaux non poussés : du travail fait, mais invisible de GitHub — donc
   # invisible du sondage des PR, qui ne voit que ce qui est publié.
+  # UN RÉPERTOIRE QUE GIT NE CONNAÎT PLUS N'EST PAS UN WORKTREE : `git -C` y
+  # remonterait au dépôt PARENT, dont l'arbre porte `?? .worktrees/`, et ce
+  # résidu rendrait « carte N, 1 fichier non commité » à chaque tour. Un reste
+  # de `worktree remove` interrompu se dit, et se saute.
+  if ! git -C "$ROOT" worktree list --porcelain 2>/dev/null | grep -qx "worktree $dir"; then
+    echo "wt-resume: $dir n'est plus un worktree enregistré (reste d'un nettoyage interrompu) — ignoré ; \`git worktree prune\` puis \`rm -rf\` le retirent" >&2
+    continue
+  fi
   ahead=0
   if [[ -n "$branch" ]] && git -C "$dir" rev-parse --verify -q "origin/$branch" >/dev/null 2>&1; then
     ahead="$(git -C "$dir" rev-list --count "origin/$branch..$branch" 2>/dev/null || echo 0)"
   elif [[ -n "$branch" ]]; then
-    ahead="$(git -C "$dir" rev-list --count HEAD ^origin/HEAD 2>/dev/null || echo 0)"
+    # JAMAIS POUSSÉE : l'avance se compte contre la branche de TRAVAIL, d'où la
+    # carte est partie — pas contre la référence HEAD du distant, qui est la branche par
+    # DÉFAUT du dépôt, c'est-à-dire la PRODUCTION chez la plupart des
+    # consommateurs. Dès que la branche de travail devançait la production,
+    # TOUT worktree neuf jamais poussé passait pour « en avance », et la boucle
+    # relançait une reprise sur chaque carte à peine créée.
+    ahead="$(git -C "$dir" rev-list --count HEAD "^origin/$FACTORY_STAGING" 2>/dev/null || echo 0)"
   fi
 
   (( dirty > 0 || ahead > 0 )) || continue

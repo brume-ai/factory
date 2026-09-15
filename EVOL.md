@@ -170,6 +170,14 @@ décider les yeux ouverts.
 
 ## 3. La pagination — la file perd sa traîne en silence
 
+> **Le sondage est fait** : `gh-next-issue.sh` suit l'en-tête `Link` sur la
+> liste des cartes (borné à vingt pages), et le faux `curl` des tests sait
+> rendre des en-têtes. Reste tout ce qui n'est pas la file elle-même :
+> `pulls?state=open` (le sondage des livrées, l'intégration, l'entretien),
+> `pulls?state=all` (le ménage des worktrees), les commentaires dépôt-entier,
+> les cartes bloquées. Cent suffit aujourd'hui ; c'est écrit ici pour le jour
+> où ça ne suffira plus.
+
 **L'autre moitié de ce chantier est faite** : le chemin de lecture des labels —
 des clés `FACTORY_*_LABEL` lues directement dans l'environnement du process au
 lieu de `conf_get`, si bien que les poser dans `factory.conf` ne suffisait pas —
@@ -180,12 +188,11 @@ ligne, et une seule : `gh-security-triage.py`, qui ne peut pas sourcer `lib.sh`,
 doit lire les noms que son appelant lui passe déjà au lieu de ses propres
 défauts. Reste surtout la pagination, orthogonale à tout le reste.
 
-Aucun script bash ne suit l'en-tête `Link` : ils posent `per_page=100` et
-s'arrêtent là. Au-delà de cent issues ouvertes, la file perd sa traîne **en
-silence** — exactement le mode d'échec que le passage en opt-out devait tuer
-(« l'oubli était SILENCIEUX »), réintroduit par une autre porte.
-`gh-security-triage.py` pagine correctement : le raisonnement est écrit, il reste
-à le porter en bash.
+Les autres scripts bash ne suivent pas l'en-tête `Link` : ils posent
+`per_page=100` et s'arrêtent là. `gh-next-issue.sh` porte désormais un `api_all`
+qui le suit ; `gh-security-triage.py` paginait déjà. Le raisonnement est écrit
+à ces deux endroits, il reste à le porter aux autres listes quand l'une d'elles
+dépassera cent.
 
 ---
 
@@ -255,3 +262,40 @@ sur cette couche étrangère gèlerait le vôtre sans raison. »* Empiler des ca
 indépendantes ne supprime pas le travail de résolution, il le **sérialise** —
 N conflits indépendants contre une chaîne unique à blocage de tête. L'empilement
 est bon précisément parce qu'il est réservé aux dépendances **déclarées**.
+
+---
+
+## 5. Ce que le premier passage réel a laissé ouvert
+
+Relu le 2026-09-15, après une relecture adversariale script par script contre
+l'API réelle des deux consommateurs. Ce qui a été corrigé l'a été (voir
+`git log`) ; ce qui suit est ce qu'on a choisi de ne pas faire tout de suite,
+et pourquoi.
+
+- **`restack` rebase dans l'arbre courant** (chantier 4) — inchangé. Le skill
+  dit maintenant de le lancer depuis le worktree de la carte ; le filet
+  automatique attend toujours ses trois durcissements.
+- **Une pile déclarée (`gh-stack.sh link`) ne se merge pas par l'endpoint
+  synchrone** : GitHub rend 403 (« use the asynchronous merge endpoint »).
+  L'intégration écarte la PR et le dit au lieu d'arrêter l'usine ; elle ne sait
+  pas encore appeler `merge-async`. Une pile s'intègre donc à la main, ou en la
+  retirant de la pile. À faire le jour où une épopée réelle en a besoin.
+- **Un merge réussi dont le label `factory:staged` n'a pas pu être posé** n'est
+  rattrapé par personne : le message dit le geste manuel. Le rattrapage
+  automatique (relire les PR mergées sans carte `staged`) est un tour de ménage
+  de plus, à écrire quand ça sera arrivé une fois.
+- **Un worktree d'une carte fermée, bloquée ou en arbitrage** est encore
+  « repris » par `wt-resume.sh` s'il est sale : il ne lit pas GitHub. La garde
+  anti-tourniquet, désormais persistante, l'arrête au bout de LOOP_MAX_RETRY ;
+  ce n'est pas silencieux, c'est juste trois agents de trop.
+- **Deux épinglages de version** (le flake de l'hôte et le submodule du dépôt)
+  qui peuvent diverger : le README dit de les commiter ensemble ; `factory bump`
+  n'existe pas.
+- **`Restart=always` relance une boucle arrêtée exprès** (code 3, 4, 5) toutes
+  les trente secondes. Chaque relance échoue avant de lancer un agent — le
+  compteur persistant y veille — donc ça coûte du journal, pas des tours.
+- **La fenêtre de cent commentaires** de `gh-pr-attention.sh` (conversation et
+  ligne, dépôt-entier) : un mot plus ancien que cent commentaires n'est jamais
+  carvé. Et l'accusé « carvée en #M » est un commentaire de conversation : un
+  mot de LIGNE dont l'accusé serait sorti de la fenêtre de conversation
+  pourrait être carvé deux fois. Rare ; à revoir si observé.

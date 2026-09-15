@@ -102,7 +102,13 @@ api() {  # <chemin> [méthode] [corps] — imprime le corps · 3 = refus · 4 = 
     echo "gh-pr-attention: HTTP $code sur /$1 — raté passager, on resonde" >&2
     return 4
   fi
-  [[ "$code" == 2* ]] || { echo "gh-pr-attention: HTTP $code sur /$1" >&2; return 3; }
+  # UN 403 DE QUOTA N'EST PAS UN 403 DE PERMISSION — même règle que dans
+  # gh-stage-pr.sh : le corps le dit, on le lit, et on classe en passager.
+  if [[ "$code" == 403 ]] && grep -qi 'rate limit' "$body"; then
+    echo "gh-pr-attention: HTTP 403 (quota d'API atteint) sur /$1 — raté passager, on resonde" >&2
+    return 4
+  fi
+  [[ "$code" == 2* ]] || { echo "gh-pr-attention: HTTP $code sur /$1 — $(head -c 300 "$body" | tr '\n' ' ')" >&2; return 3; }
   # Un 200 tronqué reste un 200 : sans cette validation, c'est le `json.load`
   # d'un consommateur qui explose plus bas, en trace Python illisible.
   if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$body" 2>/dev/null; then
@@ -169,11 +175,12 @@ def scan(items):
 
 data = json.load(sys.stdin)
 if isinstance(data, list):
-    # Balayage du dépôt entier : un seul tableau, où chaque commentaire nomme son
-    # fil par son `issue_url`.
+    # Balayage du dépôt entier : les tableaux dépôt-entier, où chaque
+    # commentaire nomme son fil par son `issue_url` (conversation) ou son
+    # `pull_request_url` (ligne).
     fils = {}
-    for it in data:
-        m = re.search(r"/issues/([0-9]+)$", it.get("issue_url") or "")
+    for it in [x for corps in data for x in (corps if isinstance(corps, list) else [corps])]:
+        m = re.search(r"/(?:issues|pulls)/([0-9]+)$", it.get("issue_url") or it.get("pull_request_url") or "")
         if m:
             fils.setdefault(m.group(1), []).append(it)
 else:
@@ -227,7 +234,15 @@ PY
 # auquel il répond : si le mot est dans la fenêtre, l'accusé y est aussi. Sans
 # cette propriété, une fenêtre pleine ferait carver la même carte à chaque tour.
 feedback="$(api "repos/$GH_REPO/issues/comments?sort=updated&direction=desc&per_page=100")" || exit $?
-fils="$(printf '%s' "$feedback" | HUMAN="$HUMAN" BOT="$BOT" python3 -c "$SAID_ANSWERED_PY")" || exit $?
+# ET LES COMMENTAIRES DE LIGNE, PAR LE MÊME GESTE DÉPÔT-ENTIER. « Faute
+# d'endpoint dépôt-entier » n'était vrai que des reviews formelles :
+# `pulls/comments` rend les commentaires de ligne de TOUTES les PR en un appel,
+# et c'est la forme que prend le plus souvent un grief précis après coup —
+# « cette ligne-là ». Sans cette lecture, un mot de ligne post-merge n'était
+# ni carvé ni accusé, sans trace. Chaque commentaire de ligne nomme sa PR par
+# `pull_request_url` ; on le reporte sur `issue_url`, la clé que le classeur lit.
+lines="$(api "repos/$GH_REPO/pulls/comments?sort=updated&direction=desc&per_page=100")" || exit $?
+fils="$(printf '[%s,%s]' "$feedback" "$lines" | HUMAN="$HUMAN" BOT="$BOT" python3 -c "$SAID_ANSWERED_PY")" || exit $?
 
 while read -r n said answered grief; do
   [ -n "$n" ] && [ "$said" != "." ] || continue
@@ -246,6 +261,27 @@ while read -r n said answered grief; do
   # y répondre. Le rattraper après coup carverait une carte pour un « LGTM »
   # laissé sans réponse le jour du merge.
   [[ "$said" > "$merged" ]] || continue
+  # LE CARVE A LE MÊME PÉRIMÈTRE QUE LE RÉVEIL, et il l'avait perdu : la surface
+  # intégrée carvait sur N'IMPORTE QUELLE PR mergée du dépôt — la PR de RELEASE
+  # (branche de travail → production), dont la discussion est celle d'une
+  # release et pas un grief ; une PR de fork mergée par un humain ; une PR
+  # historique d'avant l'usine. Un mot du login de confiance sur l'une d'elles
+  # produisait une carte prioritaire, en tête de file. Ne carvent que les
+  # propositions de carte du dépôt lui-même, posées sur la branche de travail.
+  pr="$(api "repos/$GH_REPO/pulls/$n")" || exit $?
+  scope="$(printf '%s' "$pr" | GH_REPO="$GH_REPO" STAGING="$FACTORY_STAGING" python3 -c '
+import json, os, re, sys
+d = json.load(sys.stdin)
+head = d.get("head") or {}
+ok = (re.fullmatch(r"card/[0-9]+", head.get("ref") or "") is not None
+      and ((head.get("repo") or {}).get("full_name") or "").lower() == os.environ["GH_REPO"].lower()
+      and (d.get("base") or {}).get("ref") == os.environ["STAGING"])
+print("card" if ok else "other")
+')" || exit $?
+  if [ "$scope" != "card" ]; then
+    echo "gh-pr-attention: PR #$n n'est pas une proposition de carte sur « $FACTORY_STAGING » — le mot de $HUMAN dessus n'est pas carvé (c'est une discussion, pas un grief)" >&2
+    continue
+  fi
 
   carte="$(N="$n" HUMAN="$HUMAN" GRIEF="$grief" PRIO="$PRIO_LABEL" python3 -c "$CARTE_PY")" || exit $?
   neuve="$(api "repos/$GH_REPO/issues" POST "$carte")" || exit $?
@@ -275,16 +311,14 @@ d = json.load(sys.stdin)
 print(d["head"]["sha"], d.get("mergeable"))
 ')"
 
-  # La CI : conclusion agrégée du dernier commit.
-  ci="$(api "repos/$GH_REPO/commits/$sha/check-runs" | python3 -c '
-import json, sys
-runs = json.load(sys.stdin).get("check_runs", [])
-concs = [r.get("conclusion") for r in runs]
-if not runs: print("none")
-elif any(c == "failure" for c in concs): print("failure")
-elif any(c is None for c in concs): print("pending")
-else: print("ok")
-')"
+  # La CI : conclusion agrégée du dernier commit, par le verdict partagé de
+  # bin/lib.sh — le même mot que l'intégration, sinon l'une merge ce que l'autre
+  # ne réveille pas. LE CORPS EST CAPTURÉ AVANT D'ÊTRE LU : en `api | python3`,
+  # le code de `api` (3 ou 4) était avalé par celui de python (1), et un 403 ou
+  # un raté réseau sur les contrôles faisait sortir ce script en « rien à
+  # faire ». Ici un 4 reste un 4 et un 3 reste un 3.
+  runs="$(api "repos/$GH_REPO/commits/$sha/check-runs?per_page=100")" || exit $?
+  ci="$(printf '%s' "$runs" | python3 -c "$CI_VERDICT_PY")" || exit 4
 
   # LES TROIS CORPS SONT CAPTURÉS UN PAR UN, jamais en substitutions imbriquées
   # dans le printf. Imbriqué, un `api` en échec rend une chaîne VIDE sans que
@@ -333,7 +367,9 @@ for p in sorted(json.load(sys.stdin), key=lambda p: p["number"]):
     head = p.get("head") or {}
     # `head.repo` est nul quand le fork a été supprimé : le `or {}` évite le
     # plantage, et la comparaison qui suit met la PR dehors.
-    if (head.get("repo") or {}).get("full_name") != repo:
+    # Insensible à la casse : GitHub rend le nom canonique du dépôt, et un
+    # GH_REPO écrit en minuscules mettait TOUTES les PR hors périmètre, en silence.
+    if ((head.get("repo") or {}).get("full_name") or "").lower() != repo.lower():
         continue
     if not re.fullmatch(r"card/[0-9]+", head.get("ref") or ""):
         continue

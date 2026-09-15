@@ -90,11 +90,15 @@ rmdir "$R/.worktrees/card-abc"
 # --- 6. IL NE NOMME AUCUNE BRANCHE --------------------------------------------
 # LE CONTRÔLE QUI RATTRAPE UNE ERREUR DE DÉCOUPE, et il n'a pas d'autre domicile :
 # le volet supprimé lisait FACTORY_TRUNK pour savoir contre quoi comparer. Ce
-# script ne lit plus aucun nom de branche, et c'est POUR ÇA qu'il n'appelle pas
-# `branches_require`. Si une branche revenait ici, elle reviendrait sans garde —
-# personne n'aurait vérifié que ce n'est pas la branche de production.
+# script ne nomme plus JAMAIS la production. Il nomme une branche, et une
+# seule : celle de TRAVAIL, comme point de comparaison d'un worktree jamais
+# poussé — le repli sur `origin/HEAD` comparait à la branche par DÉFAUT, donc à
+# la production, et tout worktree neuf passait pour « en avance » dès que la
+# branche de travail devançait la production. Puisqu'il nomme une branche, il
+# passe par la garde, nue.
 assert_file_lacks "$RESUME" "FACTORY_TRUNK" "wt-resume ne nomme plus la branche de production"
-assert_file_lacks "$RESUME" "FACTORY_STAGING" "wt-resume ne nomme aucune branche, donc pas de garde à appeler"
+assert_file_lacks "$RESUME" "origin/HEAD" "wt-resume ne compare plus à la branche par défaut"
+grep -q '^branches_require' "$RESUME" || { echo "wt-resume nomme la branche de travail : la garde doit être appelée, nue" >&2; exit 1; }
 echo ok
 
 # =============================================================================

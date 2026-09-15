@@ -6,7 +6,7 @@
 # que le deploiement marche — ca demande une usine — mais qu'il PORTE les
 # gestes sans lesquels il ment.
 #
-# LE PREMIER DE CES GESTES EST LA BRANCHE. `deploy.sh` fait un `reset --hard`
+# LE PREMIER DE CES GESTES EST LA BRANCHE. `deploy.sh` fait un `checkout --force -B`
 # sur l'arbre principal de l'usine : vise sur la production, il la ferait
 # tourner avec l'outillage d'avant ce qui est en recette, et `make loop`
 # refuserait de demarrer. C'est le seul site de bascule que rien ne tenait — ce
@@ -39,8 +39,14 @@ out="$(FACTORY_SSH_BIN="$TESTTMP/fake-ssh" bash "$REPO/bin/deploy.sh" 2>&1)" || 
 # dur. L'une sans l'autre laisserait passer un renommage a moitie fait.
 assert_contains "$argv" "STAGING='staging'" \
   "la branche de travail resolue passe a la machine"
-assert_contains "$capture" 'git reset --hard --quiet "origin/$STAGING"' \
-  "le reset distant vise la variable, pas un nom en dur"
+# `checkout --force -B` ET PAS `reset --hard` : le reset laissait HEAD sur la
+# branche ou il se trouvait — une machine clonee sur la production y restait,
+# avec le contenu de la branche de travail, et la boucle refusait de partir en
+# 5 a chaque redemarrage en ayant l'air deployee.
+assert_contains "$capture" 'git checkout --quiet --force -B "$STAGING" "origin/$STAGING"' \
+  "le checkout distant vise la variable, pas un nom en dur, et deplace HEAD"
+assert_file_lacks "$capture" 'reset --hard' \
+  "plus de reset --hard : il ne deplacait pas HEAD"
 assert_file_lacks "$capture" 'origin/main' \
   "aucun nom de production en dur dans le script distant"
 assert_file_lacks "$argv" 'TRUNK' \

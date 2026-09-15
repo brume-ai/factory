@@ -165,11 +165,25 @@ set +e; n="$(bash "$S" 2>"$TESTTMP/err")"; rc=$?; set -e
 assert_contains "$TESTTMP/err" "attend son intégration" "la carte livree est nommee comme telle, pas reprise en silence"
 assert_contains "$TESTTMP/err" "PR #42" "la PR qui tranche est citee par son numero"
 assert_contains "$C" "pulls?state=open&head=o:card/5" "la sonde porte sur la branche de CETTE carte, prefixee du proprietaire"
-# CE QUE CE CAS NE PROUVE PAS, ET POURQUOI IL L'ECRIT QUAND MEME : la carte est
-# ensuite SERVIE (rc 0), car ce qui la retire de la file c'est la liste GLOBALE
-# des PR, pas cette sonde -- qui, elle, ne fait que parler. Fixe ici pour qu'on le
-# voie, pas pour qu'on l'approuve.
-assert_rc 0 "$rc" "la sonde par carte parle, mais ne retire pas la carte de la file"
+# LA SONDE TRANCHE, ELLE NE FAIT PAS QUE PARLER. Elle a prouve la PR : la carte
+# est ecartee de la file, meme si la liste globale des PR (cent au plus) ne la
+# connaissait pas. Avant, la phrase « attend son integration » etait suivie de
+# « reprise de #5 » et d'un agent envoye sur un travail deja livre.
+assert_rc 1 "$rc" "la sonde par carte retire la carte de la file"
+assert_eq "" "$n" "et ne sert rien"
+# Et une carte libre derriere elle n'est pas affamee.
+printf '[{"number":5,"created_at":"2026-01-01","labels":[{"name":"factory:in-progress"}]},{"number":7,"created_at":"2026-01-02","labels":[]}]' > "$I"
+n="$(bash "$S" 2>/dev/null)"
+assert_eq "7" "$n" "la carte libre suivante est servie"
+# UN BROUILLON N'EST PAS UNE LIVRAISON : l'integration ne le voit pas, donc une
+# PR laissee en brouillon par un tour tue figeait la carte. C'est une reprise.
+printf '[{"number":5,"created_at":"2026-01-01","labels":[{"name":"factory:in-progress"}]}]' > "$I"
+printf '[{"number":42,"draft":true}]' > "$FAKE_HTTP_DIR/repos_o_r_pulls_state_open_head_o_card_5_per_page_1.json"
+set +e; n="$(bash "$S" 2>"$TESTTMP/err")"; rc=$?; set -e
+assert_rc 0 "$rc" "une PR en brouillon = tour interrompu"
+assert_eq "5" "$n" "la carte au brouillon est reprise"
+assert_contains "$TESTTMP/err" "restée en brouillon" "et le motif le dit"
+printf '[{"number":42}]' > "$FAKE_HTTP_DIR/repos_o_r_pulls_state_open_head_o_card_5_per_page_1.json"
 assert_eq "5" "$n" "... et c'est la liste globale des PR qui le ferait"
 
 # q) meme carte prise, aucune PR nulle part : c'est un tour tue en route, il se
@@ -272,5 +286,19 @@ assert_eq "9" "$n" "un commentaire en fin de ligne ne casse pas le jalon"
 n="$(FACTORY_MILESTONE=v2.0 bash "$S" 2>/dev/null)"
 assert_eq "7" "$n" "l'environnement gagne sur factory.conf"
 make_conf
+
+# --- LA PAGINATION : LA TETE DE LA FILE NE TOMBE PLUS EN SILENCE -------------
+# /issues rend les plus recentes d'abord : au-dela de cent cartes, ce sont les
+# plus ANCIENNES — la tete de la file — qui disparaissaient. L'en-tete Link est
+# suivi, et la plus ancienne, sur la seconde page, est servie.
+printf '[{"number":900,"created_at":"2026-05-01","labels":[]}]' > "$I"
+printf 'Link: <https://api.github.com/repos/o/r/issues?state=open&per_page=100&page=2>; rel="next"\r\n' \
+  > "$FAKE_HTTP_DIR/repos_o_r_issues_state_open_per_page_100.headers"
+printf '[{"number":3,"created_at":"2026-01-01","labels":[]}]' \
+  > "$FAKE_HTTP_DIR/repos_o_r_issues_state_open_per_page_100_page_2.json"
+printf '[]' > "$B"; printf '[]' > "$P"
+n="$(bash "$S" 2>/dev/null)"
+assert_eq "3" "$n" "la carte la plus ancienne, sur la seconde page, est servie"
+rm -f "$FAKE_HTTP_DIR/repos_o_r_issues_state_open_per_page_100.headers"
 
 echo ok

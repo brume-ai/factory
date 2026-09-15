@@ -16,8 +16,10 @@ Au-dessus de la boucle, un **tampon** : un agent joignable en conversation qui
 surveille, répond et carve des cartes, mais n'écrit jamais de code.
 
 > **Ce README décrit la cible.** L'usine existe et tourne ; `factory init`,
-> `factory doctor`, la feature devcontainer et le tampon sont ce vers quoi on va.
-> `factory doctor` dit toujours la vérité sur l'état réel d'une installation.
+> `factory doctor`, `factory config`, `factory bump`, la feature devcontainer et
+> le tampon sont ce vers quoi on va — aucun n'existe encore (`EVOL.md`). Ce qui
+> existe : `make loop`, le ménage, la release, le module NixOS, et le contrat
+> que `docs/release.md` énonce.
 
 ---
 
@@ -142,31 +144,40 @@ que ça. **Le module se partage ; chaque hôte est déclaré par son propriétai
 
 ```nix
 {
-  inputs.factory.url = "github:brume-ai/factory/v1.4.2";
+  # Épinglé sur le MÊME commit que le submodule tools/factory du dépôt : le
+  # module fournit les unités, et ce sont les scripts du submodule qu'elles
+  # exécutent. Deux épinglages qui divergent, c'est une machine qui tourne avec
+  # un outillage différent de celui que le poste croit avoir.
+  inputs.factory.url = "github:brume-ai/factory/<sha du submodule>?dir=nix";
 
-  # dans la configuration de l'hôte
-  services.factory.mon-projet = {
+  # dans la configuration de l'hôte : une machine, une usine
+  imports = [ factory.nixosModules.factory ];
+  services.factory = {
+    enable  = true;
     repoUrl = "https://github.com/mon-org/mon-projet.git";
-    trunk   = "main";       # la production : l'usine n'y écrit jamais
-    staging = "staging";    # la branche de travail : c'est elle que l'unité suit
-    appKeyFile = config.sops.secrets.gh-app.path;
+    staging = "staging";    # la branche de travail : la seule que l'unité clone
   };
 }
 ```
 
-Le module produit l'utilisateur système, le volume d'état, l'unité `factory-loop`
-et sa rotation de journal. Une usine de plus, c'est ce bloc — sur la même machine
-ou sur une autre.
+Le module produit l'utilisateur système, le volume d'état, l'unité `factory-repo`
+(le clone sur la branche de travail), `factory-image` (l'image du devcontainer)
+et `factory-loop`. **Une machine, une usine** : la production n'est pas une
+option du module — elle vit dans le `factory.conf` du dépôt, où la garde des
+deux branches la lit — et la clé de l'App n'y est pas non plus : on la dépose
+sur le volume d'état, `/srv/factory/secrets/gh-app.pem`, avec le `.env`
+composé par `push-env.sh` et les clés SSH autorisées.
 
 Pour **faire naître** cette machine sous Incus plutôt que de l'installer :
 [`docs/vm-nixos.md`](docs/vm-nixos.md) — la recette vérifiée, et les deux pièges
 qui coûtent une demi-journée chacun (Secure Boot refuse le disque de NixOS ; le
 profil Incus par défaut branche sur du NAT, pas sur le LAN).
 
-**Le module n'a jamais la clé de l'App**, seulement le chemin où la lire. La clé
-est un secret chez le propriétaire de l'hôte, déchiffré au démarrage. Sur un
-poste de travail il n'y en a pas : on pousse sous son propre compte, et
-l'outillage le dit au lieu de crier à la configuration cassée.
+**Le module n'a jamais la clé de l'App**, seulement le chemin où la lire, sur
+le volume d'état — hors du store Nix, lisible par tous. Sur un poste de travail
+il n'y en a pas : on pousse sous son propre compte, et `make loop` s'arrête sur
+« jeton d'App impossible à frapper » — c'est le poste qui n'est pas une usine,
+pas la configuration qui est cassée.
 
 ## Le tampon
 
@@ -193,12 +204,15 @@ Deux règles non négociables :
 **Une version se déclare à un seul endroit.**
 
 ```bash
-factory bump v1.4.3      # met à jour la version et le lock, en un commit
+git -C tools/factory fetch && git -C tools/factory checkout <sha>   # l'outillage
+# puis le même <sha> dans l'input `factory` du flake de l'hôte, et un commit des deux
 ```
 
-Puis un redéploiement de la machine. Rien à synchroniser entre deux épinglages :
-c'est exactement la panne que ça évite — une machine qui tourne avec un outillage
-différent de celui que le poste croit avoir.
+Puis un redéploiement de la machine. **Deux épinglages, un seul commit** : c'est
+la discipline qui remplace le `factory bump` promis — une machine qui tourne
+avec un outillage différent de celui que le poste croit avoir est exactement la
+panne à éviter, et tant que la commande n'existe pas, c'est le commit qui tient
+les deux ensemble.
 
 Chez un consommateur qui vend l'exploitation, la discipline est de monter les
 versions **d'abord chez soi**, sur du vrai travail, pendant des jours. Ce qui
