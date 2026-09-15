@@ -63,9 +63,17 @@ fi
 # secrets vivent sous $STATE, et le .env pousse par push-env.sh (via
 # --env-file) pointe ces chemins en ABSOLU. Sans ce montage, GH_APP_KEY reste
 # illisible dans le conteneur et la boucle meurt en frappant ses jetons.
+# LE DEPOT AUSSI, AU MEME CHEMIN QUE SUR L'HOTE — et pas sous un /workspace de
+# convenance. Un consommateur dont les cartes fabriquent des stacks (hook
+# worktree-up qui pilote docker par la socket de l'hote, via run-loop-args)
+# transmet des chemins de montage au DEMON, qui les resout dans le systeme de
+# fichiers de l'HOTE : `/workspace/.worktrees/card-12` n'y existe pas, et la
+# stack monte un repertoire vide en ayant l'air de partir. Lecon payee chez
+# Brume (PIEGES-V1 2.11) : « monter le depot au meme chemin absolu des deux
+# cotes ». Le chemin est le meme dans les deux mondes ; rien ne peut diverger.
 exec "$DOCKER" run --rm --name factory-loop \
   -v "$STATE:$STATE" \
-  -v "$REPO_DIR:/workspace" -w /workspace \
+  -v "$REPO_DIR:$REPO_DIR" -w "$REPO_DIR" \
   -u "$CUSER" -e "HOME=$CHOME" \
   -v "$STATE/secrets/claude-home:$CHOME/.claude" \
   -v "$STATE/secrets/claude-home/.claude.json:$CHOME/.claude.json" \

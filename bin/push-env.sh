@@ -71,7 +71,20 @@ declare -A OVERRIDE=(
 if [[ -r "$ROOT/tools/factory-hooks/env-overrides" ]]; then
   while IFS= read -r line || [[ -n "$line" ]]; do
     case "$line" in \#*|'') continue ;; esac
-    OVERRIDE["${line%%=*}"]="${line#*=}"
+    k="${line%%=*}"; v="${line#*=}"
+    # UNE SEULE INDIRECTION, ET ELLE EST LITTÉRALE : `CLE=$AUTRE` prend la valeur
+    # de AUTRE dans le .env DU POSTE. C'est ce qui permet d'écrire dans un
+    # fichier VERSIONNÉ « le domaine de l'usine est celui que le poste connaît
+    # sous FACTORY_APP_DOMAIN » sans y écrire le domaine lui-même — une adresse
+    # d'infrastructure n'a rien à faire dans un dépôt destiné à être public.
+    # Rien d'autre n'est développé ; une clé source absente est un refus, pas
+    # une chaîne vide projetée en silence.
+    if [[ "$v" =~ ^\$([A-Za-z_][A-Za-z0-9_]*)$ ]]; then
+      src="${BASH_REMATCH[1]}"
+      v="$(_conf_read "$src" "$SRC")"
+      [[ -n "$v" ]] || { echo "push-env: env-overrides demande $k=\$$src, mais $src est absent du .env du poste" >&2; exit 3; }
+    fi
+    OVERRIDE["$k"]="$v"
   done < "$ROOT/tools/factory-hooks/env-overrides"
 fi
 
@@ -114,7 +127,7 @@ kept=(); dropped=(); forced=()
 
 while IFS= read -r line || [[ -n "$line" ]]; do
   case "$line" in \#*|'') continue ;; esac
-  key="${line%%=*}"; key="${key#export }"; key="$(_trim "$key")"
+  key="$(_trim "${line%%=*}")"; key="${key#export}"; key="$(_trim "$key")"
   case "$key" in *[!A-Za-z0-9_]*|'') continue ;; esac
 
   if denied "$key"; then dropped+=("$key"); continue; fi

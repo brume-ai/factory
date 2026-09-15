@@ -72,11 +72,11 @@ les deux sont la même**. Le pourquoi est dans [`docs/release.md`](release.md).
 | `FACTORY_ENV_DENY` | *(vide)* | `conf_get` | `push-env.sh` : liste blanc-separee de variables du `.env` racine qui NE traversent PAS vers l'usine (en plus du motif universel `^(PROD_|.*_SUDO_|FACTORY_(KEY|HOST|SSH_|NAS_|POOL))` — un secret de production, un sudo, ou la cle qui ouvre l'usine elle-meme) |
 | `FACTORY_ENV_DENY_PATTERN` | *(vide)* | `conf_get` | `push-env.sh` : motif regex etendu supplementaire, propre au consommateur |
 | `FACTORY_ENV_PATH` | `$FACTORY_STATE/secrets/env` | environnement direct (`${FACTORY_ENV_PATH:-...}`) | `push-env.sh` : chemin distant ou le `.env` compose est depose |
-| `LOOP_SLEEP` | `60` | variable Make (`?=`, surchargeable sur la ligne de commande `make loop LOOP_SLEEP=30`) | `factory.mk` : attente entre deux sondages quand la file est vide |
-| `LOOP_MAX_RETRY` | `3` | variable Make | `factory.mk` : garde anti-tourniquet, la boucle s'arrete si la meme carte revient plus de N fois sans avancer |
-| `CLAUDE_LAUNCH` | `claude --dangerously-skip-permissions --model claude-opus-5 --effort low` | variable Make | `factory.mk` : commande qui lance l'agent Claude a chaque tour (`MAIN=claude`) |
-| `CODEX_LAUNCH` | `codex exec --dangerously-bypass-approvals-and-sandbox` | variable Make | `factory.mk` : commande qui lance Codex (`MAIN=codex`) |
-| `MAIN` | `claude` | variable Make | `factory.mk` : `claude` ou `codex`, choisit l'agent principal de la boucle |
+| `LOOP_SLEEP` | `60` | `conf_get` dans un `$(shell)` de `factory.mk`, sous `?=` : ligne de commande et environnement, puis `factory.conf`, puis `.env` | `factory.mk` : attente entre deux sondages quand la file est vide |
+| `LOOP_MAX_RETRY` | `3` | idem | `factory.mk` : garde anti-tourniquet, la boucle s'arrete si la meme carte revient plus de N fois sans avancer |
+| `CLAUDE_LAUNCH` | `claude --dangerously-skip-permissions --model claude-opus-5 --effort low` | idem | `factory.mk` : commande qui lance l'agent Claude a chaque tour (`MAIN=claude`) |
+| `CODEX_LAUNCH` | `codex exec --dangerously-bypass-approvals-and-sandbox` | idem | `factory.mk` : commande qui lance Codex (`MAIN=codex`) |
+| `MAIN` | `claude` | idem | `factory.mk` : `claude` ou `codex`, choisit l'agent principal de la boucle |
 | `VERBOSE` | *(vide = silencieux)* | variable Make / ligne de commande | `factory.mk` : `make loop VERBOSE=1` fait passer par `claude-stream.sh` pour suivre le tour en direct |
 | `FACTORY_BIN` | `$(FACTORY_DIR)/bin` (le `bin/` du submodule lui-meme) | variable Make (`?=`) | `factory.mk` : chemin des scripts appeles par la boucle, a surcharger si l'usine est vendorisee ailleurs |
 | `FACTORY_TOKEN` | *(vide = un jeton est frappe via `gh-app-token.sh`)* | environnement direct | **pose par `factory.mk` a chaque tour**, un jeton pour tout le tour ; court-circuite la frappe de jeton dans `wt-cleanup.sh`, `gh-seed-labels.sh`, `gh-next-issue.sh`, `gh-unblock.sh`, `gh-security-triage.py`, `gh-stack.sh`, `gh-pr-attention.sh`, `gh-stage-pr.sh`, `gh-release.sh` ; utilise par les tests hors ligne (`tests/helpers.sh`) et pour travailler a la main avec un jeton deja frappe |
@@ -97,4 +97,4 @@ s'ils existent et ignorés sinon. C'est la surface qui remplace le fork.
 | `worktree-down <nom>` | au nettoyage | démonte ce que `worktree-up` a monté |
 | `housekeeping` | à chaque tour, après le triage de sécurité | carve les alertes propres au projet ; un échec ne tue pas le tour |
 | `run-loop-args` | au lancement du conteneur | une ligne par argument `docker run` supplémentaire |
-| `env-overrides` | à la projection du `.env` | des lignes `CLÉ=VALEUR`, lues **littéralement**, sans expansion |
+| `env-overrides` | à la projection du `.env` | des lignes `CLÉ=VALEUR`, lues **littéralement**, sans expansion — à une exception près : `CLÉ=$AUTRE` prend la valeur de `AUTRE` dans le `.env` du poste (absente = refus), pour nommer une adresse d'infrastructure sans l'écrire dans un fichier versionné |

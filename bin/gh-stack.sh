@@ -81,7 +81,12 @@ body = os.environ.get("FACTORY_BODY", "")
 # Les deux formulations en usage sur le board. Une carte peut en declarer
 # plusieurs ; on ne peut se poser que sur UNE base, donc on prend la derniere
 # couche encore ouverte parmi les dependances (la plus haute de la chaine).
-deps = {int(m) for m in re.findall(r"(?:Bloqu\S*e par|D\S*pend de)\s+#(\d+)", body)}
+# LA MEME GRAMMAIRE QUE gh-unblock.sh : tous les numeros de la ligne, en
+# francais comme en anglais. Deux lecteurs qui divergent sur « Bloquee par #3
+# et #4 » font poser la pile sur #3 pendant que le deblocage attend #3 ET #4.
+deps = set()
+for m in re.finditer(r"(?:Bloqu[ée]e? par|Blocked by|D[ée]pend de)\s*((?:#\d+[ \t,;/et]*)+)", body, re.IGNORECASE):
+    deps |= {int(n) for n in re.findall(r"#(\d+)", m.group(1))}
 heads = {p["head"]["ref"]: p["number"] for p in json.load(sys.stdin)}
 cands = [n for n in deps if "card/%d" % n in heads]
 print("card/%d" % max(cands) if cands else staging, end="")
@@ -286,7 +291,8 @@ for p in sorted(json.load(sys.stdin), key=lambda p: p["number"]):
     if git rebase "origin/$base" "$br"; then
       # --force-with-lease, JAMAIS --force : le premier refuse d'écraser un
       # travail poussé entre-temps, le second le détruit sans le dire.
-      git push --force-with-lease="$br:${expected:-$(git rev-parse "origin/$br")}" origin "$br"
+      git push --force-with-lease="$br:${expected:-$(git rev-parse "origin/$br")}" origin "$br" \
+        || { echo "GH-STACK-REFUSE: origin/$br a bougé pendant le rebase — rien n'a été écrasé, relancez le restack." >&2; return 1; }
       cmd_restack "$br"   # la pile est récursive : les couches au-dessus suivent
     else
       git rebase --abort || true

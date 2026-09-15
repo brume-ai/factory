@@ -250,6 +250,7 @@ en fabrique un second à côté. Ce qui existe se REPREND, il ne se recrée pas 
 ```bash
 git worktree list | grep -q "\.worktrees/card-$N" && echo "environnement existant : reprenez-le"
 git branch --list "card/$N"    # une branche sans worktree : `git worktree add ".worktrees/card-$N" "card/$N"`
+git fetch -q origin "card/$N" 2>/dev/null && echo "la branche existe sur origin (une PR) : partez d'elle, pas de la base"
 ```
 
 ```bash
@@ -331,6 +332,10 @@ git commit                      # sujet impératif, « Refs #<n> » au corps, sa
 git push -u origin "card/$N"
 gh pr create --draft --base "$base" --title "…" --body "…"
 ```
+
+`git push` s'authentifie tout seul : la boucle dit à git, pour tout le tour, de
+demander son jeton à `gh` (`GIT_CONFIG_*`). N'écrivez jamais le jeton dans
+l'URL du remote ni dans un fichier de configuration.
 
 Le corps de la PR porte, dans cet ordre :
 

@@ -315,7 +315,12 @@ delivered="$(printf '%s' "$prs_raw" | python3 -c '
 import json, re, sys
 out = []
 for p in json.load(sys.stdin):
-    m = re.fullmatch(r"card/(\d+)", p["head"]["ref"])
+    # UN BROUILLON N EST PAS UNE LIVRAISON, ici comme dans la sonde par carte
+    # plus bas : compte comme livre, il ecartait la carte de la file pour
+    # toujours — l integration ne le voit pas, personne ne le reprend.
+    if p.get("draft"):
+        continue
+    m = re.fullmatch(r"card/(\d+)", (p.get("head") or {}).get("ref") or "")
     if m: out.append(m.group(1))
 print(" ".join(out))
 ')" || exit $?
