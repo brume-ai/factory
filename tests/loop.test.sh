@@ -49,6 +49,12 @@ assert_rc 0 "$rc" "la boucle se termine proprement sur loop-stop"
 assert_contains "$TESTTMP/agent.log" "issue #12" "le prompt porte le numero de la carte"
 assert_contains "$TESTTMP/agent.log" "usine-test[bot] <usine-test@example.invalid>" "l'identite git de l'usine est exportee"
 assert_contains "$TESTTMP/loop.out" "issue #12" "la boucle annonce la carte"
+# LE DEPOT VIENT DE conf_get, PAS D'UNE VARIABLE MAKE : le prompt le porte.
+assert_contains "$TESTTMP/agent.log" "du dépôt o/r" "le prompt nomme le depot, lu par conf_get"
+# UN JETON PAR TOUR, FRAPPE EN TETE, ET LES SCRIPTS LE REUTILISENT : l'agent
+# voit FACTORY_TOKEN, donc chaque script de menage l'a vu aussi.
+assert_eq "t0k3n" "$(sed -n 's/^jeton: //p' "$TESTTMP/agent.log" | tail -n1)" \
+  "le jeton frappe en tete de tour atteint l'agent (et les scripts avant lui)"
 [ ! -f "$C/.omc/loop.stop" ] || { echo "sentinelle non consommee" >&2; exit 1; }
 
 # LA BRANCHE DE TRAVAIL ATTEINT LE DERNIER MAILLON. `branches_require` vit dans
@@ -258,4 +264,39 @@ grep -q 'x "$(CURDIR)/tools/factory-hooks/housekeeping"' "$REPO/factory.mk" \
 sec="$(grep -n 'gh-security-triage' "$REPO/factory.mk" | tail -1 | cut -d: -f1)"
 hk="$(grep -n 'tools/factory-hooks/housekeeping' "$REPO/factory.mk" | tail -1 | cut -d: -f1)"
 [ "$hk" -gt "$sec" ] || { echo "le crochet doit venir APRES le triage de securite" >&2; exit 1; }
+echo ok
+
+# --- la garde anti-tourniquet SURVIT AU PROCESSUS -----------------------------
+# Sous systemd (Restart=always) un compteur en memoire repartait de zero a
+# chaque relance : une carte coincee coutait LOOP_MAX_RETRY agents par vie de
+# processus, un processus neuf toutes les trente secondes. Le compteur vit dans
+# .omc/loop.retry ; la relance suivante refuse AVANT de lancer un agent.
+C4="$TESTTMP/conso4"; conso "$C4"
+rm -f "$TESTTMP/tours.log"
+set +e
+( cd "$C4" && timeout 60 make loop FACTORY_BIN="$R3" CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" LOOP_MAX_RETRY=1 LOOP_MAIN_BIN=bash ) >/dev/null 2>&1
+( cd "$C4" && timeout 60 make loop FACTORY_BIN="$R3" CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" LOOP_MAX_RETRY=1 LOOP_MAIN_BIN=bash ) > "$TESTTMP/relance.out" 2>&1
+set -e
+[ -f "$C4/.omc/loop.retry" ] || { echo "le compteur anti-tourniquet doit survivre sur disque" >&2; exit 1; }
+assert_eq "1" "$(wc -l < "$TESTTMP/tours.log")" "la relance ne repaie AUCUN agent : le compteur a survecu"
+assert_contains "$TESTTMP/relance.out" "effacez" "et le message dit comment repartir"
+echo ok
+
+# --- un code imprevu du sondage fait dormir, il ne lance pas un agent sur rien -
+# Un 127, un python absent, un `set -e` inattendu : aucun de ces codes n'etait
+# prevu, et la boucle lancait un agent YOLO sur « l'issue # » — vide.
+R5="$TESTTMP/stubs5"; mkdir -p "$R5"; cp "$REPO/tests/stubs/"* "$R5/"
+cat > "$R5/gh-next-issue.sh" <<'STUB'
+#!/usr/bin/env bash
+marker="${LOOP_TEST_DIR:?}/imprevu-vu"
+if [ ! -f "$marker" ]; then touch "$marker"; exit 7; fi
+printf '12'
+STUB
+C5="$TESTTMP/conso5"; conso "$C5"
+: > "$TESTTMP/agent.log"
+set +e; tour "$C5" "$R5" > "$TESTTMP/imprevu.out" 2>&1; rc=$?; set -e
+assert_rc 0 "$rc" "la boucle survit a un code imprevu et finit sur loop-stop"
+assert_contains "$TESTTMP/imprevu.out" "code 7" "le code imprevu est dit"
+assert_not_contains "$(cat "$TESTTMP/agent.log")" "issue # " "aucun agent lance sur une carte vide"
+assert_contains "$TESTTMP/agent.log" "issue #12" "le tour suivant sert la carte"
 echo ok
