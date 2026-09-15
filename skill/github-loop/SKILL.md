@@ -401,7 +401,10 @@ capture manque, dites-le à la ligne où elle devrait être.
 
 La preuve va dans le **corps de la proposition** (son ordre est à l'étape 5), et
 les captures voyagent **dans la branche de la carte**, sous `.evidence/<n>/`, en
-noms numérotés et parlants (`01-composeur-vide.png`, `02-reponse-streamee.png`) :
+noms numérotés et parlants (`01-composeur-vide.png`, `02-reponse-streamee.png`)
+— **sauf si `VERIFY.md` dit autrement** : où vivent les captures est une
+politique du dépôt (une branche orpheline d'artefacts, par exemple), et c'est
+là qu'elle s'écrit. Le défaut, sans VERIFY.md :
 
 ```bash
 mkdir -p ".evidence/$N" && cp <captures retenues> ".evidence/$N/"
