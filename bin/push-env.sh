@@ -46,7 +46,11 @@ DEST="${FACTORY_ENV_PATH:-$STATE/secrets/env}"
 # Le motif garde-fou, lui, est universel : un secret de production ou un sudo
 # n'a JAMAIS sa place sur une usine, quel que soit le projet.
 read -r -a DENY <<<"$(conf_get FACTORY_ENV_DENY)"
-deny_pattern='^(PROD_|.*_SUDO_)'
+# ET LES CLÉS DE L'USINE ELLE-MÊME : FACTORY_KEY est la clé SSH qui OUVRE la
+# machine, FACTORY_HOST son adresse — projetées, elles donnaient à un agent qui
+# tourne sans surveillance le chemin pour entrer sur l'hôte qui le fait tourner.
+# Aucun consommateur n'a de raison de les vouloir là-bas : universel.
+deny_pattern='^(PROD_|.*_SUDO_|FACTORY_(KEY|HOST|SSH_|NAS_|POOL))'
 extra_pattern="$(conf_get FACTORY_ENV_DENY_PATTERN)"
 
 denied() {  # <nom> : vrai si la variable reste sur le poste
@@ -110,13 +114,21 @@ kept=(); dropped=(); forced=()
 
 while IFS= read -r line || [[ -n "$line" ]]; do
   case "$line" in \#*|'') continue ;; esac
-  key="${line%%=*}"
+  key="${line%%=*}"; key="${key#export }"; key="$(_trim "$key")"
   case "$key" in *[!A-Za-z0-9_]*|'') continue ;; esac
 
   if denied "$key"; then dropped+=("$key"); continue; fi
   if [[ -n "${OVERRIDE[$key]+x}" ]]; then continue; fi   # écrites en bloc plus bas
   if [[ " ${FACTORY_OWNED[*]} " == *" $key "* ]]; then continue; fi
-  printf '%s\n' "$line" >> "$tmp"
+  # LA LIGNE EST NORMALISÉE, PAS RECOPIÉE. Le lecteur d'en face est
+  # `docker run --env-file`, qui n'a PAS la grammaire de lib.sh : il prend
+  # `K="v"` avec ses guillemets, `K=v # c` avec son commentaire, et ignore en
+  # silence `export K=v` et `K = v`. Le .env d'un poste porte tout ça (lib.sh
+  # le tolère, donc on l'écrit), et l'usine lisait des valeurs fausses ou
+  # absentes sans un mot. `_conf_read` applique la grammaire de lib.sh, et
+  # on écrit la forme nue que --env-file comprend.
+  val="$(_conf_read "$key" <(printf '%s\n' "$line"))"
+  printf '%s=%s\n' "$key" "$val" >> "$tmp"
   kept+=("$key")
 done < "$SRC"
 

@@ -128,7 +128,7 @@ assert_file_lacks "$H/calls.log" "PATCH repos/o/r/issues/14" "--apply : une cart
 assert_file_lacks "$H/calls.log" "issues/77/comments" "--apply : une pull request n'est ni commentee ni fermee"
 assert_file_lacks "$H/calls.log" "issues/34" "--apply : le numero colle par le squash n'est jamais touche"
 assert_contains "$TESTTMP/err" "2 carte(s) fermée(s)" "--apply : le compte est dit"
-assert_contains "$TESTTMP/err" "#14 est déjà fermée" "--apply : le saut est dit, pas silencieux"
+assert_contains "$TESTTMP/err" "#14 est « closed »" "--apply : le saut est dit, pas silencieux"
 assert_contains "$TESTTMP/err" "#77 est une pull request" "--apply : le refus de la PR est dit"
 
 # LE COMMENTAIRE PRÉCÈDE LA FERMETURE. Une carte fermée sans trace ne dit plus
@@ -167,7 +167,7 @@ assert_not_contains "$out" "#12" "tag suivant : la plage part du tag precedent, 
 assert_contains "$H/calls.log" "Sortie en \`v1.2.0\`" "tag suivant : la version nommee est le DERNIER tag"
 assert_file_lacks "$H/calls.log" "PATCH repos/o/r/issues/12" "tag suivant : les cartes deja sorties ne sont pas retouchees"
 assert_contains "$TESTTMP/err" "#999" "reference morte : elle est NOMMEE sur stderr"
-assert_contains "$TESTTMP/err" "illisible" "reference morte : et le motif est dit"
+assert_contains "$TESTTMP/err" "inconnue de GitHub (HTTP 404)" "reference morte : et le motif est dit"
 assert_contains "$H/calls.log" "PATCH repos/o/r/issues/15" "reference morte : la release continue, la carte suivante est fermee"
 
 # --- d) AUCUNE CARTE À LIVRER ------------------------------------------------
@@ -275,5 +275,40 @@ set +e; err="$(FACTORY_ROOT="$TESTTMP/pas-git" bash "$S" 2>&1 >/dev/null)"; rc=$
 assert_rc 3 "$rc" "pas un depot git : 3"
 assert_contains "$err" "n'est pas un dépôt git" "pas un depot git : le message le dit"
 assert_eq "" "$(cat "$H/calls.log")" "pas un depot git : pas un appel (journal pre-cree)"
+
+# --- l) UN TAG HORS DE LA PRODUCTION NE NOMME PAS LA VERSION -----------------
+# Un tag posé sur la branche de TRAVAIL (un rc, un `latest` flottant) n'est pas
+# sorti : `describe` le prenait pour V dès qu'il était plus proche de la tête.
+# Ici la production est à v1.2.0 ; un `rc-2` est posé sur staging, PLUS RÉCENT,
+# et jamais mergé. La version reste v1.2.0, et rc-2 ne borne rien.
+g checkout -q -b staging
+g commit -q --allow-empty -m "feat: pas encore sortie
+
+Refs #16"
+g tag rc-2
+g push -q origin staging --tags
+g checkout -q main
+fix 'repos/o/r/issues/16' '{"number":16,"state":"open","title":"Pas encore sortie"}'
+: > "$H/calls.log"
+out="$(bash "$S" 2>"$TESTTMP/err")" && rc=0 || rc=$?
+assert_rc 0 "$rc" "tag hors production : rc 0"
+assert_not_contains "$out" "#16" "tag hors production : une carte non sortie n'est pas listée"
+assert_not_contains "$(cat "$TESTTMP/err")" "rc-2" "tag hors production : rc-2 ne nomme ni la version ni la plage"
+
+# --- m) UN REFUS DE L'API SUR UNE CARTE ARRÊTE LA RELEASE ---------------------
+# 401/403 concernent l'App entière, pas ce numéro : traités carte par carte,
+# ils vidaient la liste à blanc en silence — « aucune carte à fermer » sur une
+# App sans droits.
+g commit -q --allow-empty -m "feat: une carte de plus
+
+Refs #17"
+g tag v1.4.0
+g push -q origin main --tags
+printf '403' > "$H/repos_o_r_issues_17.code"
+printf '{"message":"Resource not accessible by integration"}' > "$H/repos_o_r_issues_17.json"
+set +e; err="$(bash "$S" 2>&1 >/dev/null)"; rc=$?; set -e
+assert_rc 3 "$rc" "403 sur une carte : la release s'arrête, elle ne saute pas la carte"
+assert_not_contains "$err" "aucune carte à fermer" "403 sur une carte : surtout pas « aucune carte »"
+rm -f "$H/repos_o_r_issues_17.code" "$H/repos_o_r_issues_17.json"
 
 echo ok

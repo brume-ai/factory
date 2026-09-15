@@ -10,10 +10,23 @@
 #
 # A SOURCER depuis les scripts de bin/ :  . "$HERE/lib.sh"
 
+# DEPUIS UN WORKTREE, LA RACINE EST L'ARBRE PRINCIPAL. Une carte travaille dans
+# `.worktrees/card-<n>`, où ni `.env` (gitignoré) ni les secrets n'existent :
+# `git rev-parse --show-toplevel` y rendait le worktree, `conf_get` n'y trouvait
+# rien, et l'agent lisait « configuration cassée » depuis son propre
+# environnement. Le skill lui faisait exporter FACTORY_ROOT à la main — mais
+# chaque appel Bash d'un agent est un shell NEUF, et l'export mourait avec le
+# sien. Le répertoire git COMMUN, lui, ne ment pas : c'est `.git` de l'arbre
+# principal, et son parent est la racine où vit la configuration.
 factory_root() {
   if [ -n "${FACTORY_ROOT:-}" ]; then printf '%s' "$FACTORY_ROOT"
   elif [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then printf '%s' "$CLAUDE_PROJECT_DIR"
-  else git rev-parse --show-toplevel 2>/dev/null || pwd
+  else
+    local common
+    common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    if [ -n "$common" ]; then printf '%s' "$(dirname "$common")"
+    else pwd
+    fi
   fi
 }
 

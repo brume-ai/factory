@@ -119,7 +119,16 @@ git -C "$ROOT" rev-parse -q --verify "$PROD^{commit}" >/dev/null || {
 
 # TOUT SE DÉRIVE ICI, ET AVANT LE PREMIER APPEL À GITHUB : un dépôt qui n'a rien
 # sorti doit être refusé sans avoir frappé de jeton ni dépensé d'aller-retour.
-V="$(git -C "$ROOT" describe --tags --abbrev=0 "$PROD" 2>/dev/null || true)"
+# « LE DERNIER TAG » EST LE PLUS RÉCEMMENT CRÉÉ PARMI CEUX QUE LA PRODUCTION
+# CONTIENT — pas le plus PROCHE dans le graphe. `git describe` rendait le tag le
+# plus proche de la tête, tous tags confondus : un `deploy-…`, un `rc`, un
+# `latest` flottant posé sur un commit de la branche de travail (donc jamais
+# dans la production) faussait V ou la plage, et la release fermait les cartes
+# d'une version qui n'existe pas. `--merged` ne retient que les tags dont le
+# commit est DANS la production ; `creatordate` ordonne les tags annotés par
+# leur date de tag et les légers par celle de leur commit ; à date égale (deux
+# tags dans la même seconde), le numéro de version le plus haut gagne.
+V="$(git -C "$ROOT" tag --merged "$PROD" --sort=-v:refname --sort=-creatordate 2>/dev/null | head -n1 || true)"
 [ -n "$V" ] || {
   echo "gh-release: aucun tag sur $PROD : la release se FERME après le geste humain, elle ne l'annonce pas." >&2
   echo "  Mergez la branche de travail dans « $FACTORY_TRUNK », taguez la version, poussez — puis relancez." >&2
@@ -134,7 +143,16 @@ git -C "$ROOT" merge-base --is-ancestor "$V" "$PROD" || {
   echo "gh-release: « $V » n'est pas dans la branche de production : rien n'est sorti, aucune carte n'est fermée." >&2
   exit 3
 }
-PREV="$(git -C "$ROOT" describe --tags --abbrev=0 "$V^" 2>/dev/null || true)"
+# La borne basse : le tag précédent DANS LA PRODUCTION, et qui précède V dans
+# le graphe — pas un tag posé sur le même commit (deux tags sur une même
+# version donneraient une plage vide), ni un tag qui ne descend pas de V.
+PREV=""
+while read -r t; do
+  [ -n "$t" ] && [ "$t" != "$V" ] || continue
+  [ "$(git -C "$ROOT" rev-parse "$t^{commit}")" != "$(git -C "$ROOT" rev-parse "$V^{commit}")" ] || continue
+  git -C "$ROOT" merge-base --is-ancestor "$t" "$V" 2>/dev/null || continue
+  PREV="$t"; break
+done <<< "$(git -C "$ROOT" tag --merged "$PROD" --sort=-v:refname --sort=-creatordate 2>/dev/null || true)"
 if [ -n "$PREV" ]; then
   RANGE="$PREV..$V"
 else
@@ -169,9 +187,13 @@ fi
 CURL_RETRY=(--retry 3 --retry-delay 2 --retry-connrefused
             --connect-timeout 10 --max-time 60)
 
+# LE CODE HTTP EST DÉPOSÉ DANS UN FICHIER, pas une variable : `api` est appelée
+# dans un `$( )`, où une variable meurt avec le sous-shell.
+API_CODE_FILE="$(mktemp)"; trap 'rm -f "$API_CODE_FILE"' EXIT
 api() {  # <chemin> [méthode] [corps] — imprime le corps · 3 = refus · 4 = passager
   local body code m="${2:-GET}" data="${3:-}" rc
   body="$(mktemp)"; trap 'rm -f "$body"' RETURN
+  : > "$API_CODE_FILE"
   code="$(curl -sS "${CURL_RETRY[@]}" -o "$body" -w '%{http_code}' -X "$m" \
           -H "Authorization: Bearer $TOKEN" \
           -H "Accept: application/vnd.github+json" \
@@ -180,11 +202,16 @@ api() {  # <chemin> [méthode] [corps] — imprime le corps · 3 = refus · 4 = 
     echo "gh-release: transport KO sur /$1 (curl $rc) — raté passager, relancez" >&2
     return 4
   fi
+  printf '%s' "$code" > "$API_CODE_FILE"
   if [[ "$code" == 000 || "$code" == 5* || "$code" == 429 ]]; then
     echo "gh-release: HTTP $code sur /$1 — raté passager, relancez" >&2
     return 4
   fi
-  [[ "$code" == 2* ]] || { echo "gh-release: HTTP $code sur /$1" >&2; return 3; }
+  if [[ "$code" == 403 ]] && grep -qi 'rate limit' "$body"; then
+    echo "gh-release: HTTP 403 (quota d'API atteint) sur /$1 — raté passager, relancez" >&2
+    return 4
+  fi
+  [[ "$code" == 2* ]] || { echo "gh-release: HTTP $code sur /$1 — $(head -c 300 "$body" | tr '\n' ' ')" >&2; return 3; }
   if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$body" 2>/dev/null; then
     echo "gh-release: réponse illisible sur /$1 (corps tronqué) — raté passager, relancez" >&2
     return 4
@@ -209,13 +236,18 @@ while read -r n; do
   # existe, qu'elle soit une carte et pas une pull request, et qu'elle soit
   # encore ouverte — c'est cette dernière qui rend le script rejouable.
   issue="$(api "repos/$GH_REPO/issues/$n")" || {
-    rc=$?
-    # 3 = l'API refuse CE numéro (une référence qui ne désigne rien, une faute
-    # de frappe dans un message de commit) : une release ne s'arrête pas pour
-    # ça, mais elle le DIT. 4 = le transport flanche, et là il faut s'arrêter :
-    # continuer laisserait des cartes fermées et d'autres non, sans rien dire.
+    rc=$?; API_CODE="$(cat "$API_CODE_FILE")"
+    # 404/410 = l'API ne connaît pas CE numéro (une référence qui ne désigne
+    # rien, une faute de frappe dans un message de commit) : une release ne
+    # s'arrête pas pour ça, mais elle le DIT. Tout autre refus — 401, 403,
+    # 301, un dépôt mal nommé — concerne la configuration ENTIÈRE et s'arrête :
+    # traité carte par carte, il vidait la liste à blanc en silence, et la
+    # release annonçait « aucune carte à fermer » sur une App sans droits.
+    # 4 = le transport flanche, et là aussi il faut s'arrêter : continuer
+    # laisserait des cartes fermées et d'autres non, sans rien dire.
     [ "$rc" = 3 ] || exit "$rc"
-    echo "gh-release: #$n référencée par un commit mais illisible sur GitHub — ignorée" >&2
+    [[ "$API_CODE" == 404 || "$API_CODE" == 410 ]] || exit 3
+    echo "gh-release: #$n référencée par un commit mais inconnue de GitHub (HTTP $API_CODE) — ignorée" >&2
     continue
   }
   read -r state kind title <<<"$(printf '%s' "$issue" | python3 -c '
@@ -227,8 +259,10 @@ print(d.get("state", "?"), "pr" if "pull_request" in d else "carte", (d.get("tit
     echo "gh-release: #$n est une pull request, pas une carte — ignorée" >&2
     continue
   fi
-  if [ "$state" = closed ]; then
-    echo "gh-release: #$n est déjà fermée — rien à refaire" >&2
+  # « OUVERTE », pas « pas fermée » : un état absent ou inconnu ne fait pas
+  # fermer une carte.
+  if [ "$state" != open ]; then
+    echo "gh-release: #$n est « $state » — rien à refaire" >&2
     continue
   fi
 
@@ -250,6 +284,11 @@ print(d.get("state", "?"), "pr" if "pull_request" in d else "carte", (d.get("tit
   api "repos/$GH_REPO/issues/$n/labels/${STAGED//:/%3A}" DELETE >/dev/null 2>&1 || true
   api "repos/$GH_REPO/issues/$n" PATCH '{"state":"closed","state_reason":"completed"}' >/dev/null || exit $?
   closed=$((closed+1))
+  # TROIS ÉCRITURES PAR CARTE, ET UNE PAUSE ENTRE DEUX CARTES : la limite
+  # SECONDAIRE de GitHub est de l'ordre de 80 écritures par minute, et une
+  # release d'une trentaine de cartes la tapait à mi-chemin — arrêt en 4, une
+  # moitié fermée, l'autre non. Une seconde par carte suffit.
+  sleep 1
   echo "gh-release: #$n fermée — sortie en $V" >&2
 done <<< "$cards"
 

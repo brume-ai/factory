@@ -82,7 +82,20 @@ PRIORITY = label("PRIO")
 # hors du jeu gelé ferait réécrire, sous les yeux du relecteur et entre deux
 # tours de ménage, la spec de ce qui est DÉJÀ intégré — la file de relecture ne
 # dirait plus ce qui a été livré.
+# BLOQUÉE ET EN ARBITRAGE AUSSI : ces deux-là portent une DÉCISION dans leur
+# corps (« Bloquée par #N », la question posée à l'humain) que le PATCH d'un
+# corps recomposé effaçait — la carte perdait son bloqueur, gh-unblock ne la
+# rendait plus jamais à la file. Ils sont passés par l'appelant comme les
+# autres ; absents, ils ne gèlent rien (un consommateur sur une ancienne
+# recette n'est pas cassé, il est moins protégé, et ça se dit).
 FROZEN = {label("BUSY"), label("DONE"), label("STAGED")}
+for _opt in ("BLOCKED", "HUMAN"):
+    if os.environ.get(_opt):
+        FROZEN.add(os.environ[_opt])
+    else:
+        print(f"gh-security-triage: {_opt} absent de l'environnement — les cartes "
+              "bloquées ou en arbitrage ne seront pas gelées (mettez factory.mk à jour)",
+              file=sys.stderr)
 
 
 def token() -> str:
@@ -172,7 +185,7 @@ def sev_rank(s):
 def from_dependabot():
     alerts = api("dependabot/alerts?state=open", paginate=True)
     if alerts is None:
-        return {}
+        return None
     groups = {}
     for a in alerts:
         groups.setdefault(a["dependency"]["manifest_path"], []).append(a)
@@ -216,7 +229,7 @@ def from_dependabot():
 def from_code_scanning():
     alerts = api("code-scanning/alerts?state=open", paginate=True)
     if alerts is None:
-        return {}
+        return None
     groups = {}
     for a in alerts:
         groups.setdefault(a["rule"]["id"], []).append(a)
@@ -254,7 +267,7 @@ def from_code_scanning():
 def from_secret_scanning():
     alerts = api("secret-scanning/alerts?state=open", paginate=True)
     if alerts is None:
-        return {}
+        return None
     cards = {}
     for a in alerts:
         n = a["number"]
@@ -288,10 +301,29 @@ def marker(key):
     return f"<!-- factory-security:{key} -->"
 
 
+SURFACES = (("dependabot", from_dependabot),
+            ("code-scanning", from_code_scanning),
+            ("secret-scanning", from_secret_scanning))
+
+
 def main():
     wanted = {}
-    for source in (from_dependabot, from_code_scanning, from_secret_scanning):
-        wanted.update(source())
+    # UNE SURFACE MUETTE NE PROUVE RIEN. Un 403 (fonctionnalité désactivée, App
+    # sans permission), un 404, un 5xx PASSAGER sur Dependabot rendaient « zéro
+    # alerte » — et la réconciliation, plus bas, FERMAIT toutes les cartes de
+    # cette surface comme « sans objet », y compris celles prises ou intégrées.
+    # Un hoquet réseau effaçait la file de sécurité. Une surface qu'on n'a pas
+    # pu lire est mise de côté : ni création, ni mise à jour, ni fermeture de
+    # ses cartes ce tour-ci, et ça se dit.
+    dead = []
+    for name, source in SURFACES:
+        cards = source()
+        if cards is None:
+            dead.append(name)
+            print(f"gh-security-triage: surface « {name} » illisible ce tour-ci — "
+                  "ses cartes sont laissées telles quelles", file=sys.stderr)
+            continue
+        wanted.update(cards)
 
     issues = api("issues?state=open&per_page=100", paginate=True)
     if issues is None:
@@ -377,6 +409,19 @@ def main():
     # est mécanique (zéro alerte sur la surface), donc la fermeture l'est aussi.
     for key, issue in sorted(existing.items()):
         if key in wanted:
+            continue
+        if key.split(":", 1)[0] in dead:
+            continue
+        # UNE CARTE GELÉE NE SE FERME PAS D'ICI. Prise : un agent tient ce
+        # worktree, et fermer sa carte sous ses pieds rend sa PR orpheline.
+        # Livrée ou intégrée : c'est la RELEASE qui ferme, et seulement elle —
+        # les alertes ont disparu parce que le correctif est dans la branche
+        # de travail, ce qui est exactement l'état « attend la release ».
+        labels = {l["name"] for l in issue["labels"]}
+        if labels & FROZEN:
+            print(f"gh-security-triage: carte #{issue['number']} n'a plus d'alerte "
+                  "mais est prise, livrée, intégrée ou en attente — laissée à la release",
+                  file=sys.stderr)
             continue
         api(f"issues/{issue['number']}/comments", "POST",
             {"body": "Fermée : plus aucune alerte ouverte sur cette surface. "
