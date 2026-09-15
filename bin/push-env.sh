@@ -84,6 +84,17 @@ if [[ -r "$ROOT/tools/factory-hooks/env-overrides" ]]; then
       v="$(_conf_read "$src" "$SRC")"
       [[ -n "$v" ]] || { echo "push-env: env-overrides demande $k=\$$src, mais $src est absent du .env du poste" >&2; exit 3; }
     fi
+    # ET LA FORME COMPOSÉE, `${AUTRE}` À L'INTÉRIEUR D'UNE VALEUR : une DSN
+    # d'usine s'écrit `postgresql://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}`
+    # — l'hôte est celui du réseau compose de l'usine, les identifiants ceux du
+    # poste, et aucun secret n'entre dans le fichier versionné. Même règle :
+    # une clé source absente est un refus.
+    while [[ "$v" =~ \$\{([A-Za-z_][A-Za-z0-9_]*)\} ]]; do
+      src="${BASH_REMATCH[1]}"
+      sv="$(_conf_read "$src" "$SRC")"
+      [[ -n "$sv" ]] || { echo "push-env: env-overrides compose $k avec \${$src}, mais $src est absent du .env du poste" >&2; exit 3; }
+      v="${v//\$\{$src\}/$sv}"
+    done
     OVERRIDE["$k"]="$v"
   done < "$ROOT/tools/factory-hooks/env-overrides"
 fi

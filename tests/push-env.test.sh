@@ -5,7 +5,7 @@ R="$TESTTMP"
 printf 'GARDEE=oui\nPROD_SECRET=non\nREFUSEE_PAR_LISTE=non\nFORCEE=poste\nFACTORY_APP_DOMAIN=usine.lan\nFACTORY_KEY=/cle\nexport EXPORTEE="avec guillemets" # commentaire\n' > "$R/.env"
 make_conf 'GH_REPO=o/r' 'FACTORY_ENV_DENY=REFUSEE_PAR_LISTE'
 mkdir -p "$R/tools/factory-hooks"
-printf 'FORCEE=usine\nAPP_DOMAIN=$FACTORY_APP_DOMAIN\n' > "$R/tools/factory-hooks/env-overrides"
+printf 'FORCEE=usine\nAPP_DOMAIN=$FACTORY_APP_DOMAIN\nDSN=postgresql://${GARDEE}:${FORCEE}@postgres:5432/db\n' > "$R/tools/factory-hooks/env-overrides"
 
 # Stub ssh : la lecture des identifiants rend GH_APP_* ; l'ecriture capture stdin.
 cat > "$R/stub-ssh" <<EOF
@@ -26,6 +26,8 @@ if grep -q "PROD_SECRET" "$R/pushed.env"; then echo "PROD_ non filtre" >&2; exit
 # L'INDIRECTION `CLE=$AUTRE` prend la valeur du .env du poste : le domaine de
 # l'usine se nomme dans un fichier versionne sans y ecrire l'adresse.
 assert_contains "$R/pushed.env" "APP_DOMAIN=usine.lan" "l'indirection du hook lit le .env du poste"
+# LA FORME COMPOSEE : ${AUTRE} a l'interieur d'une valeur, lu dans le .env du poste.
+assert_contains "$R/pushed.env" "DSN=postgresql://oui:poste@postgres:5432/db" "les \${AUTRE} d'une valeur composee sont lus dans le .env du poste"
 # LES CLES DE L'USINE ELLE-MEME NE PARTENT PAS (motif universel).
 if grep -q "FACTORY_KEY" "$R/pushed.env"; then echo "FACTORY_KEY projetee sur l'usine" >&2; exit 1; fi
 # LA LIGNE EST NORMALISEE pour `docker --env-file` : ni export, ni guillemets,
