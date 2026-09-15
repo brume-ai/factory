@@ -20,6 +20,8 @@ export FACTORY_DOCKER_BIN="$REPO/tests/fakes/docker"
 bash "$REPO/bin/run-loop.sh"
 
 assert_contains "$FAKE_DOCKER_LOG" "-v $STATE:$STATE" "le volume d'etat est monte a l'identique (C1)"
+assert_contains "$FAKE_DOCKER_LOG" "-v $REPO_DIR:$REPO_DIR" "le depot est monte au MEME chemin que sur l'hote : une stack montee par la socket de l'hote resout ce chemin la-bas"
+assert_contains "$FAKE_DOCKER_LOG" "-w $REPO_DIR" "et la boucle y travaille"
 assert_contains "$FAKE_DOCKER_LOG" "-u vscode" "l'utilisateur du conteneur est fixe (C2)"
 assert_contains "$FAKE_DOCKER_LOG" "-v $STATE/secrets/claude-home:/home/vscode/.claude" "le home claude suit CUSER/CHOME (C2)"
 assert_contains "$FAKE_DOCKER_LOG" "--env-file $STATE/secrets/env" "le .env pousse par push-env.sh est charge"
