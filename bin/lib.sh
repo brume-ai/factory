@@ -166,6 +166,50 @@ label_get() {  # <rôle> : imprime le nom du label ; 3 sur un rôle inconnu
   esac
 }
 
+# LE VERDICT DE CI, ÉCRIT UNE FOIS, LU PAR L'INTÉGRATION ET PAR L'ENTRETIEN.
+# Lit sur stdin la réponse de `commits/<sha>/check-runs?per_page=100` et
+# imprime UN mot : ok · failure · pending · none · truncated.
+#
+# LISTE BLANCHE, PAS LISTE NOIRE. La première version ne connaissait qu'un seul
+# mot rouge, « failure » : tout le reste passait pour vert. Or l'API rend aussi
+# `cancelled` (une annulation manuelle, un `concurrency: cancel-in-progress`, un
+# `timeout-minutes` dépassé — mesuré : 256 jobs annulés sur 1 068 chez Brume),
+# `timed_out`, `action_required`, `stale`, `startup_failure`. Aucun de ces états
+# n'a vu le code tourner jusqu'au bout, et l'intégration les mergeait en
+# disant « PR intégrée ». Un feu vert, c'est `success` ; `neutral` et `skipped`
+# sont ce que GitHub lui-même laisse passer pour un contrôle requis. Tout autre
+# mot conclu est rouge, et un contrôle pas encore conclu est « en cours ».
+#
+# LA LISTE ENTIÈRE OU RIEN. `total_count` dit combien de contrôles existent ;
+# la page en porte au plus cent (trente sans `per_page`, et Brume en a
+# vingt-huit). Juger sur une page incomplète, c'est juger sans avoir lu la
+# queue — où se trouve précisément le job e2e qui finit le dernier. « truncated »
+# refuse, et le dit.
+#
+# TOUS IGNORÉS = AUCUN N'A TOURNÉ. Une CI dont chaque job est `skipped` n'a rien
+# prouvé de plus qu'une absence de CI : même refus, même mot — « none ».
+CI_VERDICT_PY="$(cat <<'PY'
+import json, sys
+d = json.load(sys.stdin)
+runs = d.get("check_runs", [])
+total = d.get("total_count", len(runs))
+if not runs: print("none"); sys.exit(0)
+if total > len(runs): print("truncated"); sys.exit(0)
+green = {"success", "neutral", "skipped"}
+done = [r for r in runs if r.get("status") == "completed" and r.get("conclusion") is not None]
+# Un rouge conclu se dit AVANT d attendre le reste : l entretien peut envoyer
+# un agent reparer pendant que les autres jobs finissent.
+if any(r.get("conclusion") not in green for r in done):
+    print("failure")
+elif len(done) < len(runs):
+    print("pending")
+elif all(r.get("conclusion") == "skipped" for r in runs):
+    print("none")
+else:
+    print("ok")
+PY
+)"
+
 # Un shell sur l'usine, en direct. FACTORY_SSH_BIN permet aux tests (et a un
 # transport exotique) de remplacer ssh sans toucher aux appelants.
 factory_ssh() {
