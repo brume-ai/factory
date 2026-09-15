@@ -118,7 +118,12 @@ MILESTONE="$(conf_get FACTORY_MILESTONE)"
 # FACTORY_TOKEN court-circuite la frappe : tests hors ligne, ou usage a la main
 # avec un jeton deja frappe.
 if [ -n "${FACTORY_TOKEN:-}" ]; then TOKEN="$FACTORY_TOKEN"
-else TOKEN="$(bash "$HERE/gh-app-token.sh")" || exit $?
+else
+  # UN CODE INATTENDU DU FRAPPEUR N'EST PAS « RIEN A FAIRE ». Il ne rend que 3
+  # et 4 par contrat ; tout autre code (un `set -e` sur une commande qui manque,
+  # un python absent) sortait d'ici en 1, que la boucle lit « file vide » — et
+  # l'usine dormait sur une cle privee illisible. Ce qui n'est ni 3 ni 4 est un 4.
+  TOKEN="$(bash "$HERE/gh-app-token.sh")" || { rc=$?; [ "$rc" = 3 ] && exit 3; exit 4; }
 fi
 
 # UN ÉCHEC DE TRANSPORT N'EST PAS UNE ERREUR DE CONFIGURATION, et les confondre
@@ -142,10 +147,11 @@ fi
 CURL_RETRY=(--retry 3 --retry-delay 2 --retry-connrefused
             --connect-timeout 10 --max-time 60)
 
+NEXT_PAGE_FILE="$(mktemp)"; trap 'rm -f "$NEXT_PAGE_FILE"' EXIT
 api() {  # <chemin> — imprime le corps · 3 = refus de l'API · 4 = raté passager
-  local body code rc
-  body="$(mktemp)"; trap 'rm -f "$body"' RETURN
-  code="$(curl -sS "${CURL_RETRY[@]}" -o "$body" -w '%{http_code}' \
+  local body code rc hdrs
+  body="$(mktemp)"; hdrs="$(mktemp)"; trap 'rm -f "$body" "$hdrs"' RETURN
+  code="$(curl -sS "${CURL_RETRY[@]}" -o "$body" -D "$hdrs" -w '%{http_code}' \
     -H "Authorization: Bearer $TOKEN" \
     -H "Accept: application/vnd.github+json" \
     "https://api.github.com/$1")" || rc=$?
@@ -161,7 +167,13 @@ api() {  # <chemin> — imprime le corps · 3 = refus de l'API · 4 = raté pass
     return 4
   fi
   if [[ "$code" != 2* ]]; then
-    echo "gh-next-issue: HTTP $code sur /$1" >&2
+    # UN 403 DE QUOTA N'EST PAS UN 403 DE PERMISSION : le corps le dit, on le
+    # lit, et un quota atteint se repare en attendant — c'est un 4.
+    if [[ "$code" == 403 ]] && grep -qi 'rate limit' "$body"; then
+      echo "gh-next-issue: HTTP 403 (quota d'API atteint) sur /$1 — raté passager, on resonde" >&2
+      return 4
+    fi
+    echo "gh-next-issue: HTTP $code sur /$1 — $(head -c 300 "$body" | tr '\n' ' ')" >&2
     # Le 403 a UNE cause dominante : l'App n'a pas la permission. On la nomme,
     # plutôt que de laisser chercher côté jeton ou réseau. Ce script ne touche
     # plus qu'une seule surface — Issues et Pull requests, toutes deux couvertes
@@ -184,6 +196,32 @@ api() {  # <chemin> — imprime le corps · 3 = refus de l'API · 4 = raté pass
     return 4
   fi
   cat "$body"
+  # LA PAGE SUIVANTE, SI L'EN-TÊTE LINK EN NOMME UNE. Les listes s'arrêtaient à
+  # cent : au-delà, la file perdait sa TRAÎNE en silence — et comme /issues rend
+  # les plus récentes d'abord, c'est la TÊTE de la file (les plus anciennes) qui
+  # disparaissait. Le chemin de la page suivante est laissé dans un FICHIER, pas
+  # une variable : `api` est toujours appelée dans un `$( )`, où une variable
+  # meurt avec le sous-shell.
+  : > "$NEXT_PAGE_FILE"
+  if [[ -f "$hdrs" ]]; then
+    tr -d '\r' < "$hdrs" | sed -n 's/^[Ll]ink:.*<https:\/\/api\.github\.com\/\([^>]*\)>; rel="next".*/\1/p' | head -1 > "$NEXT_PAGE_FILE"
+  fi
+}
+
+# Une liste ENTIÈRE : toutes les pages, concaténées en un seul tableau JSON.
+# Bornée à vingt pages — deux mille cartes ouvertes ne sont plus une file.
+api_all() {  # <chemin> — imprime un tableau JSON · mêmes codes que `api`
+  local path="$1" page acc="[]" n=0
+  while [[ -n "$path" && "$n" -lt 20 ]]; do
+    page="$(api "$path")" || return $?
+    acc="$(printf '%s\n%s' "$acc" "$page" | python3 -c '
+import json, sys
+a, b = sys.stdin.read().split("\n", 1)
+print(json.dumps(json.loads(a) + json.loads(b)))
+')" || return 4
+    path="$(cat "$NEXT_PAGE_FILE")"; n=$((n+1))
+  done
+  printf '%s' "$acc"
 }
 
 # UNE seule requête, partition côté client. L'API n'a pas de « sans ce label »,
@@ -297,9 +335,29 @@ if [[ -n "$busy" ]]; then
   # le 2 août, trois tours d'affilée sur #27 après livraison, chacun se contentant
   # de constater qu'il n'y avait rien à faire.
   pr_raw="$(api "repos/$GH_REPO/pulls?state=open&head=${GH_REPO%%/*}:card/$busy&per_page=1")" || exit $?
-  pr="$(printf '%s' "$pr_raw" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["number"] if d else "")')"
-  if [[ -n "$pr" ]]; then
+  # Deux mots : le numéro de la PR et son état de brouillon, « - » quand il
+  # n'y en a pas — un champ vide décalerait le `read`.
+  read -r pr draft <<<"$(printf '%s' "$pr_raw" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print((d[0]["number"], d[0].get("draft")) if d else ("-", "-"))' | tr -d "(),'")"
+  [[ "$pr" != "-" ]] || pr=""
+  if [[ -n "$pr" && "$draft" == "True" ]]; then
+    # UN BROUILLON N'EST PAS UNE LIVRAISON : l'intégration passe à côté sans le
+    # voir, et le skill ne le lève qu'après les preuves — la partie la plus
+    # longue du tour, donc la plus exposée à un tour tué. Compté comme livré, ce
+    # brouillon figeait la carte pour toujours : « livrée » pour le sondage,
+    # « brouillon » pour l'intégration, personne pour reprendre. C'est un tour
+    # interrompu, et il se reprend.
+    echo "gh-next-issue: reprise de l'issue #$busy (tour interrompu : la PR #$pr est restée en brouillon)" >&2
+    printf '%s' "$busy"; exit 0
+  elif [[ -n "$pr" ]]; then
     echo "gh-next-issue: #$busy est livrée (PR #$pr ouverte) — elle attend son intégration, pas un agent" >&2
+    # ET ELLE EST ÉCARTÉE POUR DE BON. La sonde vient de prouver la PR ; sans
+    # cette ligne, la liste générale ci-dessous — qui ne connaît que les cent
+    # premières PR — la reprenait quand même (« reprise de #N, déjà prise »), en
+    # contredisant la phrase juste au-dessus, et affamait la carte libre suivante.
+    delivered="$delivered $busy"
   else
     echo "gh-next-issue: reprise de l'issue #$busy (tour interrompu, aucune PR)" >&2
     printf '%s' "$busy"; exit 0
@@ -308,7 +366,7 @@ fi
 
 # TOUTES les issues ouvertes, pas seulement les étiquetées : `choose` écarte les
 # mises de côté. Interroger `labels=$READY_LABEL` ici était le cœur du défaut.
-issues_raw="$(api "repos/$GH_REPO/issues?state=open&per_page=100")" || exit $?
+issues_raw="$(api_all "repos/$GH_REPO/issues?state=open&per_page=100")" || exit $?
 
 # `|| true` : `read` rend 1 sur une entrée vide, et c'est le cas NORMAL — aucune
 # carte à prendre. Sans lui, `set -e` sortirait en 1 ici même, en sautant le bloc

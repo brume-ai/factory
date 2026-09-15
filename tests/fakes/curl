@@ -2,13 +2,14 @@
 # Faux curl pour les tests : repond depuis $FAKE_HTTP_DIR, journalise l'appel.
 # Voir le contrat dans tests/helpers.sh (tache 2 du plan d'extraction).
 set -euo pipefail
-out=""; wfmt=""; method="GET"; url=""; data=""
+out=""; wfmt=""; method="GET"; url=""; data=""; hdrs=""
 args=("$@")
 i=0
 while [ $i -lt ${#args[@]} ]; do
   a="${args[$i]}"
   case "$a" in
     -o) i=$((i+1)); out="${args[$i]}" ;;
+    -D) i=$((i+1)); hdrs="${args[$i]}" ;;
     -w) i=$((i+1)); wfmt="${args[$i]}" ;;
     -X) i=$((i+1)); method="${args[$i]}" ;;
     -d) i=$((i+1)); data="${args[$i]}" ;;
@@ -27,5 +28,9 @@ if [ -f "$FAKE_HTTP_DIR/$slug.json" ]; then
 fi
 [ -f "$FAKE_HTTP_DIR/$slug.code" ] && code="$(cat "$FAKE_HTTP_DIR/$slug.code")"
 if [ -n "$out" ]; then printf '%s' "$body" > "$out"; else printf '%s' "$body"; fi
+# Les en-tetes de reponse, si le test en a pose (pagination par `Link`).
+if [ -n "$hdrs" ]; then
+  if [ -f "$FAKE_HTTP_DIR/$slug.headers" ]; then cp "$FAKE_HTTP_DIR/$slug.headers" "$hdrs"; else : > "$hdrs"; fi
+fi
 [ -n "$wfmt" ] && printf '%s' "$code"
 exit 0
