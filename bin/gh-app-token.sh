@@ -45,7 +45,11 @@ hdr="$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)"
 # iat reculé de 60 s : GitHub rejette un JWT dont l'horloge avance, et une VM qui
 # vient de démarrer n'a pas toujours fini de se synchroniser en NTP.
 pay="$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$((now-60))" "$((now+540))" "$app_id" | b64url)"
-sig="$(printf '%s.%s' "$hdr" "$pay" | openssl dgst -sha256 -sign "$key" -binary | b64url)"
+# UNE CLÉ QU'OPENSSL NE SAIT PAS LIRE EST UNE CONFIGURATION CASSÉE (3), pas
+# « rien à faire » : sous `set -e`, l'échec d'openssl dans le pipeline sortait
+# en 1, que la boucle lit « file vide », et l'usine dormait sur un .pem corrompu.
+sig="$(printf '%s.%s' "$hdr" "$pay" | openssl dgst -sha256 -sign "$key" -binary 2>/dev/null | b64url)" \
+  && [[ -n "$sig" ]] || { echo "gh-app-token: la clé privée $key n'est pas lisible par openssl (fichier tronqué, format inattendu ?)" >&2; exit 3; }
 jwt="$hdr.$pay.$sig"
 
 body="$(mktemp)"; trap 'rm -f "$body"' EXIT
@@ -68,4 +72,7 @@ fi
 # 401 sur ce point d'entrée est en revanche une VRAIE erreur de configuration :
 # clé privée qui ne correspond plus à l'App, ou horloge trop décalée pour le JWT.
 [[ "$code" == 2* ]] || { echo "gh-app-token: HTTP $code — $(cat "$body")" >&2; exit 3; }
-python3 -c 'import json,sys; print(json.load(sys.stdin)["token"], end="")' < "$body"
+# Un 2xx dont le corps ne porte pas de jeton (tronqué en transfert) est un raté
+# PASSAGER : sans cette ligne python sortait en 1, lu « file vide » par la boucle.
+python3 -c 'import json,sys; print(json.load(sys.stdin)["token"], end="")' < "$body" \
+  || { echo "gh-app-token: réponse sans jeton lisible (corps tronqué ?) — raté passager" >&2; exit 4; }
