@@ -159,7 +159,7 @@ for i in json.load(sys.stdin):
     # « Bloquée par #3 et #4 », « Bloquée par #3, #4 », « Blocked by #3 » : tous
     # les numeros de la ligne comptent, et l anglais aussi — deux lecteurs
     # (gh-stack.sh, ce script) ne doivent pas se contredire sur la meme ligne.
-    m = re.search(r"(?:Bloqu[ée]e? par|Blocked by)\s*((?:#\d+[\s,;/et]*)+)", i.get("body") or "", re.IGNORECASE)
+    m = re.search(r"(?:Bloqu[ée]e? par|Blocked by|D[ée]pend de)\s*((?:#\d+[ \t,;/et]*)+)", i.get("body") or "", re.IGNORECASE)
     if m:
         print(i["number"], " ".join(re.findall(r"#(\d+)", m.group(1))))
     else:

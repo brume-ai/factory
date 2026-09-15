@@ -178,6 +178,12 @@ in
     # devcontainer du projet.
     environment.systemPackages = with pkgs; [ git jq curl openssl python3 gnumake ];
 
+    # MEME CHOSE POUR DOCKER : ses deux magasins sont des binds `nofail` depuis
+    # le volume ; demarre avant eux, il ecrirait ses couches sur le disque
+    # racine, sous le point de montage, et ne les reverrait jamais.
+    systemd.services.docker.unitConfig.RequiresMountsFor =
+      lib.mkIf (cfg.stateDevice != null) [ "/var/lib/docker" "/var/lib/containerd" ];
+
     virtualisation.docker = {
       enable = true;
       autoPrune = {
@@ -194,6 +200,13 @@ in
       description = "Usine : depot a jour";
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
+      # LE VOLUME D'ETAT D'ABORD. Il est `nofail`, donc pas ordonne avant
+      # local-fs.target : sur un demarrage ou le disque apparait tard, cette
+      # unite testait `secrets/gh-app.pem` AVANT le montage, sortait en 3, et
+      # toute la chaine Requires (image, boucle) restait couchee en ayant l'air
+      # d'une machine sans prerequis. Les autres unites l'obtiennent par leur
+      # WorkingDirectory (RequiresMountsFor implicite) ; celle-ci n'en a pas.
+      unitConfig.RequiresMountsFor = [ cfg.stateDir ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;

@@ -142,6 +142,12 @@ api() {  # <chemin> [méthode] [corps] — imprime le corps · 3 = refus · 4 = 
   # reste un 200 : c'est le `json.load` d'un consommateur qui explosait trois
   # étages plus bas, en trace Python illisible qui ressemblait à un bug de code
   # et n'était qu'un octet manquant.
+  # UN 204 N'A PAS DE CORPS, et ce n'est pas une troncature : la suppression
+  # d'une référence git rend 204 vide, et la valider comme du JSON faisait
+  # annoncer « la branche n'a pas pu être supprimée » à CHAQUE merge réussi.
+  if [[ "$code" == 204 || ! -s "$body" ]]; then
+    return 0
+  fi
   if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$body" 2>/dev/null; then
     echo "gh-stage-pr: réponse illisible sur /$1 (corps tronqué) — raté passager, on reprendra" >&2
     return 4
@@ -276,11 +282,14 @@ print(head.get("ref") or "-",
     echo "gh-stage-pr: PR #$n — la carte #$card est illisible ; on n'intègre pas une proposition sans carte." >&2
     continue
   }
-  read -r c_state c_human <<<"$(printf '%s' "$carte" | HUMAN="$HUMAN_LABEL" python3 -c '
+  # Capturé AVANT le `read` : le `||` d'un `read <<<"$(…)"` porte sur `read`,
+  # qui rend 0 sur la ligne vide qu'un python en échec laisse derrière lui.
+  c_info="$(printf '%s' "$carte" | HUMAN="$HUMAN_LABEL" python3 -c '
 import json, os, sys
 d = json.load(sys.stdin)
 print(d.get("state") or "-", any(l.get("name") == os.environ["HUMAN"] for l in d.get("labels") or []))
 ')" || { echo "gh-stage-pr: carte #$card de forme inattendue — PR #$n écartée pour ce tour." >&2; continue; }
+  read -r c_state c_human <<<"$c_info"
   if [[ "$c_state" != "open" ]]; then
     echo "gh-stage-pr: PR #$n — la carte #$card est « $c_state », pas ouverte : on n'intègre pas le travail d'une carte retirée de la file." >&2
     continue

@@ -89,6 +89,11 @@ assert_contains "$H/calls.log" \
 # delete_branch_on_merge a false, et une pile posee dessus resterait invisible.
 assert_contains "$H/calls.log" 'DELETE repos/o/r/git/refs/heads/card/12' \
   "la branche de carte est supprimee apres le merge"
+# GitHub rend 204 SANS CORPS sur cette suppression : ce n'est pas une troncature,
+# et le tour ne doit pas annoncer un rate.
+printf '204' > "$H/repos_o_r_git_refs_heads_card_12.code"; : > "$H/repos_o_r_git_refs_heads_card_12.json"
+set +e; err="$(bash "$S" 2>&1 >/dev/null)"; rc=$?; set -e
+assert_not_contains "$err" "n'a pas pu être supprimée" "un 204 vide est une suppression reussie"
 assert_contains "$H/calls.log" 'POST repos/o/r/issues/12/labels {"labels":["factory:staged"]}' \
   "l'etat neuf est pose sur la carte"
 assert_contains "$H/calls.log" 'DELETE repos/o/r/issues/12/labels/factory%3Adelivered' \

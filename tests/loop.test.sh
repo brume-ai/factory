@@ -35,7 +35,9 @@ EOF
 # la garde de branche : sans borne, le cas tournait jusqu'a ce qu'on tue le
 # terminal. Borne, il rend un code non nul et l'assertion de message parle.
 tour() {  # <chemin du consommateur> [FACTORY_BIN]
-  ( cd "$1" && timeout 120 make loop \
+  # FACTORY_TOKEN est RETIRE de l'environnement : t_setup le pose pour les
+  # sondages hors ligne, mais la boucle doit prouver qu'elle frappe le sien.
+  ( cd "$1" && unset FACTORY_TOKEN && timeout 120 make loop \
       FACTORY_BIN="${2:-$REPO/tests/stubs}" \
       CLAUDE_LAUNCH="bash $REPO/tests/stubs/agent.sh" \
       LOOP_MAIN_BIN=bash )
@@ -53,8 +55,12 @@ assert_contains "$TESTTMP/loop.out" "issue #12" "la boucle annonce la carte"
 assert_contains "$TESTTMP/agent.log" "du dépôt o/r" "le prompt nomme le depot, lu par conf_get"
 # UN JETON PAR TOUR, FRAPPE EN TETE, ET LES SCRIPTS LE REUTILISENT : l'agent
 # voit FACTORY_TOKEN, donc chaque script de menage l'a vu aussi.
-assert_eq "t0k3n" "$(sed -n 's/^jeton: //p' "$TESTTMP/agent.log" | tail -n1)" \
+assert_eq "frappe-ce-tour" "$(sed -n 's/^jeton: //p' "$TESTTMP/agent.log" | tail -n1)" \
   "le jeton frappe en tete de tour atteint l'agent (et les scripts avant lui)"
+# ET GIT SAIT S'AUTHENTIFIER : la boucle dit a git, par GIT_CONFIG_*, de
+# demander son jeton a gh pour tout le tour.
+assert_contains "$TESTTMP/agent.log" "git-credential: !gh auth git-credential" \
+  "git recoit le credential helper de gh pour le tour"
 [ ! -f "$C/.omc/loop.stop" ] || { echo "sentinelle non consommee" >&2; exit 1; }
 
 # LA BRANCHE DE TRAVAIL ATTEINT LE DERNIER MAILLON. `branches_require` vit dans
@@ -238,7 +244,7 @@ chmod +x "$TESTTMP/agent-muet.sh"
 C3="$TESTTMP/conso3"; conso "$C3"
 rm -f "$TESTTMP/tours.log"
 set +e
-( cd "$C3" && timeout 60 make loop \
+( cd "$C3" && unset FACTORY_TOKEN && timeout 60 make loop \
     FACTORY_BIN="$R3" \
     CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" \
     LOOP_MAX_RETRY=2 \
@@ -274,8 +280,8 @@ echo ok
 C4="$TESTTMP/conso4"; conso "$C4"
 rm -f "$TESTTMP/tours.log"
 set +e
-( cd "$C4" && timeout 60 make loop FACTORY_BIN="$R3" CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" LOOP_MAX_RETRY=1 LOOP_MAIN_BIN=bash ) >/dev/null 2>&1
-( cd "$C4" && timeout 60 make loop FACTORY_BIN="$R3" CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" LOOP_MAX_RETRY=1 LOOP_MAIN_BIN=bash ) > "$TESTTMP/relance.out" 2>&1
+( cd "$C4" && unset FACTORY_TOKEN && timeout 60 make loop FACTORY_BIN="$R3" CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" LOOP_MAX_RETRY=1 LOOP_MAIN_BIN=bash ) >/dev/null 2>&1
+( cd "$C4" && unset FACTORY_TOKEN && timeout 60 make loop FACTORY_BIN="$R3" CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" LOOP_MAX_RETRY=1 LOOP_MAIN_BIN=bash ) > "$TESTTMP/relance.out" 2>&1
 set -e
 [ -f "$C4/.omc/loop.retry" ] || { echo "le compteur anti-tourniquet doit survivre sur disque" >&2; exit 1; }
 assert_eq "1" "$(wc -l < "$TESTTMP/tours.log")" "la relance ne repaie AUCUN agent : le compteur a survecu"

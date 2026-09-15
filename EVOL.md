@@ -294,6 +294,19 @@ et pourquoi.
 - **`Restart=always` relance une boucle arrêtée exprès** (code 3, 4, 5) toutes
   les trente secondes. Chaque relance échoue avant de lancer un agent — le
   compteur persistant y veille — donc ça coûte du journal, pas des tours.
+- **Un mot du relecteur sur une PR mergée HORS périmètre** (la PR de release)
+  est réexaminé à chaque tour tant qu'il reste dans la fenêtre : deux lectures
+  et une ligne de journal par tour, aucune carte. Du bruit, pas un défaut ; à
+  éteindre par un accusé si ça finit par coûter.
+- **`gh-release.sh` choisit la borne basse par date de création**, pas par
+  distance dans le graphe : un correctif tagué APRÈS sur une ligne plus
+  ancienne (v1.2.1 après v1.3.0) élargit la plage à blanc aux cartes de
+  v1.3.0 — déjà fermées, donc sautées à l'`--apply`. Bruit dans la liste à
+  blanc, pas de fermeture indue.
+- **Le triage de sécurité n'a pas de test de réconciliation** : « surface
+  illisible → cartes laissées » et « carte gelée → jamais fermée d'ici » ne
+  sont prouvés que par lecture. Le harnais est en Python (urllib), pas en curl ;
+  il lui faut un faux serveur.
 - **La fenêtre de cent commentaires** de `gh-pr-attention.sh` (conversation et
   ligne, dépôt-entier) : un mot plus ancien que cent commentaires n'est jamais
   carvé. Et l'accusé « carvée en #M » est un commentaire de conversation : un

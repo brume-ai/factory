@@ -63,7 +63,10 @@ for dir in "$ROOT"/.worktrees/card-*; do
   # remonterait au dépôt PARENT, dont l'arbre porte `?? .worktrees/`, et ce
   # résidu rendrait « carte N, 1 fichier non commité » à chaque tour. Un reste
   # de `worktree remove` interrompu se dit, et se saute.
-  if ! git -C "$ROOT" worktree list --porcelain 2>/dev/null | grep -qx "worktree $dir"; then
+  # Chemins CANONIQUES des deux côtés : git imprime le chemin enregistré, et une
+  # racine atteinte par un lien symbolique ferait passer tout worktree pour un
+  # reste de nettoyage.
+  if ! git -C "$ROOT" worktree list --porcelain 2>/dev/null | grep -qx "worktree $(realpath "$dir")"; then
     echo "wt-resume: $dir n'est plus un worktree enregistré (reste d'un nettoyage interrompu) — ignoré ; \`git worktree prune\` puis \`rm -rf\` le retirent" >&2
     continue
   fi

@@ -16,29 +16,31 @@ SHELL := bash
 FACTORY_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 FACTORY_BIN ?= $(FACTORY_DIR)/bin
 
-# L'ENVIRONNEMENT GAGNE SUR factory.conf, ICI AUSSI. Make redefinit une variable
-# venue de l'environnement quand le fichier inclus la pose, et c'est la valeur
-# du FICHIER qu'il passe ensuite aux recettes : `FACTORY_STAGING=x make loop`
-# donnait `x` aux scripts lances a la main et la valeur de factory.conf a la
-# boucle — l'inverse du contrat « environnement, puis factory.conf, puis .env,
-# sans exception », sur un nom de branche. On releve donc ce qui vient de
-# l'environnement AVANT l'include, et on le repose APRES : la recette voit
-# l'environnement tel qu'il etait, et `conf_get` y lit la bonne priorite.
-FACTORY_ENV_VARS := $(foreach v,$(.VARIABLES),$(if $(filter environment,$(origin $(v))),$(v)))
-$(foreach v,$(FACTORY_ENV_VARS),$(eval FACTORY_ENVSAVE_$(v) := $(subst $$,$$$$,$(value $(v)))))
--include $(CURDIR)/factory.conf
-$(foreach v,$(FACTORY_ENV_VARS),$(eval $(v) := $(subst $$,$$$$,$(value FACTORY_ENVSAVE_$(v)))))
+# factory.conf N'EST PLUS INCLUS PAR MAKE, ET C'EST VOULU. Un include en
+# faisait un SECOND lecteur de la configuration, plus faible que `conf_get`
+# (pas de .env, guillemets gardes tels quels) et qui GAGNAIT sur l'environnement
+# pour toute cle que le fichier definit — l'inverse du contrat « environnement,
+# puis factory.conf, puis .env ». La tentative de le corriger en relevant
+# l'environnement avant l'include et en le reposant apres passait chaque valeur
+# par `$(eval …)`, ou un `#` ouvre un commentaire et un saut de ligne une
+# nouvelle ligne de Makefile : sur la machine, `--env-file` injecte tout le .env
+# dans l'environnement, et un secret portant un `#` arrivait tronque aux
+# recettes, un shell exportant une fonction faisait echouer TOUTES les cibles.
+# Les quelques cles que Make lit lui-meme passent donc par `conf_get`, dans un
+# `$(shell)`, avec `?=` : l'environnement et la ligne de commande gagnent, puis
+# factory.conf, puis .env — le meme ordre que partout, sans eval.
+factory_conf = $(shell . "$(FACTORY_DIR)/bin/lib.sh" 2>/dev/null && FACTORY_ROOT="$(CURDIR)" conf_get "$(1)" "$(2)")
 
 # Attente entre deux SONDAGES quand la file est vide. Le sondage coûte une requête
 # HTTP, pas un agent : on peut donc attendre peu sans rien gaspiller. Une usine
 # n'a pas à s'arrêter quand la file se vide — elle attend du travail.
-LOOP_SLEEP     ?= 60
+LOOP_SLEEP     ?= $(call factory_conf,LOOP_SLEEP,60)
 # Garde anti-tourniquet. Un agent qui rend la main sans faire avancer sa carte —
 # typiquement parce qu'il a lancé une vérification EN FOND puis terminé son tour —
 # la voit revenir au sondage suivant, et un agent NEUF repart de zéro. Observé le
 # 2 août : quatre tours sur la même carte, quatre suites e2e complètes payées
 # pour rien. Au-delà de ce compte, la boucle s'arrête et le DIT.
-LOOP_MAX_RETRY ?= 3
+LOOP_MAX_RETRY ?= $(call factory_conf,LOOP_MAX_RETRY,3)
 # `make loop` lance en YOLO (--dangerously-skip-permissions, sans surveillance) sur
 # Opus 5 à effort LOW, via CLAUDE_LAUNCH (surchargeable). Les prompts restent
 # COURTS À DESSEIN : toute la procédure vit dans le skill `github-loop` — un fait,
@@ -47,9 +49,9 @@ LOOP_MAX_RETRY ?= 3
 # skill, pas ce prompt.
 # PAS FABLE 5 : voir la lecon du 7 aout dans l'historique Brume (pot de credits
 # distinct, tours qui meurent en 4 s en ressemblant a une usine occupee).
-CLAUDE_LAUNCH  ?= claude --dangerously-skip-permissions --model claude-opus-5 --effort low
-CODEX_LAUNCH   ?= codex exec --dangerously-bypass-approvals-and-sandbox
-MAIN           ?= claude
+CLAUDE_LAUNCH  ?= $(call factory_conf,CLAUDE_LAUNCH,claude --dangerously-skip-permissions --model claude-opus-5 --effort low)
+CODEX_LAUNCH   ?= $(call factory_conf,CODEX_LAUNCH,codex exec --dangerously-bypass-approvals-and-sandbox)
+MAIN           ?= $(call factory_conf,MAIN,claude)
 
 FACTORY_BOLD := $(shell tput bold 2>/dev/null)
 FACTORY_CYAN := $(shell tput setaf 6 2>/dev/null)
@@ -296,6 +298,13 @@ loop:
 			echo "$(FACTORY_CYAN)— jeton d'App impossible à frapper : configuration cassée. Arrêt. —$(FACTORY_RST)" ; exit 3 ; \
 		fi ; \
 		export GH_TOKEN ; export FACTORY_TOKEN="$$GH_TOKEN" ; \
+		# GIT POUSSE AVEC LE JETON DE gh, ET C'EST LA BOUCLE QUI LE DIT A GIT. Le \
+		# conteneur n'a aucun credential helper et son ~/.gitconfig ne survit pas : \
+		# `git push -u origin card/N` demandait un mot de passe que personne ne \
+		# tape, et chaque agent improvisait (`gh auth setup-git`, un jeton dans \
+		# l'URL du remote…). GIT_CONFIG_* est lu par git a chaque commande, herite \
+		# par tous les shells du tour, et ne touche aucun fichier. \
+		export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.https://github.com.helper GIT_CONFIG_VALUE_0='!gh auth git-credential' ; \
 		auth="Authorization: Basic $$(printf 'x-access-token:%s' "$$GH_TOKEN" | base64 -w0)" ; \
 		if ! GIT_TERMINAL_PROMPT=0 git -c "http.https://github.com/.extraheader=$$auth" -C "$(CURDIR)" fetch -q origin "$$FACTORY_STAGING" 2>/dev/null ; then \
 			echo "$(FACTORY_CYAN)— fetch de origin/$$FACTORY_STAGING impossible : la boucle tourne avec l'outillage qu'elle a. —$(FACTORY_RST)" ; \

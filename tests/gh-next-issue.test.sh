@@ -179,12 +179,15 @@ assert_eq "7" "$n" "la carte libre suivante est servie"
 # PR laissee en brouillon par un tour tue figeait la carte. C'est une reprise.
 printf '[{"number":5,"created_at":"2026-01-01","labels":[{"name":"factory:in-progress"}]}]' > "$I"
 printf '[{"number":42,"draft":true}]' > "$FAKE_HTTP_DIR/repos_o_r_pulls_state_open_head_o_card_5_per_page_1.json"
+# ET LE BROUILLON EST DANS LA LISTE GENERALE DES PR — le cas normal : c'est elle
+# qui le comptait comme livre et empechait la sonde par carte de le voir.
+printf '[{"number":42,"draft":true,"head":{"ref":"card/5"}}]' > "$P"
 set +e; n="$(bash "$S" 2>"$TESTTMP/err")"; rc=$?; set -e
 assert_rc 0 "$rc" "une PR en brouillon = tour interrompu"
 assert_eq "5" "$n" "la carte au brouillon est reprise"
 assert_contains "$TESTTMP/err" "restée en brouillon" "et le motif le dit"
 printf '[{"number":42}]' > "$FAKE_HTTP_DIR/repos_o_r_pulls_state_open_head_o_card_5_per_page_1.json"
-assert_eq "5" "$n" "... et c'est la liste globale des PR qui le ferait"
+printf '[]' > "$P"
 
 # q) meme carte prise, aucune PR nulle part : c'est un tour tue en route, il se
 #    reprend, et il se DIT autrement.
