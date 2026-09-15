@@ -85,6 +85,18 @@ endif
 .PHONY: loop
 loop:
 	@command -v $(LOOP_MAIN_BIN) >/dev/null 2>&1 || { echo "$(LOOP_MAIN_BIN) CLI introuvable dans le PATH"; exit 1; }
+	@# LES PREREQUIS DE L'OUTILLAGE, VERIFIES UNE FOIS : chaque script de bin/ lit
+	@# du JSON en python3, frappe son jeton avec curl (et openssl, que gh-app-token.sh verifie lui-meme). Un python3
+	@# absent faisait rendre 4 au frappeur — « rate passager » — et la boucle
+	@# dormait puis recommencait, un jeton emis et jete a chaque tour, avec un
+	@# message qui envoyait regarder le reseau.
+	@for t in python3 curl git; do command -v $$t >/dev/null 2>&1 || { echo "factory.mk: $$t introuvable dans le PATH — l'usine en a besoin (voir docs/configuration.md)" >&2; exit 3; }; done
+	@# LOOP_SLEEP ET LOOP_MAX_RETRY SONT DES ENTIERS, ET NON VIDES : une valeur
+	@# vide (« LOOP_SLEEP = » dans factory.conf, ou exportee vide) n'est pas
+	@# « non definie » pour Make, le defaut ne s'applique pas, et `sleep` sans
+	@# operande echouait — sondage en continu contre l'API, jusqu'au quota.
+	@case "$(LOOP_SLEEP)" in ''|*[!0-9]*) echo "factory.mk: LOOP_SLEEP doit etre un entier de secondes (« $(LOOP_SLEEP) »)" >&2; exit 3;; esac
+	@case "$(LOOP_MAX_RETRY)" in ''|*[!0-9]*) echo "factory.mk: LOOP_MAX_RETRY doit etre un entier (« $(LOOP_MAX_RETRY) »)" >&2; exit 3;; esac
 	@# IDENTITÉ DE COMMIT DE L'USINE. Une CI de dépôt consommateur qui vérifie
 	@# l'auteur des commits (allowlist bot, check CLA...) refuse tout auteur
 	@# qu'elle ne reconnaît pas. Sans identité explicite, l'agent signe avec
@@ -267,9 +279,23 @@ loop:
 	# neuf toutes les trente secondes. Le fichier porte « sujet compte » ; il \
 	# est efface quand un tour change de sujet, et par un humain qui relance \
 	# apres avoir regarde ce qui bloquait. \
-	retry="$(CURDIR)/.omc/loop.retry" ; \
-	last="" ; same=0 ; \
-	if [ -f "$$retry" ]; then read -r last same < "$$retry" || true ; fi ; \
+	retry="$(CURDIR)/.omc/loop.retry" ; halt="$(CURDIR)/.omc/loop.halt" ; \
+	# UN ARRET VOLONTAIRE EST UN ARRET, MEME SOUS Restart=always. Le tourniquet \
+	# sortait en 4 ; sur la machine, systemd relancait trente secondes plus \
+	# tard, et chaque relance payait un jeton, un fetch et tout le menage avant \
+	# de relire le compteur et de ressortir — sans alerte, jusqu'a une main. \
+	# Le sentinelle est relu ICI, avant le premier geste : une relance s'arrete \
+	# en une ligne, et dit quoi effacer. \
+	if [ -f "$$halt" ]; then \
+		echo "$(FACTORY_CYAN)— la boucle a ete arretee : $$(cat "$$halt"). Regardez, puis effacez $$halt et $$retry pour relancer. —$(FACTORY_RST)" ; \
+		exit 4 ; \
+	fi ; \
+	last="" ; same=0 ; since=0 ; \
+	if [ -f "$$retry" ]; then read -r last same since < "$$retry" || true ; fi ; \
+	# LE COMPTEUR SE PERIME : un retour LEGITIME du meme sujet des jours plus \
+	# tard (carte rouverte, PR fermee a la main) n'est pas un tourniquet. Plus \
+	# vieux qu'un jour, il repart de zero. \
+	if [ -n "$$since" ] && [ "$$since" -gt 0 ] 2>/dev/null && [ $$(( $$(date +%s) - since )) -gt 86400 ]; then last="" ; same=0 ; fi ; \
 	while true; do \
 		if stop_asked ; then break ; fi ; \
 		# LA GARDE DE BRANCHE EST RELUE A CHAQUE TOUR, pas seulement au \
@@ -315,7 +341,15 @@ loop:
 		# d'avancer ; si l'usine vit dans un submodule, son pointeur a peut-etre \
 		# bouge avec. Sans cette ligne on recree le defaut du 2 aout (outillage \
 		# perime qui a l'air de marcher) par une nouvelle porte. \
-		git -c "http.https://github.com/.extraheader=$$auth" -C "$(CURDIR)" submodule update --init --quiet 2>/dev/null || true ; \
+		# SAUF SI QUELQU'UN Y TRAVAILLE : sur un poste, un submodule dont HEAD est \
+		# sur une BRANCHE est l'arbre d'un humain ; le re-detacher a chaque tour \
+		# changerait son arbre sous ses pieds sans un mot. Une usine a toujours \
+		# son submodule detache sur le pointeur. \
+		if git -C "$(CURDIR)/tools/factory" symbolic-ref -q HEAD >/dev/null 2>&1; then \
+			echo "$(FACTORY_CYAN)— tools/factory est sur une branche (un humain y travaille) : le pointeur n'est pas rafraîchi ce tour-ci. —$(FACTORY_RST)" ; \
+		else \
+			git -c "http.https://github.com/.extraheader=$$auth" -C "$(CURDIR)" submodule update --init --quiet 2>/dev/null || true ; \
+		fi ; \
 		# `|| true` SAUF SUR LE 3. Le ménage a le droit de rater — un DNS qui \
 		# bafouille, une carte qui a bougé sous le script — et un tour ne meurt \
 		# pas pour ça. Mais 3 ne veut pas dire « ça a raté », il veut dire « la \
@@ -354,7 +388,7 @@ loop:
 			if [ "$$rzc" = 0 ]; then \
 				why="$${rz#*$$(printf '\t')}" ; issue="$${rz%%$$(printf '\t')*}" ; \
 				prompt="$(LOOP_PROMPT_RESUME)" ; \
-				prompt="$${prompt//@ISSUE@/$$issue}" ; prompt="$${prompt//@WHY@/$$why}" ; prompt="$${prompt//@REPO@/$$GH_REPO}" ; \
+				prompt="$${prompt//@ISSUE@/"$$issue"}" ; prompt="$${prompt//@WHY@/"$$why"}" ; prompt="$${prompt//@REPO@/"$$GH_REPO"}" ; \
 				echo "$(FACTORY_CYAN)— reprise : carte #$$issue ($$why) —$(FACTORY_RST)" ; \
 				prc=9 ; \
 			fi ; \
@@ -363,7 +397,7 @@ loop:
 		if [ "$$prc" = 0 ]; then \
 			why="$${pr#*$$(printf '\t')}" ; pr="$${pr%%$$(printf '\t')*}" ; \
 			issue="pr$$pr" ; \
-			prompt="$(LOOP_PROMPT_PR)" ; prompt="$${prompt//@PR@/$$pr}" ; prompt="$${prompt//@WHY@/$$why}" ; prompt="$${prompt//@REPO@/$$GH_REPO}" ; \
+			prompt="$(LOOP_PROMPT_PR)" ; prompt="$${prompt//@PR@/"$$pr"}" ; prompt="$${prompt//@WHY@/"$$why"}" ; prompt="$${prompt//@REPO@/"$$GH_REPO"}" ; \
 			echo "$(FACTORY_CYAN)— entretien : PR #$$pr ($$why) —$(FACTORY_RST)" ; \
 		elif [ "$$prc" != 9 ]; then \
 		# prc=9 (reprise) saute CE bloc ET le sondage de carte neuve ci-dessous : \
@@ -384,7 +418,7 @@ loop:
 		# ne tombaient dans aucune branche, et la boucle lancait un agent YOLO \
 		# sur « l'issue # » — vide — LOOP_MAX_RETRY fois. \
 		prompt="$(LOOP_PROMPT_TPL)" ; \
-		prompt="$${prompt//@ISSUE@/$$issue}" ; prompt="$${prompt//@REPO@/$$GH_REPO}" ; \
+		prompt="$${prompt//@ISSUE@/"$$issue"}" ; prompt="$${prompt//@REPO@/"$$GH_REPO"}" ; \
 		echo "$(FACTORY_CYAN)— issue #$$issue —$(FACTORY_RST)" ; \
 		fi ; \
 		# LA GARDE ANTI-TOURNIQUET COUVRE LES TROIS CHEMINS, et pas seulement la \
@@ -401,9 +435,11 @@ loop:
 		else \
 			last="$$issue" ; same=1 ; \
 		fi ; \
-		printf '%s %s\n' "$$last" "$$same" > "$$retry" ; \
+		[ "$$same" -gt 1 ] || since="$$(date +%s)" ; \
+		printf '%s %s %s\n' "$$last" "$$same" "$$since" > "$$retry" ; \
 		if [ "$$same" -gt "$(LOOP_MAX_RETRY)" ]; then \
-			echo "$(FACTORY_CYAN)— « $$issue » reprise $(LOOP_MAX_RETRY) fois sans avancer : arrêt. Regardez ce qui la bloque, puis effacez $$retry avant de relancer. —$(FACTORY_RST)" ; \
+			printf '« %s » reprise %s fois sans avancer' "$$issue" "$(LOOP_MAX_RETRY)" > "$$halt" ; \
+			echo "$(FACTORY_CYAN)— « $$issue » reprise $(LOOP_MAX_RETRY) fois sans avancer : arrêt. Regardez ce qui la bloque, puis effacez $$halt et $$retry avant de relancer. —$(FACTORY_RST)" ; \
 			exit 4 ; \
 		fi ; \
 		if [ -n "$(VERBOSE)" ]; then \

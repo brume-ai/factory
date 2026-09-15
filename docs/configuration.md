@@ -86,6 +86,14 @@ les deux sont la même**. Le pourquoi est dans [`docs/release.md`](release.md).
 | `GH_APP_KEY` | `$FACTORY_STATE/secrets/gh-app.pem` | `conf_get` | `gh-app-token.sh` : chemin de la cle privee `.pem` de l'App |
 
 
+## Prerequis de l'outillage
+
+Sur la machine comme sur un poste, les scripts de `bin/` et la boucle ont
+besoin de `bash`, `git`, `curl`, `openssl`, `python3` (le JSON des reponses) et
+`make` ; `make loop` les verifie au demarrage et refuse en 3 s'il en manque un.
+Dans le conteneur, c'est l'image du devcontainer qui les fournit — l'image
+`php` de Microsoft, par exemple, porte python3 ; une image nue ne le porte pas.
+
 ## Crochets
 
 Des exécutables lus dans `tools/factory-hooks/` du dépôt consommateur, appelés
