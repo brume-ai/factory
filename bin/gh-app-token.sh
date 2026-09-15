@@ -29,6 +29,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 . "$HERE/lib.sh"
 
+# PYTHON3 EST UN PREREQUIS DUR, et son absence est une configuration cassee
+# (3), pas un rate passager : sans cette ligne, l'appel HTTP reussissait, un
+# jeton etait emis cote GitHub, puis `python3: command not found` sortait en 4
+# et la boucle dormait et recommencait — a l'infini, un jeton jete par tour.
+command -v python3 >/dev/null 2>&1 || { echo "gh-app-token: python3 introuvable dans le PATH — l'usine en a besoin pour lire les reponses de l'API" >&2; exit 3; }
 app_id="$(conf_get GH_APP_ID)"
 install_id="$(conf_get GH_APP_INSTALL_ID)"
 key="$(conf_get GH_APP_KEY "$(conf_get FACTORY_STATE /srv/factory)/secrets/gh-app.pem")"

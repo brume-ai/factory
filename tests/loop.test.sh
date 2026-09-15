@@ -286,6 +286,16 @@ set -e
 [ -f "$C4/.omc/loop.retry" ] || { echo "le compteur anti-tourniquet doit survivre sur disque" >&2; exit 1; }
 assert_eq "1" "$(wc -l < "$TESTTMP/tours.log")" "la relance ne repaie AUCUN agent : le compteur a survecu"
 assert_contains "$TESTTMP/relance.out" "effacez" "et le message dit comment repartir"
+# ET LA RELANCE SUIVANTE NE PAIE RIEN DU TOUT : ni jeton, ni fetch, ni menage.
+# Sous Restart=always, chaque relance rejouait tout le menage avant de relire
+# le compteur ; le sentinelle loop.halt est lu avant le premier geste.
+[ -f "$C4/.omc/loop.halt" ] || { echo "l'arret volontaire doit poser un sentinelle" >&2; exit 1; }
+rm -f "$TESTTMP/menage.log"
+set +e
+( cd "$C4" && unset FACTORY_TOKEN && timeout 60 make loop FACTORY_BIN="$R3" CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" LOOP_MAX_RETRY=1 LOOP_MAIN_BIN=bash ) > "$TESTTMP/relance2.out" 2>&1
+set -e
+[ ! -f "$TESTTMP/menage.log" ] || { echo "une boucle arretee ne doit pas rejouer le menage a la relance" >&2; exit 1; }
+assert_contains "$TESTTMP/relance2.out" "loop.halt" "le sentinelle est nomme"
 echo ok
 
 # --- un code imprevu du sondage fait dormir, il ne lance pas un agent sur rien -
