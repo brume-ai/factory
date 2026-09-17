@@ -23,6 +23,7 @@ H="$FAKE_HTTP_DIR"
 # chaque cas pose explicitement — sans lui, la PR est ecartee (et ca se dit).
 card_open() {  # <numero> [labels json]
   printf '{"number":%s,"state":"open","labels":[%s]}' "$1" "${2:-}" > "$H/repos_o_r_issues_$1.json"
+  printf '[]' > "$H/repos_o_r_issues_$1_dependencies_blocked_by_per_page_100.json"
 }
 threads_quiet() {  # <numero de PR>
   printf '[]' > "$H/repos_o_r_pulls_$1_reviews_per_page_100.json"
@@ -32,7 +33,7 @@ threads_quiet() {  # <numero de PR>
 
 # <numero> <tete> <depot de la tete> <sha> <base> <mergeable> <draft> <labels>
 pr_body() {
-  printf '{"number":%s,"head":{"ref":"%s","repo":{"full_name":"%s"},"sha":"%s"},"base":{"ref":"%s"},"mergeable":%s,"draft":%s,"labels":[%s]}' "$@"
+  printf '{"number":%s,"state":"open","head":{"ref":"%s","repo":{"full_name":"%s"},"sha":"%s"},"base":{"ref":"%s"},"mergeable":%s,"draft":%s,"labels":[%s]}' "$@"
 }
 # La liste est cadree cote serveur par `base=` : son nom de fichier porte donc la
 # branche de travail, et c'est ce qui attrape un nom de branche code en dur.
@@ -89,6 +90,18 @@ assert_contains "$H/calls.log" \
 # delete_branch_on_merge a false, et une pile posee dessus resterait invisible.
 assert_contains "$H/calls.log" 'DELETE repos/o/r/git/refs/heads/card/12' \
   "la branche de carte est supprimee apres le merge"
+# A green PR must not bypass a newly opened native dependency or blocked label.
+printf '[{"number":44,"state":"open","labels":[]}]' > "$H/repos_o_r_issues_12_dependencies_blocked_by_per_page_100.json"
+log_reset
+bash "$S" 2>/dev/null
+assert_file_lacks "$H/calls.log" 'PUT repos/o/r/pulls/12/merge' 'native blocker prevents automatic merge'
+card_open 12 '{"name":"factory:blocked"}'
+log_reset
+bash "$S" 2>/dev/null
+assert_file_lacks "$H/calls.log" 'PUT repos/o/r/pulls/12/merge' 'blocked card is not automatically merged'
+card_open 12
+log_reset
+bash "$S" 2>/dev/null
 # GitHub rend 204 SANS CORPS sur cette suppression : ce n'est pas une troncature,
 # et le tour ne doit pas annoncer un rate.
 printf '204' > "$H/repos_o_r_git_refs_heads_card_12.code"; : > "$H/repos_o_r_git_refs_heads_card_12.json"

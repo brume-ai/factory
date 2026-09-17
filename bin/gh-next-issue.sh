@@ -221,6 +221,7 @@ print(json.dumps(json.loads(a) + json.loads(b)))
 ')" || return 4
     path="$(cat "$NEXT_PAGE_FILE")"; n=$((n+1))
   done
+  [[ -z "$path" ]] || { echo "gh-next-issue: pagination incomplète — aucune admission" >&2; return 4; }
   printf '%s' "$acc"
 }
 
@@ -287,6 +288,26 @@ elif free: print("ready", min(free, key=rank)["number"])
 '
 }
 
+# Chaque candidat, y compris une reprise busy, passe la même lecture native.
+# Le résumé issue_dependencies_summary ne prouve jamais une absence de blocage.
+choose_checked() {
+  local raw candidate kind number issue rc
+  raw="$(cat)"
+  while true; do
+    candidate="$(printf '%s' "$raw" | choose)" || return 4
+    [[ -n "$candidate" ]] || return 0
+    read -r kind number <<< "$candidate"
+    issue="$(printf '%s' "$raw" | python3 -c 'import json,sys; print(json.dumps(next(i for i in json.load(sys.stdin) if str(i["number"]) == sys.argv[1])))' "$number")" || return 4
+    if printf '%s' "$issue" | FACTORY_TOKEN="$TOKEN" FACTORY_STAGED_LABEL="$STAGED_LABEL" \
+      python3 "$HERE/gh-dependencies.py" check "$GH_REPO" "$number"; then
+      printf '%s' "$candidate"; return 0
+    else
+      rc=$?; [[ "$rc" == 1 ]] || return "$rc"
+      delivered="$delivered $number"
+    fi
+  done
+}
+
 # DEUX requêtes, et c'est délibéré. La liste générale, plus bas, est plafonnée à
 # 100 : une carte prise il y a longtemps peut en être tombée, et c'est justement
 # celle qu'un tour tué en route a laissée orpheline — la reprise après
@@ -331,7 +352,8 @@ busy_raw="$(api "repos/$GH_REPO/issues?state=open&labels=$BUSY_LABEL&per_page=10
 # rend toujours « busy <n> » : le mot est jeté par le `read`, et c'est tout ce
 # qui séparait l'ancienne copie jumelle de cette fonction-ci.
 busy=""
-read -r _ busy <<<"$(printf '%s' "$busy_raw" | choose)" || true
+selection="$(printf '%s' "$busy_raw" | choose_checked)" || exit $?
+read -r _ busy <<<"$selection" || true
 if [[ -n "$busy" ]]; then
   # `factory:in-progress` seul recouvre DEUX états très différents : un tour tué
   # en route (à reprendre) et une carte LIVRÉE qui attend son intégration (à
@@ -377,7 +399,8 @@ issues_raw="$(api_all "repos/$GH_REPO/issues?state=open&per_page=100")" || exit 
 # carte à prendre. Sans lui, `set -e` sortirait en 1 ici même, en sautant le bloc
 # ci-dessous qui explique POURQUOI il n'y a rien à faire. « Rien à faire » doit
 # toujours se justifier : c'est la règle que ce bloc fait respecter.
-read -r kind n <<<"$(printf '%s' "$issues_raw" | choose)" || true
+selection="$(printf '%s' "$issues_raw" | choose_checked)" || exit $?
+read -r kind n <<<"$selection" || true
 
 if [[ -n "${n:-}" ]]; then
   [[ "$kind" == busy ]] \
@@ -429,7 +452,7 @@ if not seen:
     # plus haut par « déjà livrées (PR ouverte) ». Dire « le tableau est drainé »
     # alors que des cartes sont ouvertes serait le mensonge que ce bloc combat.
     if issues:
-        print("gh-next-issue: %d carte(s) ouverte(s), toutes déjà livrées (PR ouverte, voir ci-dessus) : %s"
+        print("gh-next-issue: %d carte(s) ouverte(s), aucune admissible (PR ou dépendances, voir ci-dessus) : %s"
               % (len(issues), ns(issues)), file=sys.stderr)
     else:
         print("gh-next-issue: aucune issue ouverte — le tableau est réellement drainé.", file=sys.stderr)

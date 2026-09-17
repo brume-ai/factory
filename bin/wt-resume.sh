@@ -23,7 +23,7 @@
 # nu, qui la valide avant qu'on la lise.
 #
 # Codes : 0 = une carte à reprendre sur stdout · 1 = rien · 3 = les deux branches
-# se confondent (la garde). L'absence de `.worktrees` est une réponse juste
+# se confondent ou API refusée · 4 = API illisible/injoignable. L'absence de `.worktrees` est une réponse juste
 # (« rien à reprendre »), pas une panne.
 set -euo pipefail
 
@@ -84,6 +84,25 @@ for dir in "$ROOT"/.worktrees/card-*; do
   fi
 
   (( dirty > 0 || ahead > 0 )) || continue
+
+  # Un vieux numéro supprimé, un label humain ou un nouveau bloqueur ne doit
+  # pas être contourné par le travail local. Rien ici ne supprime le worktree.
+  conf_require GH_REPO
+  if [[ -z "${TOKEN:-}" ]]; then
+    if [[ -n "${FACTORY_TOKEN:-}" ]]; then TOKEN="$FACTORY_TOKEN"
+    else TOKEN="$(bash "$HERE/gh-app-token.sh")" || { rc=$?; [[ "$rc" == 3 ]] && exit 3; exit 4; }; fi
+  fi
+  excluded="$(printf '%s\n' "$(label_get human)" "$(label_get blocked)" "$(label_get epic)" "$(label_get done)" "$(label_get staged)" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().splitlines()))')"
+  if FACTORY_TOKEN="$TOKEN" FACTORY_STAGED_LABEL="$(label_get staged)" \
+    FACTORY_EXCLUDED_LABELS="$excluded" FACTORY_MILESTONE="$(conf_get FACTORY_MILESTONE)" \
+    python3 "$HERE/gh-dependencies.py" resume "$(conf_get GH_REPO)" "$card"; then
+    :
+  else
+    rc=$?
+    echo "wt-resume: #$card non admissible — travail local conservé dans $dir" >&2
+    [[ "$rc" == 1 ]] && continue
+    exit "$rc"
+  fi
 
   what="$(_what "$dirty" "$ahead")"
   echo "wt-resume: carte #$card — travail inachevé dans $dir ($what)" >&2

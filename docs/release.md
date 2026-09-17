@@ -146,6 +146,51 @@ domicile : deux copies d'un nom finissent par diverger, et un nom de label qui
 diverge sort une carte de la file pour toujours, le script qui pose et celui qui
 retire ne parlant plus du même mot.
 
+## Dépendances entre les cartes
+
+La sélection et la reprise lisent toutes les pages de l’API GitHub
+`issues/<n>/dependencies/blocked_by`. Un résumé absent dans la liste des issues
+ne signifie pas « aucune dépendance ». Chaque bloqueur doit être fermé ou
+porter le label configuré `factory:staged` : une PR ouverte ne suffit pas.
+Une fermeture peut constater une décision de cadrage résolue ; elle ne prouve
+pas systématiquement une livraison de code. Le commentaire de déblocage reste
+donc neutre sur les issues fermées.
+Une carte sans label `factory:blocked` est donc quand même écartée tant que ses
+dépendances ne sont pas intégrées. Les cartes suivantes restent examinées.
+
+Une liste native non vide fait foi sur un ancien `Blocked by #n` resté dans le
+corps. Pour les cartes historiques, une lecture native réussie et vide conserve
+la syntaxe du corps (`Blocked by: #n`, `Bloquée par #n`, `Dépend de #n`). Supprimer
+la dernière relation native exige donc aussi de nettoyer un éventuel ancien
+blocage textuel. Un échec HTTP, une réponse illisible ou une pagination incomplète
+ne déclenche jamais ce repli : l’admission échoue avec un diagnostic.
+
+`gh-unblock.sh` utilise la même règle et ne retire que le label de blocage ; les
+exclusions humaines sont conservées. `wt-resume.sh` vérifie aussi l’identité,
+l’état, les exclusions et le jalon de l’issue avant de rendre un worktree sale
+à un agent. Une issue supprimée ou inaccessible empêche cette reprise ; le
+travail local reste intact et doit être examiné avant un nettoyage.
+La boucle s’arrête sur une reprise refusée par l’API (code 3) et attend sur une
+erreur transitoire ou inattendue ; elle ne passe pas à une nouvelle carte après
+une vérification de reprise en échec.
+
+`gh-pr-admission.sh` applique la même lecture juste avant un agent d’entretien
+ou un merge automatique. Il retrouve la carte par la tête `card/<n>` d’une PR
+ouverte du dépôt visant la branche de travail, jamais par le numéro de la PR.
+Les exclusions de la PR et de sa carte sont vérifiées. Le label `delivered`
+reste admis : c’est précisément une PR livrée dont la CI peut nécessiter une
+réparation. Une dépendance ajoutée après cette livraison interdit aussi le merge.
+Si la PR d’entretien choisie est hors file, la boucle cherche une carte
+indépendante admissible. Un refus API arrête la boucle et une erreur transitoire
+la fait attendre ; une erreur de lecture ne se transforme pas en autorisation.
+
+`gh-stack.sh base` lit les mêmes relations pour les piles créées manuellement.
+Il refuse de transformer le numéro d’un bloqueur externe en branche locale.
+La boucle automatique attend l’intégration des bloqueurs : ce support des piles
+ne constitue pas une autorisation de contourner l’ordre de développement.
+
+Référence API : [dépendances d’issues GitHub](https://docs.github.com/en/rest/issues/issue-dependencies).
+
 ## Ce que le modèle gouverne
 
 ### 1. L'intégration — `gh-stage-pr.sh`

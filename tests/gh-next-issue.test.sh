@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 . "$(dirname "$0")/helpers.sh"
 t_setup
+# Historical fixtures have no native relationships; each endpoint succeeds empty.
+for number in {1..300}; do
+  printf '[]' > "$FAKE_HTTP_DIR/repos_o_r_issues_${number}_dependencies_blocked_by_per_page_100.json"
+done
+
 # t_setup unset deja FACTORY_MILESTONE et les sept cles de label : ce fichier
 # mesure QUI est dans la file, et un nom de label exporte par le shell qui lance
 # la suite ferait passer au vert des cas qui ne prouvent plus rien. Rien a unset

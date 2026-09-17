@@ -387,6 +387,17 @@ print("yes" if said and said > answered else "no")
       continue ;;
   esac
 
+  # Une dépendance peut avoir été ajoutée depuis la livraison de la PR. La CI
+  # verte ne la satisfait pas ; relire l'admission avant toute écriture de merge.
+  if FACTORY_TOKEN="$TOKEN" bash "$HERE/gh-pr-admission.sh" "$n" "$card"; then
+    :
+  else
+    rc=$?
+    echo "gh-stage-pr: PR #$n non admissible (code $rc) — aucun merge" >&2
+    [[ "$rc" == 1 || "$rc" == 3 ]] && continue
+    exit "$rc"
+  fi
+
   # LE SQUASH, ET UN MESSAGE QUE NOUS COMPOSONS. Le modèle renonce à `Closes #N` :
   # GitHub ne ferme les issues liées que sur la branche par DÉFAUT, où l'usine ne
   # merge jamais, et le résultat dépend en plus de la stratégie de squash. C'est

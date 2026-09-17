@@ -220,6 +220,67 @@ case "$(cat "$TESTTMP/agent.log")" in
     echo "assert: le prompt de carte neuve pour #7 n'aurait pas du etre envoye" >&2; exit 1 ;;
 esac
 
+# A failed resume lookup must not fall through into a fresh issue or agent.
+RERR="$TESTTMP/stubs-resume-error"; mkdir -p "$RERR"
+cp "$REPO"/tests/stubs/*.sh "$RERR/"; cp "$REPO"/tests/stubs/*.py "$RERR/"
+cat > "$RERR/gh-next-issue.sh" <<'EOF'
+#!/usr/bin/env bash
+touch "${LOOP_TEST_DIR:?}/unexpected-next"
+exit 1
+EOF
+for resume_code in 3 4 17; do
+  cat > "$RERR/wt-resume.sh" <<EOF
+#!/usr/bin/env bash
+mkdir -p .omc
+touch .omc/loop.stop
+exit $resume_code
+EOF
+  CERR="$TESTTMP/conso-resume-error-$resume_code"; conso "$CERR"
+  rm -f "$TESTTMP/unexpected-next" "$TESTTMP/agent.log"
+  tour "$CERR" "$RERR" > "$TESTTMP/resume-error-$resume_code.out" 2>&1 && rc=0 || rc=$?
+  [[ ! -f "$TESTTMP/unexpected-next" ]] || { echo 'resume error fell through to new issue selection' >&2; exit 1; }
+  [[ ! -f "$TESTTMP/agent.log" ]] || { echo 'resume error launched an agent' >&2; exit 1; }
+  if [[ "$resume_code" == 3 ]]; then
+    [[ "$rc" != 0 ]] || { echo 'resume configuration error did not stop loop' >&2; exit 1; }
+    assert_contains "$TESTTMP/resume-error-$resume_code.out" 'reprise impossible' 'configuration error explicitly stops loop'
+  else
+    assert_rc 0 "$rc" 'transient or unexpected resume error waits then honors stop sentinel'
+    assert_contains "$TESTTMP/resume-error-$resume_code.out" 'reprise invérifiable' 'transient resume error is explained'
+  fi
+done
+
+# PR maintenance has its own final issue admission before any agent launch.
+RPR="$TESTTMP/stubs-pr-admission"; mkdir -p "$RPR"
+cp "$REPO"/tests/stubs/*.sh "$RPR/"; cp "$REPO"/tests/stubs/*.py "$RPR/"
+printf '#!/usr/bin/env bash\nprintf "77\\tCI rouge"\n' > "$RPR/gh-pr-attention.sh"
+printf '#!/usr/bin/env bash\nprintf "12"\n' > "$RPR/gh-next-issue.sh"
+for admission_code in 0 1 3 4 17; do
+  cat > "$RPR/gh-pr-admission.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s' "$1" > "${LOOP_TEST_DIR:?}/admitted-pr"
+mkdir -p .omc
+touch .omc/loop.stop
+EOF
+  printf 'exit %s\n' "$admission_code" >> "$RPR/gh-pr-admission.sh"
+  CPR="$TESTTMP/conso-pr-admission-$admission_code"; conso "$CPR"
+  rm -f "$TESTTMP/agent.log" "$TESTTMP/admitted-pr"
+  tour "$CPR" "$RPR" > "$TESTTMP/pr-admission-$admission_code.out" 2>&1 && rc=0 || rc=$?
+  assert_eq 77 "$(cat "$TESTTMP/admitted-pr")" 'maintenance checks actual PR identity'
+  if [[ "$admission_code" == 0 ]]; then
+    assert_contains "$TESTTMP/agent.log" '77' 'admitted maintenance reaches agent'
+  elif [[ "$admission_code" == 1 ]]; then
+    assert_contains "$TESTTMP/agent.log" 'issue #12' 'excluded maintenance permits an independent ready issue'
+    assert_file_lacks "$TESTTMP/agent.log" 'PR #77' 'excluded PR is not maintained'
+  else
+    [[ ! -f "$TESTTMP/agent.log" ]] || { echo 'inadmissible PR maintenance launched an agent' >&2; exit 1; }
+  fi
+  if [[ "$admission_code" == 3 ]]; then
+    [[ "$rc" != 0 ]] || { echo 'maintenance admission configuration error did not stop loop' >&2; exit 1; }
+  else
+    assert_rc 0 "$rc" 'nonfatal maintenance admission honors stop sentinel'
+  fi
+done
+
 # LA GARDE ANTI-TOURNIQUET COUVRE LA REPRISE, et pas seulement la carte neuve.
 # Elle vivait DANS le bloc `elif` de la carte neuve : une reprise qui echoue en
 # boucle n'etait comptee par personne, et la meme carte repartait indefiniment.

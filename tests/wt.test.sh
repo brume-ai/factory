@@ -6,11 +6,17 @@
 # reste est ce qui portait le poids : d'où vient le NUMÉRO de carte, ce qui compte
 # comme travail inachevé, et ce que wt-cleanup détruit ou refuse de détruire.
 #
-# Ni réseau ni python3 pour wt-resume : git seul, avec un `origin` local nu.
+# Reprise : git local et API simulée ; aucune mutation distante.
 # wt-cleanup, lui, passe par le faux curl et python3.
 . "$(dirname "$0")/helpers.sh"
 t_setup
+# Historical fixtures have no native relationships; each endpoint succeeds empty.
+for number in 5; do
+  printf '[]' > "$FAKE_HTTP_DIR/repos_o_r_issues_${number}_dependencies_blocked_by_per_page_100.json"
+done
+
 export GH_REPO="o/r"
+printf '{"number":5,"state":"open","labels":[],"body":""}' > "$FAKE_HTTP_DIR/repos_o_r_issues_5.json"
 H="$FAKE_HTTP_DIR"
 
 # =============================================================================
@@ -73,6 +79,33 @@ assert_eq "$(printf '5\t1 fichier(s) non commité(s), 1 commit(s) non poussé(s)
   "arbre sale ET commit non poussé : les deux sont dits"
 
 # --- 5. UN WORKTREE PROPRE EST IGNORÉ, et un répertoire qui n'est pas une carte
+# Local work is preserved even when the issue was retired, deleted, or blocked.
+for label in factory:needs-human factory:blocked factory:staged factory:delivered factory:epic; do
+  printf '{"number":5,"state":"open","labels":[{"name":"%s"}]}' "$label" > "$H/repos_o_r_issues_5.json"
+  out="$(bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
+  assert_rc 1 "$rc" "$label excludes dirty worktree from resumption"
+  assert_eq '' "$out" 'excluded worktree never becomes runnable'
+  assert_eq sale "$(cat "$R/.worktrees/card-5/fichier")" 'uncommitted work preserved'
+done
+printf '404' > "$H/repos_o_r_issues_5.code"
+out="$(bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
+assert_rc 3 "$rc" 'deleted or inaccessible issue prevents resumption'
+assert_contains "$TESTTMP/err" 'conservé' 'retained worktree is reported'
+assert_eq sale "$(cat "$R/.worktrees/card-5/fichier")" 'deleted issue does not delete local work'
+rm "$H/repos_o_r_issues_5.code"
+printf '{"number":5,"state":"closed","labels":[]}' > "$H/repos_o_r_issues_5.json"
+out="$(bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
+assert_rc 1 "$rc" 'closed issue is not resumed'
+printf '{"number":6,"state":"open","labels":[]}' > "$H/repos_o_r_issues_5.json"
+out="$(bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
+assert_rc 4 "$rc" 'mismatched issue identity fails closed'
+printf '{"number":5,"state":"open","labels":[]}' > "$H/repos_o_r_issues_5.json"
+printf '[{"number":9,"state":"open","labels":[]}]' > "$H/repos_o_r_issues_5_dependencies_blocked_by_per_page_100.json"
+out="$(bash "$RESUME" 2>"$TESTTMP/err")" && rc=0 || rc=$?
+assert_rc 1 "$rc" 'native blocker excludes dirty worktree'
+printf '[]' > "$H/repos_o_r_issues_5_dependencies_blocked_by_per_page_100.json"
+
+# A clean worktree and a directory which is not a card are ignored.
 # aussi. LE FILTRE NUMÉRIQUE EST CE QUI TIENT LE SECOND CAS : `card-abc` n'est pas
 # un worktree, donc `git -C` y remonte au dépôt PARENT, dont l'arbre porte
 # « ?? .worktrees/ ». Sans le filtre, ce résidu rendrait « abc<TAB>1 fichier(s)

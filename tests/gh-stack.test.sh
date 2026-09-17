@@ -8,6 +8,11 @@
 # chantier, il affirme la branche de travail apres, et rien entre les deux.
 . "$(dirname "$0")/helpers.sh"
 t_setup
+# Historical fixtures have no native relationships; each endpoint succeeds empty.
+for number in 8; do
+  printf '[]' > "$FAKE_HTTP_DIR/repos_o_r_issues_${number}_dependencies_blocked_by_per_page_100.json"
+done
+
 export GH_REPO="o/r"
 H="$FAKE_HTTP_DIR"
 

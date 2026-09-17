@@ -2,9 +2,9 @@
 # Extrait de Brume (tools/factory/gh-unblock.sh) au SHA 12ac9e92 ; generalise ici.
 # gh-unblock.sh — rend à la file les cartes dont le bloqueur est tombé.
 #
-# POURQUOI CE SCRIPT EXISTE. Une carte déclare sa dépendance en tête de corps :
-# « Bloquée par #N ». C'est le bon endroit — lisible par un humain, vérifiable par
-# un agent, et ça survit aux labels. Mais PERSONNE ne la résolvait quand #N était
+# POURQUOI CE SCRIPT EXISTE. Une carte déclare sa dépendance nativement dans
+# GitHub, ou historiquement en tête de corps : « Bloquée par #N ».
+# Cette relation survit aux labels. Mais PERSONNE ne la résolvait quand #N était
 # livrée : la carte restait parquée pour toujours, et toute la chaîne derrière
 # elle avec.
 #
@@ -14,12 +14,9 @@
 # zéro ligne de code — et aucun agent n'a mal travaillé. Le texte et le label
 # disaient deux choses différentes.
 #
-# Ce script rétablit l'accord : le TEXTE fait foi, la machine en tire le label.
-# IL NE RETIRE PAS LE TEXTE, et c'est délibéré : `gh-stack.sh` relit la même
-# ligne pour calculer la base de la couche suivante, et l'effacer rendrait cette
-# base à l'accident dont elle sort. L'accord tient autrement : la machine ne
-# retire le label QU'AU MOMENT où la ligne est devenue satisfaite, donc les deux
-# ne se contredisent jamais. Ne « corrigez » pas ce silence.
+# Les relations natives GitHub font foi lorsqu elles existent. Le corps reste
+# compatible pour les cartes historiques après une lecture native vide réussie.
+# Une erreur de lecture ne permet jamais de retirer le label de blocage.
 #
 # CE QUE « LE BLOQUEUR A LIVRÉ » VEUT DIRE, ET IL N'Y A PLUS QU'UNE RÉPONSE :
 # SON TRAVAIL EST DANS LA BRANCHE DE TRAVAIL. Il n'y a qu'un chemin — carte, pull
@@ -29,9 +26,9 @@
 #   la carte porte `factory:staged`  gh-stage-pr.sh l'y a posé AU MERGE : le
 #                                    travail est dans la branche de travail et
 #                                    attend la release.
-#   la carte est FERMÉE              c'est gh-release.sh qui ferme, à la sortie
-#                                    de version : le travail est donc passé par
-#                                    la branche de travail avant de sortir.
+#   la carte est FERMÉE              dépendance satisfaite : release pour une
+#                                    carte de code, ou décision humaine résolue
+#                                    pour une carte de cadrage.
 #
 # UNE PULL REQUEST OUVERTE NE DÉBLOQUE PLUS, et c'est la simplification que le
 # modèle unique permet. L'ancien critère « une PR ouverte suffit » existait contre
@@ -80,9 +77,10 @@ fi
 CURL_RETRY=(--retry 3 --retry-delay 2 --retry-connrefused
             --connect-timeout 10 --max-time 60)
 api() {
-  local m="${2:-GET}" data="${3:-}" code body rc
-  body="$(mktemp)"; trap 'rm -f "$body"' RETURN
-  code="$(curl -sS "${CURL_RETRY[@]}" -o "$body" -w '%{http_code}' -X "$m" \
+  local m="${2:-GET}" data="${3:-}" code body rc hdrs
+  hdrs="$(mktemp)"
+  body="$(mktemp)"; trap 'rm -f "$body" "$hdrs"' RETURN
+  code="$(curl -sS "${CURL_RETRY[@]}" -o "$body" -D "$hdrs" -w '%{http_code}' -X "$m" \
     -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
     ${data:+-H "Content-Type: application/json" -d "$data"} "https://api.github.com/$1")" || rc=$?
   if [[ -n "${rc:-}" ]]; then echo "gh-unblock: transport KO sur /$1 (curl $rc) — raté passager" >&2; return 4; fi
@@ -93,82 +91,46 @@ api() {
     echo "gh-unblock: réponse illisible sur /$1 (corps tronqué) — raté passager" >&2; return 4
   fi
   cat "$body"
+  tr -d '\r' < "$hdrs" | sed -n 's/^[Ll]ink:.*<https:\/\/api\.github\.com\/\([^>]*\)>; rel="next".*/\1/p' | head -1 > "$NEXT_PAGE_FILE"
 }
 
-blocked_raw="$(api "repos/$GH_REPO/issues?state=open&labels=$BLOCKED&per_page=100")" || exit $?
+NEXT_PAGE_FILE="$(mktemp)"; trap 'rm -f "$NEXT_PAGE_FILE"' EXIT
+path="repos/$GH_REPO/issues?state=open&labels=$BLOCKED&per_page=100"
+blocked_raw='[]'; pages=0
+while [[ -n "$path" ]]; do
+  [[ "$path" == "repos/$GH_REPO/issues?"* ]] || { echo "gh-unblock: pagination inattendue" >&2; exit 4; }
+  (( pages < 100 )) || { echo "gh-unblock: pagination incomplète" >&2; exit 4; }
+  page="$(api "$path")" || exit $?
+  blocked_raw="$(printf '%s\n%s' "$blocked_raw" "$page" | python3 -c 'import json,sys; a,b=sys.stdin.read().split("\n",1); print(json.dumps(json.loads(a)+json.loads(b)))')" || exit 4
+  path="$(cat "$NEXT_PAGE_FILE")"; pages=$((pages+1))
+done
 n=0
-while read -r issue blockers; do
-  [[ -n "${issue:-}" && -n "${blockers:-}" ]] || continue
-  # TOUS LES BLOQUEURS DOIVENT ÊTRE TOMBÉS, PAS SEULEMENT LE PREMIER. Une carte
-  # « Bloquée par #3 et #4 » était relâchée dès que #3 était intégrée, sur un
-  # travail (#4) qui n'était nulle part : l'agent partait bâtir sur du vide.
-  # L'ÉTAT ET LE LABEL VIENNENT DE LA MÊME RÉPONSE : /issues/<n> porte `state` ET
-  # `labels`, donc le critère coûte UN appel par bloqueur, pas deux.
-  # `os.environ["STAGED"]` sans défaut : un défaut python serait un second nom du
-  # label, invisible depuis factory.conf — exactement la divergence que
-  # `label_get` existe pour tuer. LE CORPS EST CAPTURÉ AVANT D'ÊTRE LU : en
-  # pipeline, le 4 d'un raté réseau devenait le 1 de python, et un bloqueur
-  # introuvable (3) et un hoquet (4) se ressemblaient. Ici, un 4 arrête le tour
-  # proprement (on le reverra), un 3 passe au bloqueur suivant en le disant.
-  why=""; all_down=oui
-  for blocker in $blockers; do
-    raw="$(api "repos/$GH_REPO/issues/$blocker")" || { rc=$?; [ "$rc" = 4 ] && exit 4; echo "gh-unblock: #$issue — le bloqueur #$blocker est illisible ; la carte reste bloquée" >&2; all_down=non; break; }
-    info="$(printf '%s' "$raw" | STAGED="$STAGED" python3 -c '
-import json, os, sys
-d = json.load(sys.stdin)
-staged = any((l or {}).get("name") == os.environ["STAGED"] for l in d.get("labels") or [])
-print(d.get("state") or "?", "oui" if staged else "non")
-')" || { all_down=non; break; }
-    read -r state is_staged <<< "$info"
-    # Les deux branches rendent le même verdict — le travail est dans la branche de
-    # travail — mais pas au même agent : l'une l'envoie chercher du code déjà sorti,
-    # l'autre du code intégré qui attend la release. Seul le motif change.
-    if [[ "$state" == "closed" ]]; then
-      why="${why:+$why ; }#$blocker est fermée : c'est la release qui ferme les cartes, son travail est donc passé par la branche de travail avant de sortir"
-    elif [[ "$is_staged" == "oui" ]]; then
-      why="${why:+$why ; }#$blocker est intégrée à la branche de travail (\`$STAGED\`) et attend la release — partez de la branche de travail à jour, son travail y est"
-    else
-      all_down=non; break
-    fi
-  done
-  [[ "$all_down" == oui ]] || continue
-  # `%3A` : le deux-points d'un nom de label doit être encodé, sinon GitHub rend
-  # 404 sur un label qui existe — et le déblocage échoue en silence.
-  # LE RETRAIT DU LABEL EST CE QUI REND LA CARTE À LA FILE : s'il rate, on le DIT
-  # et on ne commente pas — un « Débloquée » posé à chaque tour sur une carte
-  # toujours bloquée était un mensonge répété.
+rows="$(printf '%s' "$blocked_raw" | python3 -c 'import json,sys; [print(json.dumps(i)) for i in json.load(sys.stdin) if "pull_request" not in i]')" || exit 4
+while IFS= read -r row; do
+  [[ -n "$row" ]] || continue
+  issue="$(printf '%s' "$row" | python3 -c 'import json,sys; print(json.load(sys.stdin)["number"])')" || exit 4
+  info="$(printf '%s' "$row" | FACTORY_TOKEN="$TOKEN" FACTORY_STAGED_LABEL="$STAGED" python3 "$HERE/gh-dependencies.py" inspect "$GH_REPO" "$issue")" || {
+    rc=$?; [[ "$rc" == 4 ]] && exit 4
+    echo "gh-unblock: #$issue — bloqueur illisible ; la carte reste bloquée" >&2; continue
+  }
+  why="$(printf '%s' "$info" | python3 -c '
+import json,sys
+info=json.load(sys.stdin)
+if info["ready"]:
+    print(" ; ".join("%s est %s" % (i.get("html_url") or ("#%s" % i["number"]), "fermée (dépendance satisfaite)" if i["state"] == "closed" else "intégrée à la branche de travail et attend la release") for i in info["blockers"]))
+')" || exit 4
+  if [[ -z "$why" ]]; then
+    echo "gh-unblock: #$issue reste bloquée : dépendances non satisfaites ; les cartes sans bloqueur GitHub lisible ne sont JAMAIS libérables sans décision humaine" >&2
+    continue
+  fi
   if ! api "repos/$GH_REPO/issues/$issue/labels/${BLOCKED//:/%3A}" DELETE >/dev/null 2>&1; then
-    echo "gh-unblock: #$issue — le label « $BLOCKED » n'a pas pu être retiré ; la carte reste hors file, retirez-le à la main" >&2
+    echo "gh-unblock: #$issue — le label « $BLOCKED » n'a pas pu être retiré ; la carte reste hors file" >&2
     continue
   fi
   api "repos/$GH_REPO/issues/$issue/comments" POST \
     "$(WHY="$why" python3 -c 'import json,os; print(json.dumps({"body": "🔓 Débloquée automatiquement : " + os.environ["WHY"] + "."}, ensure_ascii=False))')" >/dev/null || true
   echo "gh-unblock: #$issue rendue à la file — $why" >&2
   n=$((n+1))
-done <<< "$(printf '%s' "$blocked_raw" | python3 -c '
-import json, re, sys
-# Une carte marquée bloquée SANS bloqueur lisible ne peut jamais être rendue à la
-# file : aucune fermeture ne la déclenchera. Le 2 août, six cartes dormaient ainsi
-# — cinq attendaient un acte humain, une portait un identifiant Asana orphelin
-# dont le travail était livré depuis. Rien ne le disait. On le DIT maintenant :
-# le silence est le vrai défaut, pas le blocage.
-orphans = []
-for i in json.load(sys.stdin):
-    if "pull_request" in i:
-        continue
-    # « Bloquée par #3 et #4 », « Bloquée par #3, #4 », « Blocked by #3 » : tous
-    # les numeros de la ligne comptent, et l anglais aussi — deux lecteurs
-    # (gh-stack.sh, ce script) ne doivent pas se contredire sur la meme ligne.
-    m = re.search(r"(?:Bloqu[ée]e? par|Blocked by|D[ée]pend de)\s*((?:#\d+[ \t,;/et]*)+)", i.get("body") or "", re.IGNORECASE)
-    if m:
-        print(i["number"], " ".join(re.findall(r"#(\d+)", m.group(1))))
-    else:
-        orphans.append(i["number"])
-if orphans:
-    print("gh-unblock: bloquées sans bloqueur GitHub lisible, donc JAMAIS libérables par la machine : " +
-          ", ".join("#%d" % n for n in orphans) + " — un humain doit trancher, ou corriger le corps.",
-          file=sys.stderr)
-')"
-
+done <<< "$rows"
 [[ "$n" -gt 0 ]] || echo "gh-unblock: aucune carte à rendre à la file" >&2
 exit 0

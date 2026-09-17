@@ -7,8 +7,8 @@
 #   gh-stack.sh restack <branche>  rebase les couches posées sur <branche>
 #   gh-stack.sh show               affiche les piles déclarées
 #
-# LA RELATION DE BLOCAGE **EST** LA PILE. Une carte porte « Bloquée par #M » en
-# tête de son corps ; si la PR de #M est encore ouverte, son travail n'est pas
+# LA RELATION DE BLOCAGE **EST** LA PILE. Une carte dépend nativement de #M
+# (ou historiquement porte « Bloquée par #M ») ; si sa PR est ouverte, son travail n'est pas
 # dans la branche de travail, et la carte doit donc se construire DESSUS. C'est
 # ce qui rend la base calculée au lieu d'héritée : sans ça, la base est « la
 # branche sur laquelle l'arbre se trouvait », c'est-à-dire un accident — juste
@@ -51,8 +51,8 @@ branch_of() { printf 'card/%s' "$1"; }
 # --- base <issue> -------------------------------------------------------------
 # ON N'EMPILE QUE SUR CE DONT ON DÉPEND. Une carte se construit sur la BRANCHE
 # DE TRAVAIL par défaut. Elle ne se pose sur une PR ouverte que si elle en
-# DÉPEND vraiment, c'est-à-dire si son corps porte « Bloquée par #M » (ou
-# « Dépend de #M ») et que le travail de #M n'y est pas encore.
+# DÉPEND vraiment, selon les relations natives ou le corps historique, et que
+# le travail de #M n'y est pas encore. La boucle attend toutefois l'intégration.
 #
 # LA RÈGLE PRÉCÉDENTE — « toujours partir du sommet de la pile ouverte » — était
 # fausse, et coûteuse. Elle enchaînait des cartes ÉTRANGÈRES l'une à l'autre :
@@ -67,26 +67,18 @@ branch_of() { printf 'card/%s' "$1"; }
 # chaînes, et rien ne dit qu'on en dépend.
 cmd_base() {
   local issue="${1:?usage: gh-stack.sh base <issue>}"
-  local body prs
-  body="$(api "repos/$GH_REPO/issues/$issue" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("body") or "")')"
+  local body prs deps
+  body="$(api "repos/$GH_REPO/issues/$issue" | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"] or "")')"
+  deps="$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.dumps({"body":sys.stdin.read()}))' | FACTORY_TOKEN="$TOKEN" python3 "$HERE/gh-dependencies.py" numbers "$GH_REPO" "$issue")" || return $?
   prs="$(api "repos/$GH_REPO/pulls?state=open&per_page=100")"
 
-  printf '%s' "$prs" | FACTORY_BODY="$body" python3 -c '
+  printf '%s' "$prs" | FACTORY_DEPS="$deps" python3 -c '
 import json, os, re, sys
 # LECTURE STRICTE, SANS DEFAUT PYTHON. `branches_require` a deja valide et
 # exporte la valeur ; un `os.environ.get(..., "main")` serait un SECOND nom de
 # branche, invisible depuis factory.conf, et celui-la nommerait la production.
 staging = os.environ["FACTORY_STAGING"]
-body = os.environ.get("FACTORY_BODY", "")
-# Les deux formulations en usage sur le board. Une carte peut en declarer
-# plusieurs ; on ne peut se poser que sur UNE base, donc on prend la derniere
-# couche encore ouverte parmi les dependances (la plus haute de la chaine).
-# LA MEME GRAMMAIRE QUE gh-unblock.sh : tous les numeros de la ligne, en
-# francais comme en anglais. Deux lecteurs qui divergent sur « Bloquee par #3
-# et #4 » font poser la pile sur #3 pendant que le deblocage attend #3 ET #4.
-deps = set()
-for m in re.finditer(r"(?:Bloqu[ée]e? par|Blocked by|D[ée]pend de)\s*((?:#\d+[ \t,;/et]*)+)", body, re.IGNORECASE):
-    deps |= {int(n) for n in re.findall(r"#(\d+)", m.group(1))}
+deps = set(json.loads(os.environ["FACTORY_DEPS"]))
 heads = {p["head"]["ref"]: p["number"] for p in json.load(sys.stdin)}
 cands = [n for n in deps if "card/%d" % n in heads]
 print("card/%d" % max(cands) if cands else staging, end="")

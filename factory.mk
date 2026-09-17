@@ -385,6 +385,12 @@ loop:
 		fi ; \
 		if [ "$$prc" != 0 ] && [ "$$prc" != 3 ]; then \
 			rz="$$(bash "$(FACTORY_BIN)/wt-resume.sh")" && rzc=0 || rzc=$$? ; \
+			case "$$rzc" in \
+				0|1) ;; \
+				3) echo "$(FACTORY_CYAN)— reprise impossible : configuration ou issue inaccessible. Arrêt, travail local conservé. —$(FACTORY_RST)" ; exit 3 ;; \
+				*) echo "$(FACTORY_CYAN)— reprise invérifiable (code $$rzc) · nouveau sondage dans $(LOOP_SLEEP)s —$(FACTORY_RST)" ; \
+				   sleep $(LOOP_SLEEP) ; continue ;; \
+			esac ; \
 			if [ "$$rzc" = 0 ]; then \
 				why="$${rz#*$$(printf '\t')}" ; issue="$${rz%%$$(printf '\t')*}" ; \
 				prompt="$(LOOP_PROMPT_RESUME)" ; \
@@ -396,6 +402,16 @@ loop:
 		if [ "$$prc" = 3 ]; then echo "$(FACTORY_CYAN)— sondage des PR impossible : configuration cassée. Arrêt. —$(FACTORY_RST)" ; exit 3 ; fi ; \
 		if [ "$$prc" = 0 ]; then \
 			why="$${pr#*$$(printf '\t')}" ; pr="$${pr%%$$(printf '\t')*}" ; \
+			bash "$(FACTORY_BIN)/gh-pr-admission.sh" "$$pr" && pac=0 || pac=$$? ; \
+			case "$$pac" in \
+				0) ;; \
+				1) echo "$(FACTORY_CYAN)— maintenance hors file ; recherche d'une carte indépendante —$(FACTORY_RST)" ; prc=1 ;; \
+				3) echo "$(FACTORY_CYAN)— admission de maintenance impossible : arrêt, PR conservée. —$(FACTORY_RST)" ; exit 3 ;; \
+				*) echo "$(FACTORY_CYAN)— maintenance non admissible (code $$pac) · nouveau sondage dans $(LOOP_SLEEP)s —$(FACTORY_RST)" ; \
+				   sleep $(LOOP_SLEEP) ; continue ;; \
+			esac ; \
+		fi ; \
+		if [ "$$prc" = 0 ]; then \
 			issue="pr$$pr" ; \
 			prompt="$(LOOP_PROMPT_PR)" ; prompt="$${prompt//@PR@/"$$pr"}" ; prompt="$${prompt//@WHY@/"$$why"}" ; prompt="$${prompt//@REPO@/"$$GH_REPO"}" ; \
 			echo "$(FACTORY_CYAN)— entretien : PR #$$pr ($$why) —$(FACTORY_RST)" ; \
