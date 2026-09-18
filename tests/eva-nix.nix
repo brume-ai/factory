@@ -36,6 +36,9 @@ assert hasInfix "TZ=UTC" tuned.systemd.services.factory-eva.serviceConfig.ExecSt
 # Le wrapper `eva` est sur le PATH de la machine : c'est lui que eva-notify.sh
 # et l'unite de setup appellent.
 assert builtins.any (p: (p.name or "") == "eva") enabled.environment.systemPackages;
+# Le wrapper attache TOUJOURS stdin : `eva send -f -` lit le message piped par
+# eva-notify.sh (sans -i, hermes disait « no message provided »).
+assert hasInfix "else args+=(-i)" (builtins.readFile ../nix/eva.nix);
 # Le modele, ecrit dans config.yaml AVANT la passerelle, surchargeable — par
 # eva-config.py (model: est un MAPPING sur la machine), jamais par un sed.
 assert hasInfix "eva-config.py" enabled.systemd.services.factory-eva-config.script;
