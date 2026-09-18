@@ -63,7 +63,13 @@ let
   eva = pkgs.writeShellScriptBin "eva" ''
     set -euo pipefail
     args=()
-    if [ -t 0 ]; then args+=(-it); fi
+    # STDIN EST TOUJOURS ATTACHÉ. `hermes send -f -` lit son message sur stdin,
+    # et eva-notify.sh le lui pipe : sans `-i`, `docker exec` ne relie pas le
+    # stdin du wrapper à celui du conteneur, et hermes répond « no message
+    # provided » — constaté le 18 septembre 2026 au premier ping de la v2.
+    # `-t` seulement devant un terminal : un pseudo-tty sur un pipe casse la
+    # sortie de hermes.
+    if [ -t 0 ]; then args+=(-it); else args+=(-i); fi
     if ${docker} inspect --format '{{.State.Running}}' factory-eva 2>/dev/null | ${pkgs.gnugrep}/bin/grep -qx true; then
       exec ${docker} exec "''${args[@]}" --user ${toString config.users.users.${factory.user}.uid}:${toString config.users.groups.users.gid} --env HOME=/opt/data factory-eva hermes "$@"
     fi
