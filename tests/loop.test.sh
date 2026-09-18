@@ -64,6 +64,7 @@ assert_contains "$TESTTMP/agent.log" "orchestrator : suis le skill" "le prompt e
 # LE SKILL EST INJECTE DEPUIS LA RACINE : le worktree porte un sous-module
 # epingle par la branche de feature, et Claude Code y chargerait l'ancien skill.
 assert_contains "$TESTTMP/agent.log" "--append-system-prompt-file $REPO/skill/orchestrator/SKILL.md" "le skill orchestrateur vient du sous-module de la racine, pas du worktree"
+assert_contains "$TESTTMP/agent.log" "--setting-sources user --append-system-prompt-file" "et le skill du projet (worktree, epingle) n'est pas charge : --setting-sources user"
 # L'ORCHESTRATEUR EST LANCE DANS LE WORKTREE, pas dans l'arbre principal.
 assert_eq "$C/.worktrees/feature-3" "$(sed -n 's/^cwd: //p' "$TESTTMP/agent.log" | tail -n1)" \
   "l'orchestrateur tourne dans le worktree de la feature"
