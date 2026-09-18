@@ -76,8 +76,16 @@ FACTORY_RST  := $(shell tput sgr0 2>/dev/null)
 LOOP_PROMPT ?= orchestrator : suis le skill. Carte \#@ISSUE@ du dépôt @REPO@, feature \#@FEATURE@ (branche feature/@FEATURE@, PR \#@PR@ — la boucle les a créées, tu ne les recrées pas). Worktree : @WORKTREE@ (tu y es lancé). Racine : @ROOT@ (les artefacts du tour vivent sous @ROOT@/.omc/turn/@ISSUE@/, jamais dans le worktree). Base : @BASE@. Un seul tour : compose l'équipe, fais poper chaque rôle par role.sh, n'écris aucun code toi-même, ne pousse JAMAIS. Pose @ROOT@/.omc/turn/@ISSUE@/pret quand turn-verify.sh rend 0, ou arrête-toi sur needs-human, refacto carvée, ou prémisse fausse prouvée. Tu ne rends JAMAIS la main en attendant un résultat. Puis stop.
 
 LOOP_MAIN_BIN    := claude
-LOOP_RUN_VERBOSE  = $(CLAUDE_LAUNCH) --output-format stream-json --verbose -p "$$prompt" | "$(FACTORY_BIN)/claude-stream.sh"
-LOOP_RUN_QUIET    = $(CLAUDE_LAUNCH) -p "$$prompt"
+# LE SKILL VIENT DE LA RACINE, INJECTÉ PAR LA BOUCLE. L'orchestrateur est lancé
+# dans le worktree, et Claude Code y charge `.claude/skills/orchestrator` — un
+# lien vers le sous-module tools/factory DU WORKTREE, épinglé par la branche de
+# feature à la révision du jour où elle a été ouverte. Constaté au premier tour
+# réel de la v2 (18 septembre 2026) : un skill corrigé et déployé à la racine,
+# un tour qui lisait encore l'ancien. `--append-system-prompt-file` porte celui
+# du sous-module de l'arbre principal, que cette boucle met à jour à chaque tour.
+LOOP_SKILL        = --append-system-prompt-file "$(FACTORY_DIR)/skill/orchestrator/SKILL.md"
+LOOP_RUN_VERBOSE  = $(CLAUDE_LAUNCH) $(LOOP_SKILL) --output-format stream-json --verbose -p "$$prompt" | "$(FACTORY_BIN)/claude-stream.sh"
+LOOP_RUN_QUIET    = $(CLAUDE_LAUNCH) $(LOOP_SKILL) -p "$$prompt"
 
 ## loop: la boucle v2 sur les issues GitHub — orchestrateur NEUF par carte, la boucle pousse (VERBOSE=1 pour suivre)
 .PHONY: loop

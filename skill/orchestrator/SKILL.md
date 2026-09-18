@@ -43,7 +43,7 @@ ce qu'un tour demande (labels, commentaires, sous-issues), rien de ce qu'il ne
 doit pas faire (pousser). Il vit une heure ; si une commande rend un **401**,
 refrappez-le **par commande**, en préfixe, avec la même portée (un `export`
 ne survit pas à l'appel d'outil qui l'a posé — chaque commande est un shell
-neuf) : `GH_TOKEN="$(bash tools/factory/bin/gh-app-token.sh --agent)" gh …`.
+neuf) : `GH_TOKEN="$(bash "$ROOT"/tools/factory/bin/gh-app-token.sh --agent)" gh …`.
 **Ne l'écrivez jamais dans un fichier** — pas dans `/tmp`, nulle part : c'est un
 secret, et un tour qui meurt le laisse sur disque. Si `gh-app-token.sh` sort en
 3, la configuration est cassée : arrêtez et dites-le.
@@ -70,6 +70,15 @@ commande est un shell neuf), depuis le prompt (« Racine : … ») ou depuis git
 ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
 ```
 
+**Et l'outillage aussi vient de la racine : `"$ROOT"/tools/factory/bin/…`,
+jamais `tools/factory/bin/…` depuis le worktree.** Le worktree porte le
+sous-module `tools/factory` à la révision que la BRANCHE DE FEATURE épingle
+— celle du jour où elle a été ouverte —, alors que la boucle met l'arbre
+principal à jour à chaque tour. Constaté au premier tour réel de la v2 (18
+septembre 2026) : un correctif de `role.sh` déployé à la racine, et un tour
+qui tournait encore l'ancien depuis le worktree. Le sous-module du worktree
+n'est pas touché (un gitlink modifié entrerait dans le diff de la carte).
+
 **`VERIFY.md`.** Le dépôt consommateur définit ce que « vérifié » veut dire
 dans `VERIFY.md` à sa racine ; sans `VERIFY.md`, le contrat est `make verify`.
 C'est le codeur qui le joue, dans le worktree, avant de commiter — et un commit
@@ -93,7 +102,7 @@ Une des cinq qui manque : arrêtez et dites-le. Chaque rôle se lance ainsi, et
 **seulement** ainsi :
 
 ```bash
-bash tools/factory/bin/role.sh <rôle> "$N" "$WT" "$BASE" [fichier d'entrée…]
+bash "$ROOT"/tools/factory/bin/role.sh <rôle> "$N" "$WT" "$BASE" [fichier d'entrée…]
 ```
 
 Il assemble le prompt (skill + contexte du tour + carte + entrées — des
@@ -151,7 +160,7 @@ lancer.
 ### 0. Prendre la carte
 
 ```bash
-bash tools/factory/bin/card-state.sh "$N" busy
+bash "$ROOT"/tools/factory/bin/card-state.sh "$N" busy
 ```
 
 Posez l'état **avant** de travailler : c'est ce qui dit qu'un agent tient
@@ -168,7 +177,7 @@ est fausse, ne la corrigez pas en silence : dites-le en commentaire.
 ### 1. L'analyste — avant toute ligne
 
 ```bash
-bash tools/factory/bin/role.sh analyste "$N" "$WT" "$BASE"
+bash "$ROOT"/tools/factory/bin/role.sh analyste "$N" "$WT" "$BASE"
 ```
 
 Il rend `$ROOT/.omc/turn/$N/analyste-1.md` (l'état des lieux, pour le codeur)
@@ -179,7 +188,7 @@ et `analyse.json`. Lisez `analyse.json`, et branchez sur `refacto` :
   marqueur de remise à zéro du tour :
 
 ```bash
-bash tools/factory/bin/card-state.sh "$N" needs-human "refacto au-dessus du seuil : <ce qui est à mettre au propre, l'état des lieux cité>"
+bash "$ROOT"/tools/factory/bin/card-state.sh "$N" needs-human "refacto au-dessus du seuil : <ce qui est à mettre au propre, l'état des lieux cité>"
 ```
 
   Arrêtez-vous.
@@ -191,7 +200,7 @@ bash tools/factory/bin/card-state.sh "$N" needs-human "refacto au-dessus du seui
 ```bash
 M="$(gh issue create --title "refacto: <ce que l'analyste a nommé>" \
   --body "$(printf 'Mise au propre avant #%s (sous le seuil : aucune interface publique).\n\n%s' "$N" "<l'extrait de l'état des lieux>")" | grep -oE '[0-9]+$')"
-bash tools/factory/bin/card-state.sh "$M" priority   # elle passe devant la file
+bash "$ROOT"/tools/factory/bin/card-state.sh "$M" priority   # elle passe devant la file
 # Sous-issue du parent de la carte (card.json → parent_issue_url) ; sans parent, de la carte elle-même.
 parent_url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("parent_issue_url") or "")' "$ROOT/.omc/turn/$N/card.json")"
 parent_id="$(gh api "${parent_url:-repos/$GH_REPO/issues/$N}" --jq .node_id)"
@@ -199,7 +208,7 @@ enfant_id="$(gh api "repos/$GH_REPO/issues/$M" --jq .node_id)"
 gh api graphql -f query='mutation($p:ID!,$e:ID!){ addSubIssue(input:{issueId:$p, subIssueId:$e}) { issue { number } } }' -F p="$parent_id" -F e="$enfant_id"
 # La carte est bloquée par la refacto, nativement — l'id NUMÉRIQUE de #M, pas son numéro.
 gh api -X POST "repos/$GH_REPO/issues/$N/dependencies/blocked_by" -F issue_id="$(gh api "repos/$GH_REPO/issues/$M" --jq .id)"
-bash tools/factory/bin/card-state.sh "$N" unbusy
+bash "$ROOT"/tools/factory/bin/card-state.sh "$N" unbusy
 ```
 
   (La carte est bloquée par la dépendance native : `gh-next-issue.sh` la
@@ -218,7 +227,7 @@ demande) peut se passer du socle : justifiez-le dans
 ### 2. Le codeur
 
 ```bash
-bash tools/factory/bin/role.sh codeur "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md"
+bash "$ROOT"/tools/factory/bin/role.sh codeur "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md"
 ```
 
 Il implémente, joue `VERIFY.md`, commite **sur la branche courante, `Refs #$N`
@@ -234,7 +243,7 @@ Les relecteurs lisent `git diff $BASE..HEAD` eux-mêmes, dans le worktree ;
 vous ne leur passez pas de diff, vous leur passez ce qui aide à le lire :
 
 ```bash
-bash tools/factory/bin/role.sh relecteur-maint "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md"
+bash "$ROOT"/tools/factory/bin/role.sh relecteur-maint "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md"
 ```
 
 Lisez `verdict` dans `relecteur-maint-<k>.json` :
@@ -244,8 +253,8 @@ Lisez `verdict` dans `relecteur-maint-<k>.json` :
   entrée**, puis relancez le relecteur :
 
 ```bash
-bash tools/factory/bin/role.sh codeur "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md" "$ROOT/.omc/turn/$N/relecteur-maint-1.md"
-bash tools/factory/bin/role.sh relecteur-maint "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md"
+bash "$ROOT"/tools/factory/bin/role.sh codeur "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md" "$ROOT/.omc/turn/$N/relecteur-maint-1.md"
+bash "$ROOT"/tools/factory/bin/role.sh relecteur-maint "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md"
 ```
 
   `role.sh` **refuse (code 5) au-delà de N allers-retours**, sans rien lancer.
@@ -259,7 +268,7 @@ Puis la sécurité, sur le diff final — et **plus aucun commit de code après
 elle** : `turn-verify.sh` refuse ce que le dernier relecteur n'a pas vu.
 
 ```bash
-bash tools/factory/bin/role.sh relecteur-secu "$N" "$WT" "$BASE"
+bash "$ROOT"/tools/factory/bin/role.sh relecteur-secu "$N" "$WT" "$BASE"
 ```
 
 - `ok` → continuez.
@@ -270,13 +279,13 @@ bash tools/factory/bin/role.sh relecteur-secu "$N" "$WT" "$BASE"
   repartira d'un tour propre (le marqueur que `card-state.sh` pose).
 
 ```bash
-bash tools/factory/bin/card-state.sh "$N" needs-human "faille relevée par le relecteur sécurité : <la trouvaille, citée>"
+bash "$ROOT"/tools/factory/bin/card-state.sh "$N" needs-human "faille relevée par le relecteur sécurité : <la trouvaille, citée>"
 ```
 
 ### 4. Le writer, si `analyse.json` porte `comportement_documente: true` ET que `$WT/DOCS.md` existe
 
 ```bash
-bash tools/factory/bin/role.sh writer "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md"
+bash "$ROOT"/tools/factory/bin/role.sh writer "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md"
 ```
 
 Il met la doc à jour dans un commit séparé `docs(...)`, `Refs #$N` — le seul
@@ -286,7 +295,7 @@ commit toléré après les relecteurs, parce qu'il ne touche que de la doc. Sans
 ### 5. Vérifier le tour, écrire la livraison, s'arrêter
 
 ```bash
-bash tools/factory/bin/turn-verify.sh "$N" "$WT" "$BASE"
+bash "$ROOT"/tools/factory/bin/turn-verify.sh "$N" "$WT" "$BASE"
 ```
 
 Il liste **tous** les motifs de refus, préfixés `turn-verify:`. Sur 1,

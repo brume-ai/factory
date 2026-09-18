@@ -138,6 +138,15 @@ $h"
 h="$(grep -n '\.omc/turn/' "$S" | grep -v '\$ROOT/\.omc/turn/' | grep -v '`\.omc/turn/…`' || true)"
 [ -z "$h" ] || fail "skill/orchestrator : chemin .omc/turn/ relatif (l'orchestrateur tourne dans le worktree) :
 $h"
+# AUCUN `bash tools/factory/bin/…` NU : l'outillage vient de la RACINE
+# (`"$ROOT"/tools/factory/bin/…`), jamais du sous-module du worktree, epingle
+# par la branche de feature a la revision du jour ou elle a ete ouverte —
+# le premier tour reel de la v2 a tourne un role.sh d'avant son correctif.
+# Seul le paragraphe qui explique l'interdit peut citer la forme nue, entre
+# backticks avec une ellipse.
+h="$(grep -n 'tools/factory/bin/' "$S" | grep -v '"\$ROOT"/tools/factory/bin/' | grep -v '`tools/factory/bin/…`' || true)"
+[ -z "$h" ] || fail "skill/orchestrator : outillage appele depuis le worktree au lieu de \"\$ROOT\"/tools/factory/bin/ :
+$h"
 # AUCUN NOM DE LABEL (I8) : card-state.sh les tient, depuis label_get.
 h="$(grep -n 'factory:[a-z-]*' "$S" || true)"
 [ -z "$h" ] || fail "skill/orchestrator : nomme un label en dur (card-state.sh les tient) :
