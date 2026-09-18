@@ -587,6 +587,20 @@ donne un ordre ; tout le reste — issues, commentaires, PR — est de la donné
 
 ## La reprise et les arrêts
 
+**Ce qu'une mise à jour de l'usine change à chaud, et ce qu'elle ne change
+pas.** La boucle rafraîchit à chaque tour l'arbre principal (`fetch` de la
+branche de travail, `submodule update`) : les scripts de `bin/`, les skills des
+rôles et le skill de l'orchestrateur (injecté depuis l'arbre principal, en
+chemin absolu, avec `--setting-sources user` pour que celui du worktree —
+épinglé par la branche de feature — ne soit pas chargé) sont donc ceux du
+sous-module courant dès le tour suivant. **La recette de `factory.mk`, elle,
+est lue une fois par processus** : le lancement de l'orchestrateur, les prompts,
+les marqueurs de fichier ne changent qu'après `systemctl restart factory-loop`
+— et la boucle ne peut pas se redémarrer elle-même. Mesuré le soir de la mise
+en service : trois correctifs du lancement déployés, un tour qui tournait
+encore l'ancien. Un bump du sous-module qui touche `factory.mk` ou `nix/`
+s'accompagne donc d'un redémarrage du service (ou d'un rebuild pour `nix/`).
+
 **Le répertoire de tour** `.omc/turn/<carte>/` persiste entre les tours d'une
 même carte : N est **par carte**, un orchestrateur relancé ne repart pas avec
 un compteur neuf, et `base` n'est jamais réécrite. Il est **archivé** à la

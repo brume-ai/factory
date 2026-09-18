@@ -26,7 +26,12 @@ FACTORY_GIT_EMAIL = usine-test@example.invalid
 LOOP_SLEEP = 1
 EOF
   local l; for l in "$@"; do printf '%s\n' "$l" >> "$c/factory.conf"; done
-  printf 'include %s\n' "$REPO/factory.mk" > "$c/Makefile"
+  # INCLUS EN RELATIF, COMME LE VRAI CONSOMMATEUR (`include tools/factory/factory.mk`) :
+  # un chemin que factory.mk derive de FACTORY_DIR et qui n'est pas rendu absolu
+  # se resout dans le worktree une fois l'orchestrateur lance apres `cd $wt`.
+  # Inclus en absolu, le test ne le voyait pas.
+  mkdir -p "$c/tools" && ln -sfn "$REPO" "$c/tools/factory"
+  printf 'include tools/factory/factory.mk\n' > "$c/Makefile"
 }
 # LOOP_MAIN_BIN=bash : evite que la garde "command -v claude" fasse echouer la
 # suite sur un runner CI sans CLI claude installee (bash, lui, est toujours la).
@@ -63,7 +68,7 @@ assert_contains "$TESTTMP/agent.log" "du dépôt o/r" "le prompt nomme le depot,
 assert_contains "$TESTTMP/agent.log" "orchestrator : suis le skill" "le prompt envoie dans le skill orchestrator"
 # LE SKILL EST INJECTE DEPUIS LA RACINE : le worktree porte un sous-module
 # epingle par la branche de feature, et Claude Code y chargerait l'ancien skill.
-assert_contains "$TESTTMP/agent.log" "--append-system-prompt-file $REPO/skill/orchestrator/SKILL.md" "le skill orchestrateur vient du sous-module de la racine, pas du worktree"
+assert_contains "$TESTTMP/agent.log" "--append-system-prompt-file $C/tools/factory/skill/orchestrator/SKILL.md" "le skill orchestrateur vient du sous-module de la RACINE, en chemin ABSOLU : l orchestrateur est lance apres cd worktree"
 assert_contains "$TESTTMP/agent.log" "--setting-sources user --append-system-prompt-file" "et le skill du projet (worktree, epingle) n'est pas charge : --setting-sources user"
 # L'ORCHESTRATEUR EST LANCE DANS LE WORKTREE, pas dans l'arbre principal.
 assert_eq "$C/.worktrees/feature-3" "$(sed -n 's/^cwd: //p' "$TESTTMP/agent.log" | tail -n1)" \
