@@ -94,6 +94,31 @@ run
 assert_rc 4 "$rc" "un parent injoignable (500) est un rate passager"
 rm -f "$H"/*.code
 
+# e4) LA FORME QU'UN JETON D'APP REÇOIT : AUCUNE reponse ne porte
+#     `parent_issue_url` (mesure le 18 septembre 2026 sur Paris-Showroom/website,
+#     present avec un jeton utilisateur, absent avec celui de Pony ou d'EVA).
+#     La cle absente n'est pas « pas de parent » : on demande issues/<n>/parent,
+#     200 = le parent, 404 = aucun. Sans ce chemin, la selection v2 tombait en 3
+#     au premier tour sur la machine.
+app() { printf '%s' "$(iss "$@")" | sed 's/"parent_issue_url":[^,]*,//'; }
+liste "$(app 10 '[]' null Feature null 1)" "$(app 11 '[]' 10 Task null 1)" "$(app 12 '[]' 11 Task)"
+subs 10 11; subs 11 12
+app 11 '[]' 10 Task null 1 > "$H/repos_o_r_issues_12_parent.json"
+app 10 '[]' null Feature null 1 > "$H/repos_o_r_issues_11_parent.json"
+printf '404' > "$H/repos_o_r_issues_10_parent.code"
+: > "$C"
+run
+assert_rc 0 "$rc" "sans parent_issue_url, la chaine se lit par issues/<n>/parent ($(cat "$TESTTMP/err"))"
+assert_eq "12" "$n" "la carte est prise"
+assert_contains "$TESTTMP/err" "feature #10" "la feature est trouvee par le point /parent"
+assert_contains "$C" "GET repos/o/r/issues/12/parent " "le point /parent a ete demande pour la carte"
+assert_contains "$C" "GET repos/o/r/issues/10/parent " "et pour la feature, dont le 404 dit : pas de parent"
+# Un /parent en 500 reste un rate passager, jamais « pas de parent ».
+printf '500' > "$H/repos_o_r_issues_12_parent.code"
+run
+assert_rc 4 "$rc" "un /parent injoignable est un rate passager"
+rm -f "$H"/*.code "$H"/*_parent.json
+
 # f) L'ORDRE. Feature 20 : lot 21 (position 0) puis lot 22 (position 1) ;
 #    lot 21 : carte 24 (position 0) puis carte 23 (position 1) ; lot 22 : carte 25.
 #    Numeros a contre-sens de l'ordre, pour que seule la POSITION explique le tri.

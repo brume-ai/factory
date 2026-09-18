@@ -102,7 +102,7 @@ class Reader:
         # rend pas ne dit rien du parent ni des enfants, et on relit alors
         # l'issue seule.
         return (isinstance(issue, dict) and isinstance(issue.get("number"), int)
-                and "parent_issue_url" in issue and "type" in issue and "sub_issues_summary" in issue)
+                and "type" in issue and "sub_issues_summary" in issue)
 
     def fetch(self, number):
         """La réponse REST brute de issues/<n> — sans contrôle : `lot` regarde
@@ -112,7 +112,7 @@ class Reader:
 
     def admit(self, number, data):
         if not self._complete(data) or data["number"] != number:
-            raise LookupFailure("issue #%s illisible (number, parent_issue_url ou type absents)" % number, 3)
+            raise LookupFailure("issue #%s illisible (number, type ou sub_issues_summary absents)" % number, 3)
         self.cache[number] = data
         return data
 
@@ -122,6 +122,14 @@ class Reader:
         return self.cache[number]
 
     def parent_of(self, issue):
+        # UN JETON D'APP NE VOIT JAMAIS `parent_issue_url` — mesuré le 18 septembre
+        # 2026 sur Paris-Showroom/website : présent avec un jeton utilisateur,
+        # absent de toutes les réponses (issue, liste, sous-issues) avec celui de
+        # Pony ou d'EVA. La clé absente ne veut donc pas dire « pas de parent » :
+        # on demande `issues/<n>/parent`, que l'App voit (200 = le parent, 404 =
+        # aucun). La clé, quand elle est là, évite un appel par carte.
+        if "parent_issue_url" not in issue:
+            return self.parent_by_endpoint(issue)
         url = issue.get("parent_issue_url")
         if url is None:
             return None
@@ -133,6 +141,24 @@ class Reader:
         if m.group(1).lower() != self.repo.lower():
             raise LookupFailure("#%s a un parent hors dépôt (%s) : une feature vit dans le dépôt de ses cartes" % (issue.get("number"), url), 3)
         return int(m.group(2))
+
+    def parent_by_endpoint(self, issue):
+        number = issue.get("number")
+        try:
+            parent, _ = request("repos/%s/issues/%s/parent" % (self.repo, number))
+        except LookupFailure as failure:
+            if failure.status == "404":
+                return None
+            raise
+        if not isinstance(parent, dict) or not isinstance(parent.get("number"), int):
+            raise LookupFailure("parent de #%s illisible" % number, 3)
+        url = parent.get("repository_url") or ""
+        m = re.fullmatch(r"https://api\.github\.com/repos/([^/]+/[^/]+)", url)
+        if m and m.group(1).lower() != self.repo.lower():
+            raise LookupFailure("#%s a un parent hors dépôt (%s) : une feature vit dans le dépôt de ses cartes" % (number, url), 3)
+        if self._complete(parent):
+            self.cache.setdefault(parent["number"], parent)
+        return parent["number"]
 
     def chain(self, number):
         """Les numéros de la carte vers le haut, parent après parent."""
