@@ -401,7 +401,11 @@ fi
 
 # --- 7. L'archive du tour -------------------------------------------------------------------------
 mkdir -p "$ROOT/.omc/turns-done"
+# DEUX ARCHIVES DANS LA MÊME SECONDE (un rejeu rapide, la suite de tests) : `mv`
+# déplacerait le tour DANS l'archive existante au lieu de l'archiver à côté.
+# Le nom est rendu unique avant de déplacer.
 ARCHIVE="$ROOT/.omc/turns-done/$CARTE-$(date +%s)"
+n=1; while [ -e "$ARCHIVE" ]; do n=$((n+1)); ARCHIVE="$ROOT/.omc/turns-done/$CARTE-$(date +%s)-$n"; done
 mv "$TURN" "$ARCHIVE"
 echo "deliver: tour archivé dans $ARCHIVE" >&2
 exit 0

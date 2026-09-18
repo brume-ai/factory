@@ -39,6 +39,14 @@
 # réordonne à la souris), puis le numéro. Une carte prise n'est PAS écartée :
 # l'usine n'a qu'un agent, donc une carte prise est le tour qu'il a laissé en
 # mourant, et l'écarter la figerait pour toujours (D7).
+#
+# UNE FEATURE DONT LE WORKTREE PORTE DU TRAVAIL NON POUSSÉ D'UNE AUTRE CARTE
+# N'ADMET PAS DE CARTE (wt-pending.sh). Le 18 septembre 2026, #247 a fini en
+# needs-human après un commit du codeur et avant tout push ; la boucle a servi
+# #255, même feature, même worktree, et son diff aurait embarqué le travail de
+# #247 — que la porte refuse. La feature attend donc SA carte : les autres
+# candidates de la feature sont écartées, et dites ; la carte en attente, si
+# elle est admissible, passe devant tout.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
@@ -205,6 +213,39 @@ ordre="$(printf '{"open":%s,"candidates":%s}' "$issues_raw" "$candidats" \
   | FACTORY_TOKEN="$TOKEN" PRIO="$PRIO_LABEL" BUSY="$BUSY_LABEL" MILESTONE="$MILESTONE" \
     python3 "$HERE/gh-feature.py" rank "$GH_REPO")" || exit $?
 
+lignes="$(printf '%s' "$ordre" | python3 -c '
+import json, sys
+for r in json.load(sys.stdin):
+    print("%d\t%d\t%d\t%d" % (r["number"], r["feature"], r["mini"], r["busy"]))
+')" || exit 4
+
+# LE TRAVAIL EN ATTENTE, PAR FEATURE, LU UNE FOIS PAR FEATURE (wt-pending.sh :
+# les cartes des commits non poussés du worktree). UNE FEATURE QUI ATTEND UNE
+# AUTRE CARTE N'ADMET PAS CELLE-CI — son diff embarquerait le travail non
+# poussé de l'autre, et la porte le refuserait : écartée ici, et dite, avant
+# que quoi que ce soit soit servi. Une candidate qui EST la carte attendue
+# passe devant tout — son travail est là, personne d'autre ne peut avancer sur
+# la feature tant qu'il n'est pas poussé ; les autres gardent l'ordre de rank.
+# Le 3 de wt-pending (un worktree illisible) est propagé : ce n'est pas
+# « rien à faire ».
+declare -A attente
+en_avant=""; reste=""
+while IFS=$'\t' read -r number feature mini busy; do
+  [[ -n "$number" ]] || continue
+  if [[ -z "${attente[$feature]+x}" ]]; then
+    p="$(bash "$HERE/wt-pending.sh" "$feature")" || exit $?
+    attente[$feature]="$(printf '%s\n' "$p" | grep -xE '[0-9]+' | tr '\n' ' ' || true)"
+  fi
+  autres="$(printf '%s' "${attente[$feature]}" | tr ' ' '\n' | grep -vx "$number" | sed 's/^/#/' | paste -sd, - || true)"
+  if [[ -n "$autres" ]]; then
+    echo "gh-next-issue: #$number : feature/$feature porte le travail non poussé de ${autres//,/, } — la feature attend cette carte" >&2
+  elif [[ -n "${attente[$feature]}" ]]; then
+    en_avant+="$number	$feature	$mini	$busy"$'\n'
+  else
+    reste+="$number	$feature	$mini	$busy"$'\n'
+  fi
+done <<<"$lignes"
+
 # CHAQUE CANDIDATE, DANS L ORDRE, PASSE LA LECTURE NATIVE DES DÉPENDANCES, et
 # la première satisfaite est servie. Le résumé `issue_dependencies_summary` ne
 # prouve jamais une absence de blocage ; gh-dependencies.py dit sur stderr
@@ -225,11 +266,7 @@ while IFS=$'\t' read -r number feature mini busy; do
   else
     rc=$?; [[ "$rc" == 1 ]] || exit "$rc"
   fi
-done <<<"$(printf '%s' "$ordre" | python3 -c '
-import json, sys
-for r in json.load(sys.stdin):
-    print("%d\t%d\t%d\t%d" % (r["number"], r["feature"], r["mini"], r["busy"]))
-')"
+done <<<"$en_avant$reste"
 
 # LA PHRASE DE SORTIE ÉNUMÈRE LES SEULES RAISONS POSSIBLES, et les lignes
 # au-dessus ont nommé chaque carte écartée.

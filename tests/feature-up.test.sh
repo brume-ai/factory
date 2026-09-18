@@ -129,6 +129,23 @@ assert_eq "sale" "$(cat "$WT/en-cours")" "le fichier non commité est intact"
 assert_eq "1" "$(git -C "$WT" rev-list --count origin/feature/10..HEAD)" "le commit non poussé est intact"
 rm -f "$WT/en-cours"; git -C "$WT" reset -q --hard origin/feature/10
 
+# --- d2) ... MAIS LE TRAVAIL NON POUSSÉ D'UNE AUTRE CARTE REFUSE CELLE-CI (wt-pending.sh)
+# Le 18 septembre : #247 arrêtée après un commit et avant le push, #255 admise
+# sur le même worktree. Un commit « Refs #13 » non poussé : la carte 12 est
+# refusée (1, needs-human, la raison nomme #13), la carte 13 est admise (0).
+iss 13 10 Task "l'autre carte"
+git -C "$WT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "feat: la carte 13" -m "Refs #13"
+: > "$H/calls.log"
+run 12
+refuse 12 "la feature #10 porte le travail non poussé de #13"
+assert_contains "$TESTTMP/err" "la feature attend cette carte, pas #12" "et le refus dit qui la feature attend"
+: > "$H/calls.log"
+run 13
+assert_rc 0 "$rc" "la carte dont c'est le travail est admise ($(cat "$TESTTMP/err"))"
+assert_file_lacks "$H/calls.log" "needs-human" "et rien n'est posé sur elle"
+assert_eq "1" "$(git -C "$WT" rev-list --count origin/feature/10..HEAD)" "son commit l'attend, intact"
+rm -f "$R/.omc/turn/12/needs-human"; git -C "$WT" reset -q --hard origin/feature/10
+
 # --- e) LA PILE : la feature 20 dépend de la feature 10, ouverte, dont la branche existe
 # Un bloqueur natif, tel que l'API le rend (gh-dependencies.py exige repository_url et url).
 bloq() { printf '{"number":%s,"state":"%s","labels":[],"repository_url":"https://api.github.com/repos/o/r","url":"https://api.github.com/repos/o/r/issues/%s"}' "$1" "$2" "$1"; }

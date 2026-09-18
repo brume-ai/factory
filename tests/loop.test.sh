@@ -108,6 +108,11 @@ assert_contains "$TESTTMP/loop.out" "livrée sur feature/3" "la boucle annonce l
 # LA BASE EST ECRITE, une fois, dans le repertoire de tour.
 assert_eq "sha-du-tour" "$(cat "$C/.omc/turn/12/base")" "la base du tour est ecrite dans .omc/turn/<carte>/base"
 [ -f "$C/.omc/turn/12/card.json" ] || { echo "card.json absent du repertoire de tour" >&2; exit 1; }
+# LA TETE D'ADMISSION AUSSI : HEAD du worktree au debut du tour, ecrite a
+# CHAQUE admission (le cas 4 le prouve) — c'est ce qui separe, pour la porte,
+# le travail d'un tour precedent de la carte de celui de ce tour.
+assert_eq "$(git -C "$C/.worktrees/feature-3" rev-parse HEAD)" "$(cat "$C/.omc/turn/12/head-admission")" \
+  "head-admission = HEAD du worktree a l'admission"
 
 # L'ORDRE DU MENAGE : nettoyer, debloquer, puis les PR (qui ecrivent des cartes
 # que la selection lira dans le meme tour), puis feature-up apres la selection.
@@ -157,11 +162,16 @@ echo ok
 # ne verrait jamais la base contre laquelle le premier codeur a travaille.
 C4="$TESTTMP/conso-base"; conso "$C4"
 mkdir -p "$C4/.omc/turn/12"; printf 'base-du-premier-tour' > "$C4/.omc/turn/12/base"
+# ... ALORS QUE head-admission, ELLE, EST REECRITE : celle du premier tour
+# (posee ici) ne vaut plus, le worktree a une autre tete maintenant.
+printf 'tete-du-premier-tour' > "$C4/.omc/turn/12/head-admission"
 raz; printf 'sha-avance' > "$TESTTMP/base"; touch "$TESTTMP/agent.pret"
 tour "$C4" > "$TESTTMP/base.out" 2>&1
 assert_eq "base-du-premier-tour" "$(cat "$C4/.omc/turn/12/base")" "la base n'est pas reecrite"
 assert_contains "$TESTTMP/agent.log" "Base : base-du-premier-tour" "l'orchestrateur recoit la base du premier tour"
 assert_eq "12 $C4/.worktrees/feature-3 base-du-premier-tour" "$(cat "$TESTTMP/verify.log")" "la porte aussi"
+assert_eq "$(git -C "$C4/.worktrees/feature-3" rev-parse HEAD)" "$(cat "$C4/.omc/turn/12/head-admission")" \
+  "head-admission est reecrite a chaque admission : HEAD du worktree maintenant, pas celle du premier tour"
 echo ok
 
 # --- 5. REMISE A ZERO SUR LE MARQUEUR needs-human ----------------------------------
@@ -178,6 +188,10 @@ tour "$C5" > "$TESTTMP/rz.out" 2>&1
 [ ! -f "$C5/.omc/turn/12/needs-human" ] || { echo "le marqueur needs-human a survecu" >&2; exit 1; }
 assert_eq "sha-du-tour" "$(cat "$C5/.omc/turn/12/base")" "la base est reecrite sur un tour remis a zero"
 ls -d "$C5"/.omc/turns-done/12-*-needs-human >/dev/null 2>&1 || { echo "l'ancien tour n'a pas ete archive" >&2; exit 1; }
+# L'ARCHIVE GARDE LES ARTEFACTS, elle ne les efface pas : c'est la que la porte
+# ira chercher la preuve d'un commit que ce tour-la a laisse dans le worktree.
+ls "$C5"/.omc/turns-done/12-*-needs-human/relecteur-secu-1.json >/dev/null 2>&1 \
+  || { echo "l'artefact de l'ancien tour n'est pas dans l'archive : la preuve d'un commit precedent est perdue" >&2; exit 1; }
 assert_contains "$TESTTMP/rz.out" "remis à zéro" "la boucle dit la remise a zero"
 echo ok
 

@@ -232,7 +232,7 @@ case "$REFACTO_MAX" in ''|*[!0-9]*|0) echo "role: FACTORY_REFACTO_MAX doit être
 PROMPT="$(cat "$SKILL")"
 PROMPT+=$'\n\n---\n\n'"# Contexte du tour"$'\n\n'
 PROMPT+="- Carte : #$ISSUE"$'\n'
-PROMPT+="- Base de la branche : \`$BASE\` — le diff de la carte est \`git diff $BASE..HEAD\`, à lire dans le worktree courant"$'\n'
+PROMPT+="- Base de la branche : \`$BASE\` — le diff de la carte est \`git diff $BASE..HEAD\`, à lire dans le worktree courant : TOUT le travail de la carte, y compris ce qu'un tour précédent de cette carte a commité sans le pousser"$'\n'
 [ "$ROLE" != analyste ] || PROMPT+="- Seuil de refacto « petite » : $REFACTO_MAX fichiers au plus, et aucune interface publique"$'\n'
 PROMPT+=$'\n---\n\n'
 if [ -f "$TURN/card.json" ]; then

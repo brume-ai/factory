@@ -446,7 +446,9 @@ loop:
 		turn="$(CURDIR)/.omc/turn/$$issue" ; \
 		if [ -f "$$turn/needs-human" ]; then \
 			mkdir -p "$(CURDIR)/.omc/turns-done" ; \
-			mv "$$turn" "$(CURDIR)/.omc/turns-done/$$issue-$$(date +%s)-needs-human" ; \
+			arch="$(CURDIR)/.omc/turns-done/$$issue-$$(date +%s)-needs-human" ; n=1 ; \
+			while [ -e "$$arch" ]; do n=$$((n+1)) ; arch="$(CURDIR)/.omc/turns-done/$$issue-$$(date +%s)-needs-human-$$n" ; done ; \
+			mv "$$turn" "$$arch" ; \
 			echo "$(FACTORY_CYAN)— carte #$$issue réadmise après needs-human : tour remis à zéro, l'ancien est archivé —$(FACTORY_RST)" ; \
 		fi ; \
 		# (c) LA FEATURE : branche, worktree, PR — créés s'ils manquent, repris \
@@ -475,6 +477,15 @@ loop:
 		# premier tour, jusqu'à la livraison ou la remise à zéro. \
 		mkdir -p "$$turn" ; \
 		if [ -f "$$turn/base" ]; then base="$$(cat "$$turn/base")" ; else printf '%s' "$$base" > "$$turn/base" ; fi ; \
+		# LA TÊTE D'ADMISSION, ELLE, EST ÉCRITE À CHAQUE TOUR : HEAD du worktree \
+		# maintenant. Une carte arrêtée en needs-human APRÈS un commit du codeur \
+		# et AVANT le push revient avec ce commit dans le worktree ; sans ce \
+		# fichier, turn-verify le voyait « hors de toute fenêtre du tour » et \
+		# l'analyste « sans avoir vu la base » — la carte était refusée à jamais. \
+		# Avec lui, la porte sépare le travail d'un tour précédent (prouvé par \
+		# les artefacts archivés) de celui de ce tour. \
+		git -C "$$wt" rev-parse --verify HEAD > "$$turn/head-admission" 2>/dev/null \
+		  || { echo "$(FACTORY_CYAN)— $$wt n'a pas de HEAD lisible : traité comme un raté passager —$(FACTORY_RST)" ; rm -f "$$turn/head-admission" ; sleep $(LOOP_SLEEP) ; continue ; } ; \
 		prompt="$(LOOP_PROMPT)" ; \
 		prompt="$${prompt//@ISSUE@/"$$issue"}" ; prompt="$${prompt//@REPO@/"$$GH_REPO"}" ; \
 		prompt="$${prompt//@FEATURE@/"$$feat"}" ; prompt="$${prompt//@WORKTREE@/"$$wt"}" ; \

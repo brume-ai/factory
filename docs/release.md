@@ -34,7 +34,9 @@ attend), `factory:blocked` (retiré par `gh-unblock.sh` quand le bloqueur
 tombe) ; une dépendance native non satisfaite (`gh-dependencies.py` : un
 bloqueur est satisfait s'il est **fermé** ou s'il porte `factory:staged`, le
 label de feature) ; un jalon **autre** que `FACTORY_MILESTONE` — hérité de la
-feature quand la carte n'en a pas ; un lot.
+feature quand la carte n'en a pas ; un lot ; une feature dont le worktree porte
+le travail non poussé d'une **autre** carte — elle attend celle-là, qui passe
+devant (`wt-pending.sh`, voir « La reprise et les arrêts »).
 
 **L'ordre** (`gh-feature.py rank`) : la carte déjà prise d'abord (le tour
 interrompu, son répertoire de tour l'attend), puis `factory:priority` sur la
@@ -66,8 +68,9 @@ triage de sécurité (une spec gelée), mais **plus posé sur une carte**.
 **Qui pose `needs-human`** : l'orchestrateur (refacto au-dessus du seuil,
 désaccord de relecture au-delà de N, faille de sécurité, relecteur deux fois
 illisible), `feature-up.sh` (carte sous une Feature fermée, worktree sur une
-autre branche, branche locale avec des commits jamais poussés, PR refusée par
-GitHub en 422), `deliver.sh` (PR de la feature mergée ou fermée entre
+autre branche ou portant le travail non poussé d'une **autre** carte, branche
+locale avec des commits jamais poussés, PR refusée par GitHub en 422),
+`deliver.sh` (PR de la feature mergée ou fermée entre
 l'admission et la livraison — le commit est **déjà sur la branche**, la raison
 dit de fermer la carte « not planned » plutôt que de la réadmettre, parce qu'une
 réadmission repart d'un tour vide et referait le travail par-dessus),
@@ -278,7 +281,8 @@ worktree, que la boucle ne lit pas). De `role.sh`, par passe : `<rôle>-<k>.prom
 (modèle attendu et **prouvé**, verdict, fenêtre `debut`/`fin`,
 `head_avant`/`head_apres`, le chemin de la preuve) — jamais écrasés ; de
 l'analyste, `analyse.json`. De la boucle : `card.json` (déposé par
-`feature-up.sh` à l'admission, une fois), `base` (une fois), `turn-verify.out`
+`feature-up.sh` à l'admission, une fois), `base` (une fois), `head-admission`
+(HEAD du worktree, à chaque admission — voir « La reprise »), `turn-verify.out`
 et `refus.md` (les motifs d'un refus, postés sur la carte), `needs-human` (le
 marqueur, par `card-state.sh`). De l'orchestrateur : `socle-omis.md`,
 `livraison.md`, `captures/*.png`, `pret`. Le
@@ -300,10 +304,13 @@ motifs et refuse le push (1) sur chacun de ceux-ci :
 - pour le dernier relecteur `ok` de chaque famille : pas de `head_apres` ; sa
   tête n'est plus un ancêtre de HEAD (branche réécrite) ; des commits après
   sa tête touchent du code ;
-- un commit tombé dans la fenêtre d'aucun rôle qui écrit (codeur, writer,
-  designer, test-engineer) — c'est ce qui rend « un agent seul est interdit »
-  vérifiable ;
-- quand le diff touche du code : pas d'analyste `ok` prouvé ayant vu la base ;
+- un commit de ce tour (`head-admission..HEAD`) tombé dans la fenêtre d'aucun
+  rôle qui écrit (codeur, writer, designer, test-engineer) — c'est ce qui rend
+  « un agent seul est interdit » vérifiable ; un commit d'un tour précédent
+  (`base..head-admission`) sans `Refs #<carte>`, ou sans rôle qui écrit valide
+  d'un tour archivé de la carte pour le couvrir ;
+- quand le diff touche du code : pas d'analyste `ok` prouvé ayant vu la tête
+  d'admission (la base, ou le commit d'un tour précédent de la carte) ;
   pas de codeur valide ; pas de relecteur-maint, ou son dernier verdict n'est
   pas `ok`, ou plus de N passes ; pas de relecteur-secu, ou son dernier verdict
   n'est pas `ok` ;
@@ -616,6 +623,29 @@ postés sur la carte) : le tour suivant doit le regagner. Un `deliver.sh` en 4
 (réseau, 5xx) le garde : la carte est reprise et la boucle va droit à la porte
 et à la livraison, sans relancer d'orchestrateur ; en 1 (PR mergée
 entre-temps), `pret` est retiré et la carte attend un humain.
+
+**Un tour arrêté après un commit et avant le push** — `needs-human` sur le
+plafond du relecteur, une faille, un orchestrateur mort entre le codeur et la
+porte — laisse dans le worktree de la feature un commit `Refs #<carte>` que
+`origin/feature/<F>` n'a pas (mesuré le 18 septembre 2026, premier tour réel :
+#247, puis #255 servie sur le même worktree, dont le diff aurait embarqué le
+travail de #247 et que la porte aurait refusé). **La feature attend alors sa
+carte** : `wt-pending.sh <F>` liste les cartes de ces commits (et `dirty` si
+l'arbre a des modifications non commitées) ; la sélection écarte toute autre
+carte de la feature, le dit (« #255 : feature/290 porte le travail non poussé
+de #247 — la feature attend cette carte »), et sert la carte attendue en
+premier si elle est admissible — tant qu'elle est en `needs-human`, la
+feature ne tourne pas. `feature-up.sh` refuse la même chose (1, `needs-human`
+posé) si un sondage périmé la lui présente quand même. Réadmise, **la carte
+reprend son travail** : la boucle écrit `head-admission` (HEAD du worktree,
+à **chaque** admission, contrairement à `base`) ; la porte exige que
+l'analyste ait vu cette tête-là, prouve les commits de `base..head-admission`
+par un rôle qui écrit d'un tour **archivé** de la carte (`turns-done/<carte>-*/`,
+où la remise à zéro déplace les artefacts sans les effacer) portant
+`Refs #<carte>`, et juge ceux de `head-admission..HEAD` sur les fenêtres de ce
+tour. Les relecteurs relisent `git diff base..HEAD`, donc l'ancien commit
+aussi. Un commit d'avant sans preuve archivée, ou `Refs` d'une autre carte :
+refus, et c'est un humain qui pousse ou qui jette.
 
 **Les codes de `make loop`** — ceux de la recette, pas ceux des sous-scripts,
 que le journal dit ligne par ligne — et ce que fait `Restart=always` sur la

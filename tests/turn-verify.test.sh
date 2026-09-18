@@ -357,4 +357,75 @@ for motif in "aucun analyste-<k>.json valide" "modèle non prouvé : codeur-1.js
 done
 assert_contains "$out" "8 motif(s)" "le compte final les dit tous"
 
+# --- o) UNE CARTE RÉADMISE REPREND SON TRAVAIL (head-admission) ---------------------
+# Le fait du 18 septembre : #247 arrêtée en needs-human APRÈS un commit du
+# codeur et AVANT le push. Réadmise, son tour est remis à zéro (l'ancien est
+# archivé sous turns-done/) et le worktree porte toujours ce commit. La boucle
+# écrit head-admission = HEAD à l'admission ; la porte doit alors : exiger un
+# analyste qui a vu head-admission (pas la base), prouver le commit d'avant par
+# un rôle qui écrit d'un tour ARCHIVÉ de la carte, et exiger « Refs #carte ».
+reset_turn
+g checkout -q -b reprise base
+ARCHIVE="$TESTTMP/.omc/turns-done/42-1700000000-needs-human"; mkdir -p "$ARCHIVE"
+# Le commit du tour précédent, signé Refs #42, à 09:00 ; le codeur archivé l'a
+# écrit dans sa fenêtre (08:59-09:01). Puis le codeur de CE tour, à 10:30.
+mkdir -p "$WT/bin"; printf '#!/bin/sh\necho v1\n' > "$WT/bin/outil"; g add -A
+gdate 2026-09-18T09:00:00Z commit -qm "feat: outil" -m "Refs #42"
+ADM="$(g rev-parse HEAD)"
+printf '%s' "$ADM" > "$TURN/head-admission"
+D0=2026-09-18T08:59:00Z D1=2026-09-18T09:01:00Z art_write "$ARCHIVE" "$WT" codeur 1 gpt-6-astra gpt-6-astra ok
+commit_file bin/outil "#!/bin/sh\necho v2" 2026-09-18T10:30:00Z
+# Le socle de ce tour, l'analyste ayant vu la tête d'admission.
+socle_reprise() {
+  HA="$ADM" HP="$ADM" art analyste 1 claude-opus-5 claude-opus-5 ok
+  D0=2026-09-18T10:29:00Z D1=2026-09-18T10:31:00Z art codeur 1 gpt-6-astra gpt-6-astra ok
+  art relecteur-maint 1 claude-opus-5 claude-opus-5 ok
+  art relecteur-secu 1 claude-fable-5-1 claude-fable-5-1 ok
+}
+socle_reprise
+run 42 "$WT" base
+assert_rc 0 "$rc" "commit d'un tour archivé prouvé, analyste sur head-admission = 0 ($out)"
+assert_not_contains "$out" "fenêtre d'aucun rôle" "le commit d'avant n'est pas jugé sur les fenêtres de ce tour"
+# L'analyste qui a vu la BASE alors que head-admission ≠ base : il a regardé
+# un arbre qui n'est pas celui de ce tour.
+HA="$BASE_SHA" HP="$BASE_SHA" art analyste 1 claude-opus-5 claude-opus-5 ok
+run 42 "$WT" base
+assert_rc 1 "$rc" "analyste sur la base alors que head-admission ≠ base = 1"
+assert_contains "$out" "qui ait vu la tête d'admission ${ADM:0:12}" "le motif nomme la tête d'admission"
+HA="$ADM" HP="$ADM" art analyste 1 claude-opus-5 claude-opus-5 ok
+# Le tour archivé sans artefact de rôle qui écrit : le commit d'avant n'est
+# prouvé par personne.
+rm -f "$ARCHIVE"/codeur-1.*
+run 42 "$WT" base
+assert_rc 1 "$rc" "commit archivé sans artefact = 1"
+assert_contains "$out" "${ADM:0:12} (2026-09-18T09:00:00Z) d'un tour précédent de #42 sans preuve" "le motif nomme le commit et le tour précédent"
+# Un codeur archivé qui ne prouve pas son modèle ne prouve rien non plus.
+D0=2026-09-18T08:59:00Z D1=2026-09-18T09:01:00Z art_write "$ARCHIVE" "$WT" codeur 1 gpt-6-astra "" preuve-manquante
+run 42 "$WT" base
+assert_rc 1 "$rc" "commit archivé, codeur archivé sans preuve = 1"
+assert_contains "$out" "d'un tour précédent de #42 sans preuve" "le motif"
+D0=2026-09-18T08:59:00Z D1=2026-09-18T09:01:00Z art_write "$ARCHIVE" "$WT" codeur 1 gpt-6-astra gpt-6-astra ok
+run 42 "$WT" base
+assert_rc 0 "$rc" "la preuve archivée revenue = 0"
+# Le commit d'avant porte « Refs #autre » : c'est le travail d'une autre carte
+# qui est resté dans le worktree — même prouvé par une fenêtre, refus.
+g checkout -q -b reprise-autre base
+mkdir -p "$WT/bin"; printf '#!/bin/sh\necho v1\n' > "$WT/bin/outil"; g add -A
+gdate 2026-09-18T09:00:00Z commit -qm "feat: outil" -m "Refs #99"
+ADM2="$(g rev-parse HEAD)"; printf '%s' "$ADM2" > "$TURN/head-admission"
+commit_file bin/outil "#!/bin/sh\necho v2" 2026-09-18T10:30:00Z
+rm -f "$TURN"/analyste-1.* "$TURN"/codeur-1.* "$TURN"/relecteur-*
+ADM="$ADM2" socle_reprise
+run 42 "$WT" base
+assert_rc 1 "$rc" "commit archivé Refs #autre = 1"
+assert_contains "$out" "${ADM2:0:12} d'un tour précédent ne porte pas « Refs #42 »" "le motif nomme le commit et la carte attendue"
+# Sans head-admission (un appel à la main), tout est de ce tour : le commit de
+# 09:00 est hors de toute fenêtre courante, et l'analyste doit avoir vu la base.
+rm -f "$TURN/head-admission"
+run 42 "$WT" base
+assert_rc 1 "$rc" "sans head-admission, le repli est la base"
+assert_contains "$out" "(2026-09-18T09:00:00Z) n'est tombé dans la fenêtre d'aucun rôle" "le commit d'avant est jugé comme un commit de ce tour"
+assert_contains "$out" "qui ait vu la base" "et l'analyste doit avoir vu la base"
+g checkout -q feature/x
+
 echo ok
