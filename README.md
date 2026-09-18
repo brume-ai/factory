@@ -91,7 +91,7 @@ tools/factory-hooks/            votre politique, un fichier par crochet
   devcontainer.json             service « tools », la feature agent
   docker-compose.yml            tools + les services du projet
   Dockerfile                    votre image de base + ce que le projet ajoute
-.claude/skills/github-loop      lien vers le skill de l'usine
+.claude/skills/orchestrator     lien vers le skill de l'usine (le tour v2)
 Makefile                        include du factory.mk de l'usine
 VERIFY.md                       ce que « fait » veut dire ici
 ```

@@ -259,6 +259,59 @@ else:
 PY
 )"
 
+# LE LECTEUR PAGINÉ DES CONTRÔLES, ÉCRIT UNE FOIS. `checks_verdict <sha>` lit
+# `commits/<sha>/check-runs` PAGE À PAGE jusqu'à `total_count`, fusionne, et
+# rend le verdict de CI_VERDICT_PY sur la liste ENTIÈRE, suivi d'une ligne par
+# contrôle rouge (`nom<TAB>conclusion<TAB>url`). Avec CI_VERDICT_PY seul, un
+# dépôt à plus de cent contrôles rendait « truncated » — que l'appelant lisait
+# comme « pas rouge », en silence : le job e2e qui finit le dernier, en page
+# deux, n'existait pour personne. Ici « truncated » ne peut plus sortir : soit
+# la liste est entière, soit c'est un raté (4).
+# Il lit GH_REPO et FACTORY_TOKEN dans l'environnement — celui du script qui
+# l'appelle, qui les a déjà résolus — et curl avec la même doctrine que les
+# sondages : 4 = passager, 3 = refus. Le fichier de réponse est validé en JSON
+# avant d'être lu. La première page garde l'URL sans `&page=` : c'est celle que
+# les autres lecteurs (et leurs fixtures) connaissent.
+checks_verdict() {  # <sha> : verdict\n[rouge…] · 3 = refus · 4 = passager
+  local sha="$1" page=1 acc="[]" total=-1 body code n_vus=0 path
+  while :; do
+    path="repos/$GH_REPO/commits/$sha/check-runs?per_page=100"
+    [ "$page" -eq 1 ] || path="$path&page=$page"
+    body="$(mktemp)"
+    code="$(curl -sS --retry 3 --retry-delay 2 --retry-connrefused --connect-timeout 10 --max-time 60 \
+      -o "$body" -w '%{http_code}' -H "Authorization: Bearer ${FACTORY_TOKEN:?}" \
+      -H "Accept: application/vnd.github+json" "https://api.github.com/$path")" \
+      || { echo "checks: transport KO sur /$path (curl $?) — raté passager" >&2; rm -f "$body"; return 4; }
+    if [[ "$code" == 000 || "$code" == 5* || "$code" == 429 ]] || { [[ "$code" == 403 ]] && grep -qi 'rate limit' "$body"; }; then
+      echo "checks: HTTP $code sur /$path — raté passager" >&2; rm -f "$body"; return 4
+    fi
+    [[ "$code" == 2* ]] || { echo "checks: HTTP $code sur /$path — $(head -c 200 "$body" | tr '\n' ' ')" >&2; rm -f "$body"; return 3; }
+    if ! acc="$(printf '%s\n' "$acc" | python3 -c '
+import json, sys
+acc = json.loads(sys.stdin.readline())
+d = json.load(open(sys.argv[1]))
+runs = d.get("check_runs")
+if not isinstance(runs, list) or type(d.get("total_count")) is not int: sys.exit(1)
+print(json.dumps({"total": d["total_count"], "runs": acc + runs}))' "$body")"; then
+      echo "checks: réponse illisible sur /$path — raté passager" >&2; rm -f "$body"; return 4
+    fi
+    rm -f "$body"
+    read -r total n_vus <<<"$(printf '%s' "$acc" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["total"], len(d["runs"]))')"
+    acc="$(printf '%s' "$acc" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["runs"]))')"
+    [ "$n_vus" -lt "$total" ] || break
+    page=$((page+1))
+    # Une page vide avant le total, ou plus de vingt pages : la liste ment.
+    [ "$page" -le 20 ] || { echo "checks: plus de 2000 contrôles sur $sha — liste illisible" >&2; return 4; }
+  done
+  printf '{"total_count":%s,"check_runs":%s}' "$total" "$acc" | python3 -c "$CI_VERDICT_PY" || return 4
+  printf '%s' "$acc" | python3 -c '
+import json, sys
+green = {"success", "neutral", "skipped"}
+for r in json.load(sys.stdin):
+    if r.get("status") == "completed" and r.get("conclusion") not in green:
+        print("%s\t%s\t%s" % (r.get("name") or "?", r.get("conclusion"), r.get("html_url") or r.get("details_url") or ""))'
+}
+
 # Un shell sur l'usine, en direct. FACTORY_SSH_BIN permet aux tests (et a un
 # transport exotique) de remplacer ssh sans toucher aux appelants.
 factory_ssh() {

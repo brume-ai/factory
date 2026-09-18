@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# LA BOUCLE, SES GARDES, ET L'ORDRE DE SON MENAGE.
+# LA BOUCLE V2, SES GARDES, L'ORDRE DE SON MENAGE, ET LE TOUR (docs/v2-feature.md, D4).
 #
 # Ce que ce fichier tient, et que rien d'autre ne tient : la recette `loop` est
 # la seule surface du depot ou un nom de branche decide d'un geste d'ECRITURE
-# (fetch, merge --ff-only, et la garde qui autorise le depart). Une confusion
-# entre la branche de PRODUCTION et la branche de TRAVAIL y ferait tourner
-# l'usine sur la production sans qu'aucune ligne n'ait l'air anormale.
+# (fetch, merge --ff-only, et la garde qui autorise le depart) ; et c'est elle
+# qui enchaine selection → feature-up → tour → porte → livraison, avec un
+# repertoire de tour qui persiste, une base ecrite UNE fois, et une porte
+# rejouee dans SON environnement. Chaque maillon est un stub qui journalise ;
+# la boucle, elle, est la vraie.
 . "$(dirname "$0")/helpers.sh"
 t_setup
 export LOOP_TEST_DIR="$TESTTMP"
@@ -30,10 +32,7 @@ EOF
 # suite sur un runner CI sans CLI claude installee (bash, lui, est toujours la).
 # `timeout` N'EST PAS DU CONFORT : `make loop` est une boucle infinie par
 # construction — file vide, elle dort LOOP_SLEEP puis resonde. Une garde qui
-# regresse ne fait donc pas ECHOUER la suite, elle la fait PENDRE, et un test qui
-# pend ne dit rien a personne. Mesure faite en jouant une mutation qui supprimait
-# la garde de branche : sans borne, le cas tournait jusqu'a ce qu'on tue le
-# terminal. Borne, il rend un code non nul et l'assertion de message parle.
+# regresse ne fait donc pas ECHOUER la suite, elle la fait PENDRE.
 tour() {  # <chemin du consommateur> [FACTORY_BIN]
   # FACTORY_TOKEN est RETIRE de l'environnement : t_setup le pose pour les
   # sondages hors ligne, mais la boucle doit prouver qu'elle frappe le sien.
@@ -42,65 +41,200 @@ tour() {  # <chemin du consommateur> [FACTORY_BIN]
       CLAUDE_LAUNCH="bash $REPO/tests/stubs/agent.sh" \
       LOOP_MAIN_BIN=bash )
 }
+# Les journaux des stubs, remis a zero entre deux cas.
+raz() { rm -f "$TESTTMP"/{deja-sonde,agent.log,agent.nostop,menage.log,feature-up.log,feature-up.env,verify.log,deliver.log,deliver.env,deliver.stop,deliver.rc.once,comment.log,token.log,agent.pret,verify.rc,deliver.rc,feature-up.rc,base}; }
 
+# --- 1. LE TOUR NOMINAL : selection → feature-up → tour → pret + porte 0 → livraison --
 C="$TESTTMP/conso"; conso "$C"
-rm -f "$TESTTMP/menage.log" "$TESTTMP/agent.log"
+raz; touch "$TESTTMP/agent.pret"
 tour "$C" > "$TESTTMP/loop.out" 2>&1
 rc=$?
 assert_rc 0 "$rc" "la boucle se termine proprement sur loop-stop"
-assert_contains "$TESTTMP/agent.log" "issue #12" "le prompt porte le numero de la carte"
-assert_contains "$TESTTMP/agent.log" "usine-test[bot] <usine-test@example.invalid>" "l'identite git de l'usine est exportee"
 assert_contains "$TESTTMP/loop.out" "issue #12" "la boucle annonce la carte"
-# LE DEPOT VIENT DE conf_get, PAS D'UNE VARIABLE MAKE : le prompt le porte.
+assert_contains "$TESTTMP/loop.out" "feature #3" "et sa feature"
+assert_contains "$TESTTMP/feature-up.log" "12" "feature-up est appele avec la carte selectionnee"
+# LE PROMPT PORTE LES CINQ CHOSES que l'orchestrateur ne recalcule pas.
+assert_contains "$TESTTMP/agent.log" "Carte #12" "le prompt porte le numero de la carte"
+assert_contains "$TESTTMP/agent.log" "feature #3" "le prompt porte la feature"
+assert_contains "$TESTTMP/agent.log" "$C/.worktrees/feature-3" "le prompt porte le worktree"
+assert_contains "$TESTTMP/agent.log" "Base : sha-du-tour" "le prompt porte la base rendue par feature-up"
+assert_contains "$TESTTMP/agent.log" "PR #44" "le prompt porte la PR"
 assert_contains "$TESTTMP/agent.log" "du dépôt o/r" "le prompt nomme le depot, lu par conf_get"
-# UN JETON PAR TOUR, FRAPPE EN TETE, ET LES SCRIPTS LE REUTILISENT : l'agent
-# voit FACTORY_TOKEN, donc chaque script de menage l'a vu aussi.
-assert_eq "frappe-ce-tour" "$(sed -n 's/^jeton: //p' "$TESTTMP/agent.log" | tail -n1)" \
-  "le jeton frappe en tete de tour atteint l'agent (et les scripts avant lui)"
-# ET GIT SAIT S'AUTHENTIFIER : la boucle dit a git, par GIT_CONFIG_*, de
-# demander son jeton a gh pour tout le tour.
-assert_contains "$TESTTMP/agent.log" "git-credential: !gh auth git-credential" \
-  "git recoit le credential helper de gh pour le tour"
-[ ! -f "$C/.omc/loop.stop" ] || { echo "sentinelle non consommee" >&2; exit 1; }
-
-# LA BRANCHE DE TRAVAIL ATTEINT LE DERNIER MAILLON. `branches_require` vit dans
-# le grand shell de la recette, et son export doit traverser jusqu'a l'agent :
-# c'est lui qui fabrique les worktrees depuis `origin/<base>`. Lu chez l'agent,
-# il prouve toute la chaine d'un coup.
+assert_contains "$TESTTMP/agent.log" "orchestrator : suis le skill" "le prompt envoie dans le skill orchestrator"
+# L'ORCHESTRATEUR EST LANCE DANS LE WORKTREE, pas dans l'arbre principal.
+assert_eq "$C/.worktrees/feature-3" "$(sed -n 's/^cwd: //p' "$TESTTMP/agent.log" | tail -n1)" \
+  "l'orchestrateur tourne dans le worktree de la feature"
+assert_contains "$TESTTMP/agent.log" "usine-test[bot] <usine-test@example.invalid>" "l'identite git de l'usine est exportee"
+# LA RACINE EST DANS LE PROMPT (B1), et l'agent — lance dans le worktree — pose
+# `pret` SOUS LA RACINE, la ou la boucle regarde : le prompt ne porte aucun
+# chemin `.omc/turn/` relatif.
+assert_eq "$C" "$(sed -n 's/^racine: //p' "$TESTTMP/agent.log" | tail -n1)" "l'agent lit la racine dans le prompt"
+assert_not_contains "$(sed -n 's/^prompt: //p' "$TESTTMP/agent.log" | sed "s|$C/.omc/turn/||g")" ".omc/turn/" \
+  "aucun chemin .omc/turn/ relatif dans le prompt : tous sont prefixes de la racine"
+# L'AGENT N'A PAS LES IDENTIFIANTS DE LA BOUCLE (I1) : ni FACTORY_TOKEN, ni le
+# credential helper, ni le jeton complet — son GH_TOKEN est le jeton REDUIT
+# (`gh-app-token.sh --agent`), qui ne peut pas pousser.
+assert_eq "" "$(sed -n 's/^jeton: //p' "$TESTTMP/agent.log" | tail -n1)" "FACTORY_TOKEN n'atteint pas l'agent"
+assert_eq "" "$(sed -n 's/^git-credential: //p' "$TESTTMP/agent.log" | tail -n1)" "le credential helper n'atteint pas l'agent"
+assert_eq "jeton-agent" "$(sed -n 's/^gh-token: //p' "$TESTTMP/agent.log" | tail -n1)" "l'agent recoit le jeton reduit"
+assert_contains "$TESTTMP/token.log" "gh-app-token --agent" "le jeton reduit est demande a gh-app-token.sh"
+assert_eq "2" "$(grep -c 'gh-app-token' "$TESTTMP/token.log")" "deux jetons par tour : le complet, puis le reduit"
+# ... ET LES GESTES QUI POUSSENT LES ONT, NOMMEMENT.
+assert_contains "$TESTTMP/feature-up.env" "git-credential: !gh auth git-credential" "feature-up recoit le credential helper"
+assert_contains "$TESTTMP/feature-up.env" "jeton: frappe-ce-tour" "et le jeton complet"
+assert_contains "$TESTTMP/deliver.env" "git-credential: !gh auth git-credential" "deliver recoit le credential helper"
 assert_eq "staging" "$(sed -n 's/^branche: //p' "$TESTTMP/agent.log" | tail -n1)" \
   "l'agent voit la branche de travail, pas la branche de production"
-# ET IL SAIT QU'IL EST DANS LA BOUCLE. Sans ce marqueur, « la release est un
-# geste humain » n'est qu'une phrase de doc : l'agent herite de GH_TOKEN et
-# tourne sans surveillance, donc rien ne l'empeche de fermer des dizaines de
-# cartes que personne n'a relues.
 assert_eq "1" "$(sed -n 's/^dans-la-boucle: //p' "$TESTTMP/agent.log" | tail -n1)" \
-  "l'agent porte FACTORY_IN_LOOP, que gh-release.sh refuse"
+  "l'agent porte FACTORY_IN_LOOP"
+[ ! -f "$C/.omc/loop.stop" ] || { echo "sentinelle non consommee" >&2; exit 1; }
+# LA PORTE ET LA LIVRAISON, DANS L'ENVIRONNEMENT DE LA BOUCLE, avec les BONS
+# arguments : carte, worktree, base.
+assert_eq "12 $C/.worktrees/feature-3 sha-du-tour" "$(cat "$TESTTMP/verify.log")" \
+  "turn-verify est rejoue par la boucle avec carte, worktree, base"
+assert_eq "12 $C/.worktrees/feature-3 sha-du-tour" "$(cat "$TESTTMP/deliver.log")" \
+  "deliver recoit les memes trois arguments apres un verify a 0"
+[ ! -f "$TESTTMP/comment.log" ] || { echo "aucun refus a poster sur un tour livre" >&2; exit 1; }
+assert_contains "$TESTTMP/loop.out" "livrée sur feature/3" "la boucle annonce la livraison"
+# LA BASE EST ECRITE, une fois, dans le repertoire de tour.
+assert_eq "sha-du-tour" "$(cat "$C/.omc/turn/12/base")" "la base du tour est ecrite dans .omc/turn/<carte>/base"
+[ -f "$C/.omc/turn/12/card.json" ] || { echo "card.json absent du repertoire de tour" >&2; exit 1; }
 
-# L'ORDRE DU MENAGE, ET IL COMPTE. Integrer en dernier ferait attendre un
-# LOOP_SLEEP entier a tout ce qui lit le resultat de l'integration : wt-cleanup
-# ne detruit un environnement que si sa PR est mergee, gh-unblock rend a la file
-# les cartes dont le bloqueur est integre, et gh-pr-attention ne carve une carte
-# neuve que sur une PR mergee. C'est une voie de parallelisme tenue pour rien a
-# chaque tour, et le retard ne se voit nulle part.
-assert_eq "gh-stage-pr
-wt-cleanup
-gh-unblock" "$(cat "$TESTTMP/menage.log")" "le menage integre AVANT de nettoyer et de debloquer"
+# L'ORDRE DU MENAGE : nettoyer, debloquer, puis les PR (qui ecrivent des cartes
+# que la selection lira dans le meme tour), puis feature-up apres la selection.
+# `gh-stage-pr` N'EST PLUS APPELE : il n'y a plus de PR de carte a integrer.
+assert_eq "wt-cleanup
+gh-unblock
+gh-pr-attention
+feature-up" "$(cat "$TESTTMP/menage.log")" "menage puis feature-up, dans cet ordre, sans gh-stage-pr"
+assert_file_lacks "$REPO/factory.mk" 'gh-stage-pr.sh' "factory.mk n'appelle plus gh-stage-pr"
+assert_file_lacks "$REPO/factory.mk" 'wt-resume' "factory.mk n'appelle plus wt-resume"
+assert_file_lacks "$REPO/factory.mk" 'ifeq ($(MAIN)' "MAIN=codex n'existe plus : l'orchestrateur est toujours Claude"
+assert_file_lacks "$REPO/factory.mk" 'LOOP_PROMPT_CODEX' "le prompt Codex « de bout en bout » a disparu"
+assert_file_lacks "$REPO/factory.mk" 'CODEX_LAUNCH' "CODEX_LAUNCH n'a plus de lecteur"
+assert_file_lacks "$REPO/factory.mk" 'gh-pr-admission' "plus d'entretien de PR"
+echo ok
 
-# LA GARDE DE BRANCHE COMPARE A LA BRANCHE DE TRAVAIL, PAS A LA PRODUCTION.
-# Le depot est pose sur `main` — la valeur par defaut de FACTORY_TRUNK : une
-# garde restee sur l'ancienne cle laisserait donc la boucle DEMARRER ici, et
-# l'usine tournerait sur la branche de production. C'est l'assertion d'attrape
-# du renommage, et elle ne peut pas passer par accident.
-# GNU make ne relaie jamais le code de la recette (exit 5) tel quel : une recette
-# qui echoue fait toujours sortir make en 2. On verifie donc un code non nul + le
-# message explicite, et pas la valeur 5 elle-meme (qui reste dans la source).
+# --- 2. PORTE REFUSEE : les motifs sont postes, pret consomme, pas de livraison ----
+C2="$TESTTMP/conso-refus"; conso "$C2"
+raz; touch "$TESTTMP/agent.pret"; printf '1' > "$TESTTMP/verify.rc"
+tour "$C2" > "$TESTTMP/refus.out" 2>&1
+rc=$?
+assert_rc 0 "$rc" "un refus de la porte ne tue pas la boucle : retour au sondage, puis loop-stop"
+[ -f "$TESTTMP/verify.log" ] || { echo "turn-verify n'a pas ete appele" >&2; exit 1; }
+[ ! -f "$TESTTMP/deliver.log" ] || { echo "deliver appele malgre un refus de la porte" >&2; exit 1; }
+assert_contains "$TESTTMP/comment.log" "issue 12" "les motifs sont postes sur la carte"
+assert_contains "$TESTTMP/comment.log" "motif de refus simule" "et ce sont ceux de turn-verify, tels quels"
+[ ! -f "$C2/.omc/turn/12/pret" ] || { echo "pret doit etre consomme apres un refus" >&2; exit 1; }
+[ -f "$C2/.omc/turn/12/base" ] || { echo "le repertoire de tour doit persister apres un refus" >&2; exit 1; }
+assert_contains "$TESTTMP/refus.out" "refusé par turn-verify" "la boucle dit le refus"
+echo ok
+
+# --- 3. PAS DE PRET : ni porte, ni livraison ----------------------------------------
+C3="$TESTTMP/conso-sans-pret"; conso "$C3"
+raz
+tour "$C3" > "$TESTTMP/sanspret.out" 2>&1
+rc=$?
+assert_rc 0 "$rc" "un tour sans pret finit proprement"
+[ ! -f "$TESTTMP/verify.log" ] || { echo "turn-verify appele sans pret" >&2; exit 1; }
+[ ! -f "$TESTTMP/deliver.log" ] || { echo "deliver appele sans pret" >&2; exit 1; }
+[ ! -f "$TESTTMP/comment.log" ] || { echo "rien a poster sans pret" >&2; exit 1; }
+assert_contains "$TESTTMP/sanspret.out" "sans pret" "la boucle dit que le tour s'est arrete ailleurs"
+echo ok
+
+# --- 4. LA BASE EST ECRITE UNE FOIS, PUIS RELUE -----------------------------------
+# Un second tour de la meme carte : feature-up rend une AUTRE base (la branche a
+# avance), mais le tour relit celle du premier — sinon l'analyste de la reprise
+# ne verrait jamais la base contre laquelle le premier codeur a travaille.
+C4="$TESTTMP/conso-base"; conso "$C4"
+mkdir -p "$C4/.omc/turn/12"; printf 'base-du-premier-tour' > "$C4/.omc/turn/12/base"
+raz; printf 'sha-avance' > "$TESTTMP/base"; touch "$TESTTMP/agent.pret"
+tour "$C4" > "$TESTTMP/base.out" 2>&1
+assert_eq "base-du-premier-tour" "$(cat "$C4/.omc/turn/12/base")" "la base n'est pas reecrite"
+assert_contains "$TESTTMP/agent.log" "Base : base-du-premier-tour" "l'orchestrateur recoit la base du premier tour"
+assert_eq "12 $C4/.worktrees/feature-3 base-du-premier-tour" "$(cat "$TESTTMP/verify.log")" "la porte aussi"
+echo ok
+
+# --- 5. REMISE A ZERO SUR LE MARQUEUR needs-human ----------------------------------
+# La carte avait ete mise en needs-human (le skill pose le marqueur avec le
+# label) ; l'humain a tranche, elle revient : le tour repart PROPRE, l'ancien est
+# archive — un artefact de la passe refusee ne doit pas compter dans N.
+C5="$TESTTMP/conso-rz"; conso "$C5"
+mkdir -p "$C5/.omc/turn/12"
+touch "$C5/.omc/turn/12/needs-human" "$C5/.omc/turn/12/relecteur-secu-1.json"
+printf 'vieille-base' > "$C5/.omc/turn/12/base"
+raz
+tour "$C5" > "$TESTTMP/rz.out" 2>&1
+[ ! -f "$C5/.omc/turn/12/relecteur-secu-1.json" ] || { echo "l'artefact de l'ancien tour a survecu a la remise a zero" >&2; exit 1; }
+[ ! -f "$C5/.omc/turn/12/needs-human" ] || { echo "le marqueur needs-human a survecu" >&2; exit 1; }
+assert_eq "sha-du-tour" "$(cat "$C5/.omc/turn/12/base")" "la base est reecrite sur un tour remis a zero"
+ls -d "$C5"/.omc/turns-done/12-*-needs-human >/dev/null 2>&1 || { echo "l'ancien tour n'a pas ete archive" >&2; exit 1; }
+assert_contains "$TESTTMP/rz.out" "remis à zéro" "la boucle dit la remise a zero"
+echo ok
+
+# --- 5b. pret DEJA POSE : l'orchestrateur n'est pas relance (I2) ----------------------
+# deliver rate une fois (4) ; le sondage rend la meme carte ; au second tour la
+# boucle va droit a la porte et a la livraison : UN seul prompt, DEUX deliver.
+R2="$TESTTMP/stubs-pret"; mkdir -p "$R2"
+cp "$REPO"/tests/stubs/*.sh "$R2/"; cp "$REPO"/tests/stubs/*.py "$R2/"
+printf '#!/usr/bin/env bash\nprintf 12\n' > "$R2/gh-next-issue.sh"
+C5b="$TESTTMP/conso-pret"; conso "$C5b"
+raz; touch "$TESTTMP/agent.pret" "$TESTTMP/agent.nostop" "$TESTTMP/deliver.stop"; printf '4' > "$TESTTMP/deliver.rc.once"
+tour "$C5b" "$R2" > "$TESTTMP/pret.out" 2>&1
+rc=$?
+assert_rc 0 "$rc" "la boucle finit sur le loop-stop pose par deliver"
+assert_eq "1" "$(grep -c '^prompt: ' "$TESTTMP/agent.log")" "un seul orchestrateur lance : pret deja pose, le second tour le saute"
+assert_eq "2" "$(wc -l < "$TESTTMP/deliver.log")" "deliver est rejoue au second tour"
+assert_eq "2" "$(wc -l < "$TESTTMP/verify.log")" "la porte est rejouee aussi, dans l'environnement de la boucle"
+assert_contains "$TESTTMP/pret.out" "pret déjà posé" "et la boucle le dit"
+
+# --- 5c. feature-up ou deliver REFUSENT LA CARTE (1) : retour au sondage, pas d'arret --
+C5c="$TESTTMP/conso-refus-carte"; conso "$C5c"
+raz; printf '1' > "$TESTTMP/feature-up.rc"
+mkdir -p "$C5c/.omc"
+set +e
+( cd "$C5c" && unset FACTORY_TOKEN && timeout 60 make loop FACTORY_BIN="$REPO/tests/stubs" \
+    CLAUDE_LAUNCH="bash $REPO/tests/stubs/agent.sh" LOOP_MAIN_BIN=bash ) > "$TESTTMP/refus-carte.out" 2>&1 &
+pid=$!
+sleep 3; touch "$C5c/.omc/loop.stop"; wait "$pid"; rc=$?
+set -e
+assert_rc 0 "$rc" "un refus de carte ne tue pas la boucle"
+[ ! -f "$TESTTMP/agent.log" ] || { echo "un agent a ete lance sur une carte refusee" >&2; exit 1; }
+assert_contains "$TESTTMP/refus-carte.out" "refusée par feature-up" "et c'est dit"
+C5d="$TESTTMP/conso-refus-livraison"; conso "$C5d"
+raz; touch "$TESTTMP/agent.pret"; printf '1' > "$TESTTMP/deliver.rc"
+tour "$C5d" > "$TESTTMP/refus-livraison.out" 2>&1
+rc=$?
+assert_rc 0 "$rc" "un refus a la livraison ne tue pas la boucle"
+assert_contains "$TESTTMP/refus-livraison.out" "refusée à la livraison" "et c'est dit"
+[ ! -f "$C5d/.omc/turn/12/pret" ] || { echo "pret doit etre consomme sur un refus de livraison" >&2; exit 1; }
+
+# --- 6. feature-up EN ECHEC : 3 arrete, un autre code dort sans lancer d'agent ----
+for fuc in 3 4 17; do
+  CF="$TESTTMP/conso-fu-$fuc"; conso "$CF"
+  raz; printf '%s' "$fuc" > "$TESTTMP/feature-up.rc"
+  # Sans agent pour poser loop.stop, la boucle dormirait : le stub de sondage ne
+  # rend 12 qu'une fois, puis « file vide » — on borne par un loop-stop pose ici.
+  mkdir -p "$CF/.omc"
+  set +e
+  ( cd "$CF" && unset FACTORY_TOKEN && timeout 60 make loop FACTORY_BIN="$REPO/tests/stubs" \
+      CLAUDE_LAUNCH="bash $REPO/tests/stubs/agent.sh" LOOP_MAIN_BIN=bash LOOP_MAX_RETRY=1 ) > "$TESTTMP/fu-$fuc.out" 2>&1 &
+  pid=$!
+  sleep 3; touch "$CF/.omc/loop.stop"; wait "$pid"; rc=$?
+  set -e
+  [ ! -f "$TESTTMP/agent.log" ] || { echo "feature-up en echec ($fuc) : un agent a ete lance" >&2; exit 1; }
+  if [ "$fuc" = 3 ]; then
+    [ "$rc" -ne 0 ] || { echo "feature-up en 3 aurait du arreter la boucle" >&2; exit 1; }
+    assert_contains "$TESTTMP/fu-$fuc.out" "feature-up : configuration cassée" "le 3 est dit"
+  else
+    assert_contains "$TESTTMP/fu-$fuc.out" "feature-up : raté passager (code $fuc)" "un code non-3 est un rate passager, dit"
+  fi
+done
+echo ok
+
+# --- 7. LA GARDE DE BRANCHE COMPARE A LA BRANCHE DE TRAVAIL, PAS A LA PRODUCTION --
 git -C "$C" checkout -qb main
-# La file est REMISE A PLEIN avant ce cas : si la garde tombe, la boucle sert la
-# carte, lance l'agent et s'arrete — donc le cas ECHOUE en quelques secondes sur
-# le message absent, au lieu de tourner jusqu'a la borne de `tour`. Un filet qui
-# met deux minutes a parler finit par etre commente « en attendant ».
-rm -f "$TESTTMP/deja-sonde" "$TESTTMP/agent.log"
-rm -f "$TESTTMP/menage.log"; : > "$TESTTMP/menage.log"
+raz; : > "$TESTTMP/menage.log"
 set +e
 tour "$C" > "$TESTTMP/branch.out" 2>&1
 rc=$?
@@ -110,13 +244,9 @@ assert_contains "$TESTTMP/branch.out" "tournerait avec un outillage périmé" "h
 assert_contains "$TESTTMP/branch.out" "branche de travail « staging »" "le refus NOMME la branche attendue"
 assert_eq "" "$(cat "$TESTTMP/menage.log")" "le refus precede le menage : rien n'a tourne"
 
-# LES DEUX BRANCHES EGALES : L'USINE PUBLIERAIT EN PRODUCTION A CHAQUE CARTE.
-# Le refus doit partir AVANT le menage et AVANT l'agent, et il doit dire ce qui
-# protege vraiment — la protection de branche, pas le jeton, dont les permissions
-# sont a l'echelle du DEPOT. Un message qui laisse croire au jeton vend une
-# securite qui n'existe pas.
+# --- 8. LES DEUX BRANCHES EGALES : L'USINE PUBLIERAIT EN PRODUCTION A CHAQUE CARTE --
 CB="$TESTTMP/conso-branches"; conso "$CB" 'FACTORY_TRUNK = staging'
-: > "$TESTTMP/agent.log"; : > "$TESTTMP/menage.log"
+raz; : > "$TESTTMP/agent.log"; : > "$TESTTMP/menage.log"
 set +e
 tour "$CB" > "$TESTTMP/branches.out" 2>&1
 rc=$?
@@ -124,17 +254,12 @@ set -e
 [ "$rc" -ne 0 ] || { echo "assert: deux branches egales auraient du arreter la boucle" >&2; exit 1; }
 assert_contains "$TESTTMP/branches.out" "FACTORY_STAGING" "le refus nomme la cle a corriger"
 assert_contains "$TESTTMP/branches.out" "protection de branche" "le refus nomme ce qui protege VRAIMENT"
-assert_contains "$TESTTMP/branches.out" "DÉPÔT" "le refus dit que le jeton porte a l'echelle du depot"
 assert_eq "" "$(cat "$TESTTMP/agent.log")" "aucun agent lance sur une configuration qui ecrirait en production"
 assert_eq "" "$(cat "$TESTTMP/menage.log")" "aucun menage lance non plus"
 
-# LA VALEUR QUI GOUVERNE EST CELLE QUI A ETE CONTROLEE. Une espace de trop dans
-# FACTORY_STAGING passe `conf_get` (qui ne rogne que les FICHIERS) ; si la garde
-# rognait dans son coin et que la recette relisait la cle ailleurs, l'agent
-# recevrait « staging » suivi d'une espace et `git fetch origin "staging "`
-# echouerait a chaque tour. Une seule lecture, donc, et on la verifie AU BOUT.
+# --- 9. LA VALEUR QUI GOUVERNE EST CELLE QUI A ETE CONTROLEE (espace de bord) --------
 git -C "$C" checkout -q staging
-rm -f "$TESTTMP/deja-sonde" "$TESTTMP/agent.log" "$TESTTMP/menage.log"
+raz
 ( cd "$C" && FACTORY_STAGING=' staging ' timeout 120 make loop \
     FACTORY_BIN="$REPO/tests/stubs" \
     CLAUDE_LAUNCH="bash $REPO/tests/stubs/agent.sh" \
@@ -144,14 +269,7 @@ assert_rc 0 "$rc" "une espace de bord ne casse pas le depart"
 assert_eq "staging" "$(sed -n 's/^branche: //p' "$TESTTMP/agent.log" | tail -n1)" \
   "l'agent recoit la valeur NORMALISEE, pas celle du fichier"
 
-# LE `merge --ff-only` DE CHAQUE TOUR VISE LA BRANCHE DE TRAVAIL. C'est le seul
-# geste d'ECRITURE de la recette, et le plus facile a se tromper : fetche sur la
-# production, l'arbre de l'usine se retrouve sur la branche que la release est
-# censee proteger, et la boucle continue en ayant l'air de marcher.
-# Le montage rend les deux issues DISTINCTES : `origin/main` et `origin/staging`
-# descendent toutes deux du commit ou l'arbre est pose, donc le `--ff-only`
-# REUSSIT dans les deux cas — seul le contenu du fichier temoin dit lequel a ete
-# suivi. Un test qui se contenterait d'un fetch qui echoue ne prouverait rien.
+# --- 10. LE `merge --ff-only` DE CHAQUE TOUR VISE LA BRANCHE DE TRAVAIL ----------------
 O="$TESTTMP/origin"; mkdir -p "$O"
 gitc() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }
 git -C "$O" init -qb staging
@@ -159,13 +277,8 @@ echo v1 > "$O/temoin"; gitc "$O" add temoin; gitc "$O" commit -q -am v1
 gitc "$O" checkout -qb main
 echo production > "$O/temoin"; gitc "$O" commit -q -am production
 gitc "$O" checkout -q staging
-
 CF="$TESTTMP/conso-frais"
 git clone -q "$O" "$CF"
-# LA BRANCHE DE TRAVAIL AVANCE APRES LE CLONE, a dessein : la reference
-# `origin/staging` du consommateur est donc PERIMEE, et seul un fetch qui nomme
-# vraiment la branche de travail la rafraichit. Sans ce decalage, un fetch pose
-# sur la production passerait au vert — le clone avait deja ramene tout le monde.
 echo v2 > "$O/temoin"; gitc "$O" commit -q -am v2
 assert_eq "v1" "$(cat "$CF/temoin")" "montage : l'arbre part en retard sur la branche de travail"
 cat > "$CF/factory.conf" <<'EOF'
@@ -175,15 +288,14 @@ FACTORY_GIT_EMAIL = usine-test@example.invalid
 LOOP_SLEEP = 1
 EOF
 printf 'include %s\n' "$REPO/factory.mk" > "$CF/Makefile"
-rm -f "$TESTTMP/deja-sonde" "$TESTTMP/agent.log"
+raz
 tour "$CF" > "$TESTTMP/ff.out" 2>&1
 rc=$?
 assert_rc 0 "$rc" "la boucle avance la branche de travail puis fait son tour"
 assert_eq "v2" "$(cat "$CF/temoin")" "l'arbre a suivi origin/staging — et surtout PAS origin/main"
 assert_eq "staging" "$(git -C "$CF" branch --show-current)" "la boucle n'a pas change de branche pour le faire"
 
-# Garde de configuration : sans GH_REPO, refus explicite. Meme remarque : on
-# verifie le code non nul et le message, pas le 3 brut (ecrase par make en 2).
+# --- 11. Garde de configuration : sans GH_REPO, refus explicite ------------------------
 : > "$C/factory.conf"
 set +e
 tour "$C" > "$TESTTMP/conf.out" 2>&1
@@ -192,138 +304,42 @@ set -e
 [ "$rc" -ne 0 ] || { echo "assert: sans GH_REPO, la boucle aurait du refuser (code 0 obtenu)" >&2; exit 1; }
 assert_contains "$TESTTMP/conf.out" "GH_REPO absent" "sans GH_REPO, message explicite"
 
-# Reprise vivante (C3) : prc=9 ne doit plus etre avale par le "else" qui
-# sondait une carte neuve et ecrasait le prompt de reprise. Consommateur
-# frais, wt-resume.sh reussit UNE fois (motif "state-file", comme le stub
-# gh-next-issue.sh), gh-pr-attention echoue (pas d'entretien de PR en cours).
-R2="$TESTTMP/stubs-resume"; mkdir -p "$R2"
-cp "$REPO"/tests/stubs/*.sh "$R2/"
-cp "$REPO"/tests/stubs/*.py "$R2/"
-cat > "$R2/wt-resume.sh" <<'EOF'
-#!/usr/bin/env bash
-# Rend une reprise une seule fois, puis rien : un tour exactement.
-marker="${LOOP_TEST_DIR:?}/deja-repris"
-if [ -f "$marker" ]; then exit 1; fi
-touch "$marker"; printf '7\t2 fichier(s) modifie(s)'
-EOF
-chmod +x "$R2/wt-resume.sh"
-
-C2="$TESTTMP/conso2"; conso "$C2"
-rm -f "$TESTTMP/agent.log"
-tour "$C2" "$R2" > "$TESTTMP/resume.out" 2>&1
-rc=$?
-assert_rc 0 "$rc" "la boucle de reprise se termine proprement sur loop-stop"
-assert_contains "$TESTTMP/agent.log" "ENVIRONNEMENT existe déjà" "le prompt de reprise est celui de la resume, pas celui d'une carte neuve"
-assert_contains "$TESTTMP/agent.log" "card-7" "le prompt de reprise nomme le worktree de la carte 7"
-case "$(cat "$TESTTMP/agent.log")" in
-  *"Travaille l'issue \\#7"*)
-    echo "assert: le prompt de carte neuve pour #7 n'aurait pas du etre envoye" >&2; exit 1 ;;
-esac
-
-# A failed resume lookup must not fall through into a fresh issue or agent.
-RERR="$TESTTMP/stubs-resume-error"; mkdir -p "$RERR"
-cp "$REPO"/tests/stubs/*.sh "$RERR/"; cp "$REPO"/tests/stubs/*.py "$RERR/"
-cat > "$RERR/gh-next-issue.sh" <<'EOF'
-#!/usr/bin/env bash
-touch "${LOOP_TEST_DIR:?}/unexpected-next"
-exit 1
-EOF
-for resume_code in 3 4 17; do
-  cat > "$RERR/wt-resume.sh" <<EOF
-#!/usr/bin/env bash
-mkdir -p .omc
-touch .omc/loop.stop
-exit $resume_code
-EOF
-  CERR="$TESTTMP/conso-resume-error-$resume_code"; conso "$CERR"
-  rm -f "$TESTTMP/unexpected-next" "$TESTTMP/agent.log"
-  tour "$CERR" "$RERR" > "$TESTTMP/resume-error-$resume_code.out" 2>&1 && rc=0 || rc=$?
-  [[ ! -f "$TESTTMP/unexpected-next" ]] || { echo 'resume error fell through to new issue selection' >&2; exit 1; }
-  [[ ! -f "$TESTTMP/agent.log" ]] || { echo 'resume error launched an agent' >&2; exit 1; }
-  if [[ "$resume_code" == 3 ]]; then
-    [[ "$rc" != 0 ]] || { echo 'resume configuration error did not stop loop' >&2; exit 1; }
-    assert_contains "$TESTTMP/resume-error-$resume_code.out" 'reprise impossible' 'configuration error explicitly stops loop'
-  else
-    assert_rc 0 "$rc" 'transient or unexpected resume error waits then honors stop sentinel'
-    assert_contains "$TESTTMP/resume-error-$resume_code.out" 'reprise invérifiable' 'transient resume error is explained'
-  fi
-done
-
-# PR maintenance has its own final issue admission before any agent launch.
-RPR="$TESTTMP/stubs-pr-admission"; mkdir -p "$RPR"
-cp "$REPO"/tests/stubs/*.sh "$RPR/"; cp "$REPO"/tests/stubs/*.py "$RPR/"
-printf '#!/usr/bin/env bash\nprintf "77\\tCI rouge"\n' > "$RPR/gh-pr-attention.sh"
-printf '#!/usr/bin/env bash\nprintf "12"\n' > "$RPR/gh-next-issue.sh"
-for admission_code in 0 1 3 4 17; do
-  cat > "$RPR/gh-pr-admission.sh" <<'EOF'
-#!/usr/bin/env bash
-printf '%s' "$1" > "${LOOP_TEST_DIR:?}/admitted-pr"
-mkdir -p .omc
-touch .omc/loop.stop
-EOF
-  printf 'exit %s\n' "$admission_code" >> "$RPR/gh-pr-admission.sh"
-  CPR="$TESTTMP/conso-pr-admission-$admission_code"; conso "$CPR"
-  rm -f "$TESTTMP/agent.log" "$TESTTMP/admitted-pr"
-  tour "$CPR" "$RPR" > "$TESTTMP/pr-admission-$admission_code.out" 2>&1 && rc=0 || rc=$?
-  assert_eq 77 "$(cat "$TESTTMP/admitted-pr")" 'maintenance checks actual PR identity'
-  if [[ "$admission_code" == 0 ]]; then
-    assert_contains "$TESTTMP/agent.log" '77' 'admitted maintenance reaches agent'
-  elif [[ "$admission_code" == 1 ]]; then
-    assert_contains "$TESTTMP/agent.log" 'issue #12' 'excluded maintenance permits an independent ready issue'
-    assert_file_lacks "$TESTTMP/agent.log" 'PR #77' 'excluded PR is not maintained'
-  else
-    [[ ! -f "$TESTTMP/agent.log" ]] || { echo 'inadmissible PR maintenance launched an agent' >&2; exit 1; }
-  fi
-  if [[ "$admission_code" == 3 ]]; then
-    [[ "$rc" != 0 ]] || { echo 'maintenance admission configuration error did not stop loop' >&2; exit 1; }
-  else
-    assert_rc 0 "$rc" 'nonfatal maintenance admission honors stop sentinel'
-  fi
-done
-
-# LA GARDE ANTI-TOURNIQUET COUVRE LA REPRISE, et pas seulement la carte neuve.
-# Elle vivait DANS le bloc `elif` de la carte neuve : une reprise qui echoue en
-# boucle n'etait comptee par personne, et la meme carte repartait indefiniment.
-# Le compteur qui existe pour arreter ca ne la voyait pas.
-# Le stub de reprise rend TOUJOURS la meme carte, et l'agent ne pose pas la
-# sentinelle : sans la garde, cette boucle ne finit jamais. C'est aussi ce qui
-# rend le test honnete — il ne peut pas passer par accident.
+# --- 12. LA GARDE ANTI-TOURNIQUET, ET ELLE SURVIT AU PROCESSUS ----------------------------
+# Le stub de sondage rend TOUJOURS la meme carte, et l'agent ne pose pas la
+# sentinelle : sans la garde, cette boucle ne finit jamais.
 R3="$TESTTMP/stubs-tourniquet"; mkdir -p "$R3"
 cp "$REPO"/tests/stubs/*.sh "$R3/"; cp "$REPO"/tests/stubs/*.py "$R3/"
-cat > "$R3/wt-resume.sh" <<'EOF'
-#!/usr/bin/env bash
-printf '7\t2 fichier(s) modifie(s)'
-EOF
-chmod +x "$R3/wt-resume.sh"
+printf '#!/usr/bin/env bash\nprintf 7\n' > "$R3/gh-next-issue.sh"
 cat > "$TESTTMP/agent-muet.sh" <<'EOF'
 #!/usr/bin/env bash
 # Un agent qui rend la main SANS faire avancer sa carte et sans demander l'arret.
 printf 'tour\n' >> "${LOOP_TEST_DIR:?}/tours.log"
 EOF
-chmod +x "$TESTTMP/agent-muet.sh"
-
-C3="$TESTTMP/conso3"; conso "$C3"
-rm -f "$TESTTMP/tours.log"
+C6="$TESTTMP/conso6"; conso "$C6"
+raz; rm -f "$TESTTMP/tours.log"
 set +e
-( cd "$C3" && unset FACTORY_TOKEN && timeout 60 make loop \
-    FACTORY_BIN="$R3" \
-    CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" \
-    LOOP_MAX_RETRY=2 \
-    LOOP_MAIN_BIN=bash ) > "$TESTTMP/tourniquet.out" 2>&1
+( cd "$C6" && unset FACTORY_TOKEN && timeout 60 make loop \
+    FACTORY_BIN="$R3" CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" LOOP_MAX_RETRY=2 LOOP_MAIN_BIN=bash ) > "$TESTTMP/tourniquet.out" 2>&1
 rc=$?
 set -e
-[ "$rc" -ne 124 ] || { echo "assert: la boucle n'a jamais rendu la main — la garde ne couvre pas la reprise" >&2; exit 1; }
-[ "$rc" -ne 0 ] || { echo "assert: un tourniquet sur la reprise aurait du arreter la boucle" >&2; exit 1; }
+[ "$rc" -ne 124 ] || { echo "assert: la boucle n'a jamais rendu la main — la garde ne mord pas" >&2; exit 1; }
+[ "$rc" -ne 0 ] || { echo "assert: un tourniquet aurait du arreter la boucle" >&2; exit 1; }
 assert_contains "$TESTTMP/tourniquet.out" "sans avancer" "la boucle DIT pourquoi elle s'arrete"
-# LOOP_MAX_RETRY tours partent, le suivant est refuse AVANT de lancer l'agent :
-# `same` vaut 1 a la premiere vue, et la garde coupe sur `same > LOOP_MAX_RETRY`.
 assert_eq "2" "$(wc -l < "$TESTTMP/tours.log")" "LOOP_MAX_RETRY=2 laisse partir 2 tours, pas un de plus"
+[ -f "$C6/.omc/loop.retry" ] || { echo "le compteur anti-tourniquet doit survivre sur disque" >&2; exit 1; }
+[ -f "$C6/.omc/loop.halt" ] || { echo "l'arret volontaire doit poser un sentinelle" >&2; exit 1; }
+# ET LA RELANCE SUIVANTE NE PAIE RIEN DU TOUT : ni jeton, ni fetch, ni menage.
+rm -f "$TESTTMP/menage.log"
+set +e
+( cd "$C6" && unset FACTORY_TOKEN && timeout 60 make loop \
+    FACTORY_BIN="$R3" CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" LOOP_MAX_RETRY=2 LOOP_MAIN_BIN=bash ) > "$TESTTMP/relance.out" 2>&1
+set -e
+[ ! -f "$TESTTMP/menage.log" ] || { echo "une boucle arretee ne doit pas rejouer le menage a la relance" >&2; exit 1; }
+assert_contains "$TESTTMP/relance.out" "loop.halt" "le sentinelle est nomme"
+assert_contains "$TESTTMP/relance.out" "effacez" "et le message dit comment repartir"
 echo ok
 
-# --- le crochet de menage du consommateur -----------------------------------
-# Un projet doit pouvoir carver SES alertes dans le meme tour que les notres,
-# sinon il les cable hors de la boucle (ou elles ne tournent jamais) ou il forke
-# factory.mk. Le crochet est appele s'il est executable, ignore sinon.
+# --- 13. le crochet de menage du consommateur --------------------------------------------
 grep -q 'tools/factory-hooks/housekeeping' "$REPO/factory.mk" \
   || { echo "factory.mk n'appelle pas le crochet de menage" >&2; exit 1; }
 grep -q 'x "$(CURDIR)/tools/factory-hooks/housekeeping"' "$REPO/factory.mk" \
@@ -333,35 +349,7 @@ hk="$(grep -n 'tools/factory-hooks/housekeeping' "$REPO/factory.mk" | tail -1 | 
 [ "$hk" -gt "$sec" ] || { echo "le crochet doit venir APRES le triage de securite" >&2; exit 1; }
 echo ok
 
-# --- la garde anti-tourniquet SURVIT AU PROCESSUS -----------------------------
-# Sous systemd (Restart=always) un compteur en memoire repartait de zero a
-# chaque relance : une carte coincee coutait LOOP_MAX_RETRY agents par vie de
-# processus, un processus neuf toutes les trente secondes. Le compteur vit dans
-# .omc/loop.retry ; la relance suivante refuse AVANT de lancer un agent.
-C4="$TESTTMP/conso4"; conso "$C4"
-rm -f "$TESTTMP/tours.log"
-set +e
-( cd "$C4" && unset FACTORY_TOKEN && timeout 60 make loop FACTORY_BIN="$R3" CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" LOOP_MAX_RETRY=1 LOOP_MAIN_BIN=bash ) >/dev/null 2>&1
-( cd "$C4" && unset FACTORY_TOKEN && timeout 60 make loop FACTORY_BIN="$R3" CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" LOOP_MAX_RETRY=1 LOOP_MAIN_BIN=bash ) > "$TESTTMP/relance.out" 2>&1
-set -e
-[ -f "$C4/.omc/loop.retry" ] || { echo "le compteur anti-tourniquet doit survivre sur disque" >&2; exit 1; }
-assert_eq "1" "$(wc -l < "$TESTTMP/tours.log")" "la relance ne repaie AUCUN agent : le compteur a survecu"
-assert_contains "$TESTTMP/relance.out" "effacez" "et le message dit comment repartir"
-# ET LA RELANCE SUIVANTE NE PAIE RIEN DU TOUT : ni jeton, ni fetch, ni menage.
-# Sous Restart=always, chaque relance rejouait tout le menage avant de relire
-# le compteur ; le sentinelle loop.halt est lu avant le premier geste.
-[ -f "$C4/.omc/loop.halt" ] || { echo "l'arret volontaire doit poser un sentinelle" >&2; exit 1; }
-rm -f "$TESTTMP/menage.log"
-set +e
-( cd "$C4" && unset FACTORY_TOKEN && timeout 60 make loop FACTORY_BIN="$R3" CLAUDE_LAUNCH="bash $TESTTMP/agent-muet.sh" LOOP_MAX_RETRY=1 LOOP_MAIN_BIN=bash ) > "$TESTTMP/relance2.out" 2>&1
-set -e
-[ ! -f "$TESTTMP/menage.log" ] || { echo "une boucle arretee ne doit pas rejouer le menage a la relance" >&2; exit 1; }
-assert_contains "$TESTTMP/relance2.out" "loop.halt" "le sentinelle est nomme"
-echo ok
-
-# --- un code imprevu du sondage fait dormir, il ne lance pas un agent sur rien -
-# Un 127, un python absent, un `set -e` inattendu : aucun de ces codes n'etait
-# prevu, et la boucle lancait un agent YOLO sur « l'issue # » — vide.
+# --- 14. un code imprevu du sondage fait dormir, il ne lance pas un agent sur rien ------
 R5="$TESTTMP/stubs5"; mkdir -p "$R5"; cp "$REPO/tests/stubs/"* "$R5/"
 cat > "$R5/gh-next-issue.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -369,11 +357,11 @@ marker="${LOOP_TEST_DIR:?}/imprevu-vu"
 if [ ! -f "$marker" ]; then touch "$marker"; exit 7; fi
 printf '12'
 STUB
-C5="$TESTTMP/conso5"; conso "$C5"
-: > "$TESTTMP/agent.log"
-set +e; tour "$C5" "$R5" > "$TESTTMP/imprevu.out" 2>&1; rc=$?; set -e
+C7="$TESTTMP/conso7"; conso "$C7"
+raz; : > "$TESTTMP/agent.log"
+set +e; tour "$C7" "$R5" > "$TESTTMP/imprevu.out" 2>&1; rc=$?; set -e
 assert_rc 0 "$rc" "la boucle survit a un code imprevu et finit sur loop-stop"
 assert_contains "$TESTTMP/imprevu.out" "code 7" "le code imprevu est dit"
-assert_not_contains "$(cat "$TESTTMP/agent.log")" "issue # " "aucun agent lance sur une carte vide"
-assert_contains "$TESTTMP/agent.log" "issue #12" "le tour suivant sert la carte"
+assert_not_contains "$(cat "$TESTTMP/agent.log")" "Carte # " "aucun agent lance sur une carte vide"
+assert_contains "$TESTTMP/agent.log" "Carte #12" "le tour suivant sert la carte"
 echo ok

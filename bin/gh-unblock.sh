@@ -19,28 +19,22 @@
 # Une erreur de lecture ne permet jamais de retirer le label de blocage.
 #
 # CE QUE « LE BLOQUEUR A LIVRÉ » VEUT DIRE, ET IL N'Y A PLUS QU'UNE RÉPONSE :
-# SON TRAVAIL EST DANS LA BRANCHE DE TRAVAIL. Il n'y a qu'un chemin — carte, pull
-# request, merge automatique dans la branche de travail, puis release — donc un
-# seul critère. Deux états le prouvent, et rien d'autre :
+# SON TRAVAIL EST LIVRÉ. Deux états le prouvent, et rien d'autre :
 #
-#   la carte porte `factory:staged`  gh-stage-pr.sh l'y a posé AU MERGE : le
-#                                    travail est dans la branche de travail et
-#                                    attend la release.
-#   la carte est FERMÉE              dépendance satisfaite : release pour une
-#                                    carte de code, ou décision humaine résolue
-#                                    pour une carte de cadrage.
+#   le bloqueur est FERMÉ            une carte livrée est fermée par deliver.sh
+#                                    (v2 : son commit est sur la branche de sa
+#                                    feature) ; une carte de cadrage est fermée
+#                                    quand la décision est prise.
+#   le bloqueur porte `factory:staged`  un label de FEATURE (v2) : la feature est
+#                                    mergée dans la branche de travail par EVA et
+#                                    attend la release — une carte qui dépend
+#                                    d'une feature entière est libre.
 #
-# UNE PULL REQUEST OUVERTE NE DÉBLOQUE PLUS, et c'est la simplification que le
-# modèle unique permet. L'ancien critère « une PR ouverte suffit » existait contre
-# un interblocage : la carte ne se fermait qu'au MERGE HUMAIN, donc une épopée en
-# lots s'arrêtait après son lot 1 et l'usine tombait à la file vide en attendant
-# quelqu'un (observé le 3 août : les six lots du filtre souverain figés derrière
-# #37, dont la PR était livrée). Le merge n'attend plus personne, il est fait par
-# gh-stage-pr.sh dès que la CI est verte — donc une PR encore ouverte est une PR
-# qui n'a PAS prouvé son travail : suite rouge, conflit, ou arbitrage humain.
-# Relâcher la carte suivante dessus l'enverrait s'empiler sur du travail qui peut
-# encore disparaître. Ce qu'on y gagne en plus : un appel de moins par bloqueur,
-# l'état ET le label venant de la même réponse.
+# UNE PULL REQUEST OUVERTE NE DÉBLOQUE PAS. Dans la v2 la PR est celle d'une
+# feature entière, relue par lot ; qu'elle soit ouverte ne dit rien d'une carte
+# en particulier. Ce qui libère une carte, c'est la LIVRAISON de son bloqueur
+# (la carte fermée), pas la cérémonie qui suit. Ce qu'on y gagne : un appel de
+# moins par bloqueur, l'état ET le label venant de la même réponse.
 #
 # LE MOTIF EST LU PAR L'AGENT QUI REPRENDRA LA CARTE : il nomme des états de
 # l'usine — intégrée, sortie —, jamais l'infra du consommateur. Écrire « la

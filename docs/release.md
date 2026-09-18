@@ -1,5 +1,14 @@
 # Le modèle de release
 
+> **Remplacé par [`v2-feature.md`](v2-feature.md) à partir du 18 septembre
+> 2026.** Ce document décrit la v1 — une PR par carte, mergée automatiquement
+> par `gh-stage-pr.sh`, les labels de cycle `factory:delivered` /
+> `factory:staged` sur les cartes, le skill `github-loop`. Ces objets n'existent
+> plus dans l'usine : la v2 fait de la feature l'unité de livraison, la boucle
+> pousse elle-même sur `feature/<F>` et ferme la carte à la livraison. Le
+> présent texte reste comme trace des raisons ; sa réécriture est une tranche
+> ultérieure (T5).
+
 Un seul modèle, une seule procédure, une seule porte :
 
 ```

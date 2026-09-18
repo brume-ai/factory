@@ -73,3 +73,30 @@ make_conf() {  # <cle=valeur>... -> $TESTTMP/factory.conf
   : > "$TESTTMP/factory.conf"
   local kv; for kv in "$@"; do printf '%s\n' "$kv" >> "$TESTTMP/factory.conf"; done
 }
+
+# UN ARTEFACT DE ROLE, DANS LA FORME EXACTE QUE role.sh ECRIT (tests/role.test.sh
+# prouve cette forme), AVEC son .brut et, pour codex, son rollout — la porte
+# (turn-verify.sh) recalcule la preuve depuis ces fichiers-la, et deliver.sh y
+# lit le modele prouve et le verdict. Partage par tests/turn-verify.test.sh et
+# tests/deliver.test.sh : deux copies de cette forme finiraient par diverger, et
+# la copie qui diverge est un test qui ne prouve plus la forme reelle.
+#   art_write <turn> <worktree> <role> <k> <attendu> <prouve> <verdict>
+# HA/HP (head_avant/apres, defaut : HEAD du worktree), D0/D1 (fenetre, defaut :
+# large) se posent dans l'environnement. CODEX_HOME doit etre pose (t_setup).
+art_write() {
+  local turn="$1" wt="$2" role="$3" k="$4" attendu="$5" prouve="$6" verdict="$7" head cli preuve="" thread
+  head="$(git -C "$wt" rev-parse HEAD)"
+  case "${prouve:-$attendu}" in claude-*) cli=claude ;; *) cli=codex ;; esac
+  if [ -n "$prouve" ] && [ "$cli" = claude ]; then
+    printf '{"type":"result","result":"réponse","modelUsage":{"%s":{"inputTokens":1}}}\n' "$prouve" > "$turn/$role-$k.brut"
+    preuve="modelUsage"
+  elif [ -n "$prouve" ]; then
+    thread="t-$role-$k"
+    printf '{"type":"thread.started","thread_id":"%s"}\n{"type":"item.completed","item":{"type":"agent_message","text":"réponse"}}\n{"type":"turn.completed","usage":{}}\n' "$thread" > "$turn/$role-$k.brut"
+    mkdir -p "${CODEX_HOME:?}/sessions/2026/09/18"
+    preuve="$CODEX_HOME/sessions/2026/09/18/rollout-2026-09-18T10-00-00-$thread.jsonl"
+    printf '{"type":"session_meta","payload":{}}\n{"type":"turn_context","payload":{"model":"%s"}}\n' "$prouve" > "$preuve"
+  fi
+  printf '{"role":"%s","modele_attendu":"%s","modele_prouve":"%s","cli":"%s","debut":"%s","fin":"%s","iteration":%s,"verdict":"%s","preuve":"%s","sortie":"s","base":"base","head_avant":"%s","head_apres":"%s"}\n' \
+    "$role" "$attendu" "$prouve" "$cli" "${D0:-2000-01-01T00:00:00Z}" "${D1:-2100-01-01T00:00:00Z}" "$k" "$verdict" "$preuve" "${HA:-$head}" "${HP:-$head}" > "$turn/$role-$k.json"
+}

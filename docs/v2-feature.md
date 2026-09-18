@@ -79,6 +79,14 @@ l'exécution : EVA *propose* un rattachement quand une carte naît orpheline, et
 c'est l'humain qui confirme. Une carte qui reste orpheline (bug, demande
 ponctuelle, correctif urgent) devient **sa propre mini-feature** — même flux,
 pas de second chemin vers la production. Le hotfix est une feature d'une carte.
+**Quand la chaîne des parents ne contient aucune Feature, la feature est la
+racine de la chaîne** ; cette racine reste une carte servable même quand elle
+a des sous-issues (c'est la carte de la mini-feature, pas un lot), et ses
+sous-issues — une remarque transformée par `gh-pr-attention.sh`, une refacto
+carvée par l'analyste — sont des cartes sur `feature/<racine>`, servies après
+elle. Sans cette règle, la première remarque sur le hotfix en faisait un lot
+jamais servi et ouvrait une seconde branche à côté. Partout ailleurs, une
+issue qui a des sous-issues est un lot, jamais une carte.
 
 **Les décisions ne sont pas des features.** Les issues de cadrage (la map
 Wayfinder et ses questions) restent des issues à part, hors de toute feature,
@@ -230,10 +238,36 @@ seul faire quinze cartes.
 orchestrateur qui néglige, pas contre un qui triche à uid égal : ce qu'elle
 exige est que la preuve vienne du CLI, recalculée depuis sa sortie brute
 (`modelUsage` relu dans le `.brut`, `turn_context` relu dans le rollout que
-l'artefact nomme). Fermer la classe adversariale (`role.sh` sous un uid
-distinct, artefacts signés) est une décision de T2 ; le cycle de vie de
-`.omc/turn/<issue>/` (remise à zéro, levée d'une faille après arbitrage, N par
-tour ou par carte) aussi.
+l'artefact nomme). **La boucle rejoue `turn-verify.sh` dans SON environnement**
+— jamais celui de l'agent — avant de pousser : un orchestrateur qui aurait
+posé un autre catalogue dans son shell verrait sa porte s'ouvrir sur un
+artefact que celle de la boucle refuse. **Et l'agent ne peut pas pousser** :
+la boucle frappe deux jetons d'App par tour — le complet, qu'elle garde pour
+ses propres gestes (`feature-up.sh`, `deliver.sh`, le fetch), et un jeton
+**réduit** (`gh-app-token.sh --agent` : `contents: read`, `issues: write`,
+`pull_requests: write`, `metadata: read`) qui devient le `GH_TOKEN` de
+l'orchestrateur et des rôles ; le credential helper de git et `FACTORY_TOKEN`
+ne sont pas dans leur environnement. Un `git push` de l'agent est refusé par
+GitHub, pas par une consigne. C'est la moitié **bon marché** de la fermeture
+adversariale, et elle est faite. Sa limite est dite : l'agent tourne sous le
+même uid que la boucle et lit le `.env`, il *peut* refrapper un jeton complet
+— la porte protège contre la négligence. L'autre moitié — `role.sh` sous un
+uid distinct, artefacts signés — reste **reportée** (EVOL).
+
+**Le cycle de vie de `.omc/turn/<carte>/`.** Le répertoire est **par carte**,
+et il **persiste entre les tours d'une même carte** : un tour mort, un push
+refusé par la porte, un tour interrompu reprennent avec les artefacts déjà là,
+donc N (les allers-retours du relecteur maintenabilité) est par carte, pas par
+tour — un orchestrateur relancé ne repart pas avec un compteur neuf. La boucle
+y dépose `card.json` (la réponse REST de la carte) et `base` (le SHA de
+`origin/feature/<F>` à l'admission), **écrit une fois** : sur un nouveau tour de
+la même carte il est relu, jamais réécrit, sinon l'analyste de la reprise ne
+verrait plus la base contre laquelle le premier codeur a travaillé. Il est
+**archivé** à la livraison (`.omc/turns-done/<carte>-<epoch>/`), et **remis à
+zéro** quand une carte réadmise avait été mise en `needs-human` : l'humain a
+tranché, une faille levée repart d'un tour propre. La boucle le détecte par
+un marqueur `.omc/turn/<carte>/needs-human`, que l'orchestrateur pose quand il
+pose le label.
 
 **La trace dans la PR** : un commentaire de livraison par carte — ce qui a été
 fait, ce qui a été vérifié, les captures, le plan cité, et **une ligne par
@@ -245,8 +279,10 @@ direction ou un problème structurel avant qu'il coûte.
 navigateur de test y tourne déjà), et à la demande via EVA sur la preview.
 L'API GitHub n'accepte pas d'image dans un commentaire avec un jeton d'App
 (`gh … --attach` exige un jeton utilisateur) : les PNG sont poussés sur une
-branche orpheline `screenshots` (`<pr>/<carte>/…`) et inlinés par URL brute.
-10 Mo par image.
+branche orpheline `screenshots` (`<pr>/<carte>/…`) et inlinés par URL —
+`blob/screenshots/<pr>/<carte>/<f>?raw=true`, la seule forme mesurée qui
+s'affiche sur un dépôt privé (raw.githubusercontent.com rend 404 dans un
+navigateur, faute de session). 10 Mo par image.
 
 ## 5. EVA
 
@@ -317,8 +353,11 @@ si l'une gêne :
 
 - La preview est adressée **par port** (`http://<machine>:<port>`, un port par
   PR, alloué par le hook) : le réseau n'a pas de DNS wildcard.
-- La PR de feature est créée par Pony quand il admet la première carte d'une
-  feature : brouillon, puis prête à la première carte livrée.
+- La PR de feature est créée par la **boucle** (`feature-up.sh`) quand elle
+  admet la première carte d'une feature : brouillon, puis prête à la première
+  carte livrée. GitHub refusant une PR sans commit, la branche s'ouvre sur un
+  commit vide signé par la boucle, sans `Refs #` — il est avant la base du
+  premier tour, donc hors de tout diff relu.
 - Un budget (durée, coût) par tour, comme garde-fou ; la valeur se fixe à
   l'implémentation, sur mesure.
 - Les artefacts du tour vivent sous `.omc/turn/<issue>/` — le répertoire

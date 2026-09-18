@@ -173,6 +173,22 @@ assert_contains "$TURN/codeur-1.prompt.md" "État des lieux : deux fichiers" "l'
 assert_contains "$C/calls.log" "codex exec --json --skip-git-repo-check -m gpt-6-astra --dangerously-bypass-approvals-and-sandbox" "le codeur a tout"
 assert_file_lacks "$C/calls.log" "read-only" "le codeur n'est pas en lecture seule"
 
+# --- e2) DEPUIS LE WORKTREE, AVEC UN CHEMIN ABSOLU (B1) ----------------------------
+# L'orchestrateur est lancé DANS le worktree : c'est de là qu'il appelle
+# role.sh, et le fichier d'entrée est `$ROOT/.omc/turn/N/analyste-1.md` — un
+# chemin ABSOLU sous la racine de l'arbre principal. En relatif, il n'existerait
+# pas depuis le worktree (3) ; le skill l'interdit, ce cas prouve que l'absolu
+# marche depuis là, et que l'artefact va sous la racine, pas dans le worktree.
+log_reset
+( cd "$WT" && FACTORY_ROOT="$TESTTMP" bash "$S" codeur 42 "$WT" base "$TESTTMP/.omc/turn/42/analyste-1.md" ) > "$TESTTMP/e2.out" 2>&1 && rc=0 || rc=$?
+assert_rc 0 "$rc" "role.sh depuis le worktree, entrée en chemin absolu = 0 ($(cat "$TESTTMP/e2.out"))"
+[ -f "$TURN/codeur-2.json" ] || { echo "l'artefact doit aller sous la racine (\$TURN), pas ailleurs" >&2; exit 1; }
+[ ! -e "$WT/.omc" ] || { echo "un artefact a atterri dans le worktree" >&2; exit 1; }
+( cd "$WT" && FACTORY_ROOT="$TESTTMP" bash "$S" codeur 42 "$WT" base ".omc/turn/42/analyste-1.md" ) > "$TESTTMP/e2b.out" 2>&1 && rc=0 || rc=$?
+assert_rc 3 "$rc" "le même chemin en RELATIF, depuis le worktree, n'existe pas : 3"
+assert_contains "$TESTTMP/e2b.out" "fichier d'entrée introuvable" "et le refus le dit"
+rm -f "$TURN"/codeur-2.*
+
 # --- f) ROLLOUT ABSENT = PREUVE MANQUANTE = 1, ET L'ARTEFACT LE DIT ---------------
 touch "$C/codex.norollout"
 run codeur 42 "$WT" base

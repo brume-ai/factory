@@ -50,6 +50,23 @@ La section « À vérifier avant la première ligne » du document : types d'iss
 en plan gratuit, modèles joignables depuis le conteneur, preuve du modèle dans
 la sortie des CLI, DNS des previews.
 
+### Reporté : fermer la classe adversariale de la porte
+
+La porte (`turn-verify.sh`, rejouée par la boucle dans son propre
+environnement) protège contre un orchestrateur qui **néglige** — socle absent,
+verdict rouge, commit hors fenêtre — pas contre un qui **triche à uid égal** :
+il tourne sous le même utilisateur que `role.sh` et peut fabriquer un `.brut`,
+un rollout, un artefact. La moitié bon marché est faite en T2 : l'agent
+reçoit un jeton d'App **réduit** (`gh-app-token.sh --agent`, `contents: read`)
+et ni le credential helper ni le jeton complet — GitHub refuse son push. Reste
+ce qui ferme la triche à uid égal, décidé mais non fait : `role.sh` lancé sous
+un **uid distinct** (les artefacts ne sont alors pas écrivables par
+l'orchestrateur), et des artefacts **signés** (la boucle vérifie une signature
+que seul `role.sh` sait produire) ; l'agent peut aujourd'hui refrapper un jeton
+complet, puisqu'il lit le `.env`. Ce chantier est séparé de la v2 : la porte
+telle qu'elle est ferme déjà le défaut observé le 17 septembre (un agent seul,
+sans relecteur), et c'est celui-là qui a coûté.
+
 ---
 
 ## 1. `factory doctor` — personne ne vérifie la protection de branche

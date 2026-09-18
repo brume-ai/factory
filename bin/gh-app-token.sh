@@ -18,8 +18,33 @@
 #   GH_APP_INSTALL_ID   l'Installation ID
 #   GH_APP_KEY          chemin du .pem  (défaut : /srv/factory/secrets/gh-app.pem)
 #
-#   export GH_TOKEN="$(bash tools/factory/gh-app-token.sh)"
+#   export GH_TOKEN="$(bash tools/factory/bin/gh-app-token.sh)"
+#
+# DEUX JETONS, DEUX PORTÉES (docs/v2-feature.md § 4). Sans option, le jeton
+# porte TOUTES les permissions de l'installation : c'est celui de la BOUCLE,
+# qui pousse sur `feature/*`. `--agent` demande un jeton RÉDUIT — contents en
+# lecture, issues et pull requests en écriture, metadata en lecture — pour
+# l'orchestrateur et les rôles : ils lisent l'arbre, posent des labels, des
+# commentaires, des sous-issues, et n'ont AUCUNE raison de pousser. Le point
+# `POST /app/installations/{id}/access_tokens` accepte un sous-ensemble des
+# permissions de l'installation dans `permissions` ; ce qui n'y est pas est
+# absent du jeton, et un `git push` avec ce jeton est refusé par GitHub, pas par
+# une consigne. C'est la moitié « bon marché » de la fermeture adversariale de
+# la porte ; l'autre (uid distinct, artefacts signés) reste reportée.
+# `--permissions '<json>'` donne un sous-ensemble arbitraire, pour une main.
+#   bash bin/gh-app-token.sh [--agent | --permissions '<json>']
 set -euo pipefail
+
+AGENT_PERMISSIONS='{"contents":"read","issues":"write","pull_requests":"write","metadata":"read"}'
+PERMISSIONS=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --agent) PERMISSIONS="$AGENT_PERMISSIONS"; shift ;;
+    --permissions) [ "$#" -ge 2 ] || { echo "gh-app-token: --permissions attend un objet JSON" >&2; exit 3; }
+                   PERMISSIONS="$2"; shift 2 ;;
+    *) echo "usage : bash bin/gh-app-token.sh [--agent | --permissions '<json>']" >&2; exit 3 ;;
+  esac
+done
 
 # `${BASH_SOURCE[0]:-$0}` : lu sur l'entrée standard (`bash -s`), BASH_SOURCE
 # n'existe pas et `set -u` fait échouer la résolution du dépôt — donc la lecture
@@ -64,10 +89,20 @@ body="$(mktemp)"; trap 'rm -f "$body"' EXIT
 # l'usine s'arrêtait sur « configuration cassée » alors que le `.env` était bon.
 # curl réessaie d'abord ; ce qui survit est classé, comme dans les sondages :
 # 4 = passager, 3 = refus. Voir l'explication longue dans `gh-next-issue.sh`.
+# LE SOUS-ENSEMBLE DE PERMISSIONS EST VALIDÉ AVANT DE PARTIR : un JSON cassé
+# ferait rendre 422 à GitHub, que l'appelant lirait « configuration cassée »
+# sans savoir laquelle. Le corps n'est envoyé que s'il y a quelque chose à
+# restreindre — sans corps, le jeton porte tout.
+data=""
+if [ -n "$PERMISSIONS" ]; then
+  data="$(printf '%s' "$PERMISSIONS" | python3 -c 'import json,sys; p=json.load(sys.stdin); assert isinstance(p, dict) and p; print(json.dumps({"permissions": p}))' 2>/dev/null)" \
+    || { echo "gh-app-token: --permissions n'est pas un objet JSON non vide : $PERMISSIONS" >&2; exit 3; }
+fi
 code="$(curl -sS --retry 3 --retry-delay 2 --retry-connrefused \
   --connect-timeout 10 --max-time 60 -o "$body" -w '%{http_code}' -X POST \
   -H "Authorization: Bearer $jwt" \
   -H "Accept: application/vnd.github+json" \
+  ${data:+-H "Content-Type: application/json" -d "$data"} \
   "https://api.github.com/app/installations/$install_id/access_tokens")" || {
   echo "gh-app-token: transport KO (curl $?) — raté passager" >&2; exit 4; }
 

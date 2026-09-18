@@ -5,8 +5,11 @@ export GH_REPO=o/r
 H="$FAKE_HTTP_DIR"
 S="$REPO/bin/gh-next-issue.sh"
 printf '[]' > "$H/repos_o_r_pulls_state_open_per_page_100.json"
-printf '[]' > "$H/repos_o_r_issues_state_open_labels_factory_in-progress_per_page_100.json"
-printf '[{"number":7,"created_at":"2026-01-01","labels":[]},{"number":8,"created_at":"2026-02-01","labels":[]}]' > "$H/repos_o_r_issues_state_open_per_page_100.json"
+# Les issues de la liste ouverte portent les cles que la selection v2 lit
+# (parent_issue_url, type, sub_issues_summary) : sans elles, gh-feature.py
+# relit chaque issue une a une — c'est voulu, et ce n'est pas le sujet ici.
+K='"parent_issue_url":null,"type":null,"sub_issues_summary":{"total":0,"completed":0}'
+printf '[{"number":7,"created_at":"2026-01-01","labels":[],%s},{"number":8,"created_at":"2026-02-01","labels":[],%s}]' "$K" "$K" > "$H/repos_o_r_issues_state_open_per_page_100.json"
 D="$H/repos_o_r_issues_7_dependencies_blocked_by_per_page_100.json"
 printf '[{"number":4,"state":"open","labels":[]}]' > "$D"
 printf '[]' > "$H/repos_o_r_issues_8_dependencies_blocked_by_per_page_100.json"
@@ -38,15 +41,14 @@ printf '[{"number":4,"state":"open"}]' > "$D"
 out="$(bash "$S" 2>/dev/null)" && rc=0 || rc=$?
 assert_rc 4 "$rc" "missing blocker labels cannot prove readiness"
 
-# A busy issue (including a draft PR) must pass exactly the same gate.
+# A busy issue must pass exactly the same gate.
 printf '[{"number":4,"state":"open","labels":[]}]' > "$D"
-printf '[{"number":7,"created_at":"2026-01-01","labels":[{"name":"factory:in-progress"}]}]' > "$H/repos_o_r_issues_state_open_labels_factory_in-progress_per_page_100.json"
+printf '[{"number":7,"created_at":"2026-01-01","labels":[{"name":"factory:in-progress"}],%s},{"number":8,"created_at":"2026-02-01","labels":[],%s}]' "$K" "$K" > "$H/repos_o_r_issues_state_open_per_page_100.json"
 assert_eq 8 "$(bash "$S" 2>/dev/null)" "busy cannot bypass native dependencies"
-printf '[]' > "$H/repos_o_r_issues_state_open_labels_factory_in-progress_per_page_100.json"
 
 # A native graph overrides stale textual links, but successful empty native
 # responses still support the pre-existing body-only backlog.
-printf '[{"number":7,"created_at":"2026-01-01","body":"Blocked by: #99","labels":[]}]' > "$H/repos_o_r_issues_state_open_per_page_100.json"
+printf '[{"number":7,"created_at":"2026-01-01","body":"Blocked by: #99","labels":[],%s}]' "$K" > "$H/repos_o_r_issues_state_open_per_page_100.json"
 printf '[{"number":4,"state":"closed","labels":[]}]' > "$D"
 assert_eq 7 "$(bash "$S" 2>/dev/null)" "native relationships win over stale body"
 printf '[]' > "$D"

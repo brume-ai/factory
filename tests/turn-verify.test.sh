@@ -38,24 +38,8 @@ commit_file() {  # <chemin> <contenu> [date] : un commit sur la branche courante
 }
 # <rôle> <k> <attendu> <prouvé> <verdict> — HA/HP (head_avant/apres, défaut :
 # HEAD courant), D0/D1 (fenêtre, défaut : large) se posent dans l'environnement.
-# Le .brut et le rollout sont écrits dans la forme du vrai CLI (celle des faux).
-art() {
-  local role="$1" k="$2" attendu="$3" prouve="$4" verdict="$5" head cli preuve="" thread
-  head="$(g rev-parse HEAD)"
-  case "${prouve:-$attendu}" in claude-*) cli=claude ;; *) cli=codex ;; esac
-  if [ -n "$prouve" ] && [ "$cli" = claude ]; then
-    printf '{"type":"result","result":"réponse","modelUsage":{"%s":{"inputTokens":1}}}\n' "$prouve" > "$TURN/$role-$k.brut"
-    preuve="modelUsage"
-  elif [ -n "$prouve" ]; then
-    thread="t-$role-$k"
-    printf '{"type":"thread.started","thread_id":"%s"}\n{"type":"item.completed","item":{"type":"agent_message","text":"réponse"}}\n{"type":"turn.completed","usage":{}}\n' "$thread" > "$TURN/$role-$k.brut"
-    mkdir -p "$CODEX_HOME/sessions/2026/09/18"
-    preuve="$CODEX_HOME/sessions/2026/09/18/rollout-2026-09-18T10-00-00-$thread.jsonl"
-    printf '{"type":"session_meta","payload":{}}\n{"type":"turn_context","payload":{"model":"%s"}}\n' "$prouve" > "$preuve"
-  fi
-  printf '{"role":"%s","modele_attendu":"%s","modele_prouve":"%s","cli":"%s","debut":"%s","fin":"%s","iteration":%s,"verdict":"%s","preuve":"%s","sortie":"s","base":"base","head_avant":"%s","head_apres":"%s"}\n' \
-    "$role" "$attendu" "$prouve" "$cli" "${D0:-2000-01-01T00:00:00Z}" "${D1:-2100-01-01T00:00:00Z}" "$k" "$verdict" "$preuve" "${HA:-$head}" "${HP:-$head}" > "$TURN/$role-$k.json"
-}
+# La forme vit dans tests/helpers.sh (art_write), partagée avec deliver.test.sh.
+art() { art_write "$TURN" "$WT" "$@"; }
 socle() {  # le socle complet, tout au vert, l'analyste ayant vu la base
   HA="$BASE_SHA" HP="$BASE_SHA" art analyste 1 claude-opus-5 claude-opus-5 ok
   art codeur 1 gpt-6-astra gpt-6-astra ok
