@@ -347,6 +347,12 @@ PY
 # Les deux CLI ont stdin fermé, par symétrie — aucun n'a rien à y lire.
 DEBUT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "role: $ROLE (itération $K) sous $MODELE via $CLI, dans $WT" >&2
+# L'ARTEFACT EST ÉCRIT AVANT LE LANCEMENT, verdict « interrompu ». Un role.sh
+# tué en plein vol (un redémarrage du service, la nuit de la mise en service)
+# laissait .brut/.prompt.md/.stderr sans .json, et la porte y lisait « artefact
+# supprimé » — un refus pour un rôle qui n'a simplement pas fini. Écrit
+# d'abord, le .json dit ce qui s'est passé ; le lancement le remplace.
+ecrire_artefact "" interrompu "le CLI n'a pas rendu la main : rôle tué en plein vol (voir $ERR)"
 rc=0
 if [ "$CLI" = claude ]; then
   (cd "$WT" && "${CMD[@]}" >"$BRUT" 2>"$ERR" <"$PROMPT_F") || rc=$?

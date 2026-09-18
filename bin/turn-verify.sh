@@ -305,7 +305,8 @@ for l in "${lignes[@]}"; do
   valide=0
   [ "$verdict" = ok ] && [ "$prouve" = "$catalogue" ] && [ "$attendu" = "$catalogue" ] && [ "$recalcule" = "$prouve" ] && valide=1
   if [ "$prouve" = "-" ]; then
-    # Rien de prouvé : cli-echec, preuve-manquante. Toléré pour un rôle en
+    # Rien de prouvé : cli-echec, preuve-manquante, interrompu (un role.sh tué
+    # avant d'avoir fini — l'artefact est écrit avant le lancement). Toléré pour un rôle en
     # lecture qu'une itération suivante valide remplace ; refusé sinon.
     if est_lecture "$role" && [ "${derniere_valide[$role]:-0}" -gt "$k" ]; then
       echo "turn-verify: $fichier (« $verdict ») toléré : $role est en lecture et son itération ${derniere_valide[$role]} est valide"

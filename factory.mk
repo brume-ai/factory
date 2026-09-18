@@ -468,15 +468,19 @@ loop:
 			echo "$(FACTORY_CYAN)— feature-up a rendu une ligne incomplète (« $$fu ») : traité comme un raté passager —$(FACTORY_RST)" ; \
 			sleep $(LOOP_SLEEP) ; continue ; \
 		fi ; \
-		# (d, seconde moitié) LA BASE EST ÉCRITE UNE FOIS, PUIS RELUE. Sur un \
-		# nouveau tour de la même carte, la branche a peut-être avancé (un \
-		# tour précédent a livré une autre carte de la feature) : réécrire la \
-		# base ferait relire à l'analyste de la reprise un diff qui ne \
-		# contient plus ses propres commits, et turn-verify ne verrait plus la \
-		# fenêtre du premier codeur. La base d'une carte est celle de son \
-		# premier tour, jusqu'à la livraison ou la remise à zéro. \
+		# (d, seconde moitié) LA BASE EST RÉÉCRITE À CHAQUE ADMISSION : c'est \
+		# origin/feature/<F> maintenant. Elle était écrite une fois par carte, \
+		# et la nuit de la mise en service l'a démentie : #255 admise à 21:04 \
+		# (base fa18f0a), tuée par un redémarrage, réadmise après la livraison \
+		# de #247 sur la même branche — origin avait avancé, pas la base, et la \
+		# porte lisait les commits de #247 comme « d'un tour précédent de #255 \
+		# sans preuve ». Les commits propres d'une carte sont TOUJOURS au-dessus \
+		# d'origin (la boucle pousse tout à la livraison) ; ce que l'analyste doit \
+		# avoir vu est head-admission, et les commits base..head-admission sont \
+		# prouvés par les tours archivés de la carte. Une base relue n'a plus \
+		# d'objet. \
 		mkdir -p "$$turn" ; \
-		if [ -f "$$turn/base" ]; then base="$$(cat "$$turn/base")" ; else printf '%s' "$$base" > "$$turn/base" ; fi ; \
+		printf '%s' "$$base" > "$$turn/base" ; \
 		# LA TÊTE D'ADMISSION, ELLE, EST ÉCRITE À CHAQUE TOUR : HEAD du worktree \
 		# maintenant. Une carte arrêtée en needs-human APRÈS un commit du codeur \
 		# et AVANT le push revient avec ce commit dans le worktree ; sans ce \

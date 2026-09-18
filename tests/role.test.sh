@@ -380,6 +380,20 @@ assert_eq "cli-echec" "$(champ "$TURN/writer-1.json" verdict)" "l'artefact dit l
 assert_contains "$out" "échec simulé" "le stderr du CLI est montré"
 assert_contains "$TURN/writer-1.stderr" "échec simulé" "et gardé"
 
+# --- n2) UN role.sh TUÉ EN PLEIN VOL LAISSE UN ARTEFACT « interrompu » ----------
+# La nuit de la mise en service, un redémarrage du service a tué un analyste :
+# .brut/.prompt.md/.stderr sans .json, et la porte y lisait « artefact
+# supprimé ». L'artefact est écrit AVANT le lancement, verdict interrompu.
+rm -f "$C/claude.rc"; touch "$C/claude.hang"
+( bash "$S" analyste 42 "$WT" base >/dev/null 2>&1 & echo $! > "$TESTTMP/role.pid"; wait ) &
+sleep 2
+pkill -KILL -P "$(cat "$TESTTMP/role.pid")" 2>/dev/null || true
+kill -KILL "$(cat "$TESTTMP/role.pid")" 2>/dev/null || true
+wait 2>/dev/null || true
+rm -f "$C/claude.hang"
+j="$(ls "$TURN"/analyste-*.json | sort -V | tail -1)"
+assert_eq "interrompu" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["verdict"])' "$j")" "un rôle tué laisse un .json au verdict interrompu, pas un trio orphelin"
+
 # --- o) CONFIGURATION : CLI INTROUVABLE, SKILL ABSENT, ENTRÉE, BASE = 3 -----------
 run codeur 42 "$WT" base "$TESTTMP/nexiste-pas.md"
 assert_rc 3 "$rc" "entrée absente = 3"
