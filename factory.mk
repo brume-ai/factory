@@ -241,12 +241,13 @@ loop:
 	@# le 3 serait avalé et l'export n'atteindrait personne. Après lui,
 	@# $$FACTORY_STAGING est la seule valeur lue par le fetch, le ff-only, les
 	@# scripts de ménage et l'agent.
-	@# FACTORY_IN_LOOP REND EXÉCUTABLE « LA RELEASE EST UN GESTE HUMAIN ». Ce n'est
-	@# pas une clé de configuration — personne ne la pose dans factory.conf, un
-	@# seul script la lit, `gh-release.sh`, et il refuse de partir quand elle est
-	@# là. Sans elle la phrase n'est qu'une ligne de doc : l'agent hérite de
-	@# GH_TOKEN, frappé plus bas, tourne en --dangerously-skip-permissions, et
-	@# rien ne l'empêcherait de fermer des dizaines de cartes non relues.
+	@# FACTORY_IN_LOOP REND EXÉCUTABLE « LES GESTES D'EVA NE SE FONT JAMAIS DEPUIS
+	@# UN TOUR ». Ce n'est pas une clé de configuration — personne ne la pose dans
+	@# factory.conf ; trois scripts la lisent, `gh-release.sh`, `eva-merge.sh` et
+	@# `eva-release.sh`, et refusent de partir quand elle est là. Sans elle la
+	@# phrase n'est qu'une ligne de doc : l'agent hérite d'un jeton, tourne en
+	@# --dangerously-skip-permissions, et rien ne l'empêcherait de fermer des
+	@# features que personne n'a sorties.
 	@. "$(FACTORY_DIR)/bin/lib.sh" || { echo "factory.mk: $(FACTORY_DIR)/bin/lib.sh illisible" >&2 ; exit 3 ; } ; \
 	export FACTORY_ROOT="$(CURDIR)" ; \
 	branches_require ; \
@@ -371,10 +372,15 @@ loop:
 		[ "$$hk" != 3 ] || { echo "$(FACTORY_CYAN)— wt-cleanup : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ; } ; \
 		hk=0 ; bash "$(FACTORY_BIN)/gh-unblock.sh" || hk=$$? ; \
 		[ "$$hk" != 3 ] || { echo "$(FACTORY_CYAN)— gh-unblock : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ; } ; \
+		# FACTORY_SECURITY_FEATURE (la feature permanente des cartes d'alerte) \
+		# est résolue ICI, par conf_get, comme les labels : le Python ne lit \
+		# pas factory.conf. Vide = chaque alerte devient sa propre mini-feature, \
+		# et le triage le dit à chaque tour. \
 		command -v python3 >/dev/null && \
 		  PRIO="$$(label_get priority)" BUSY="$$(label_get busy)" \
 		  DONE="$$(label_get done)" STAGED="$$(label_get staged)" \
 		  BLOCKED="$$(label_get blocked)" HUMAN="$$(label_get human)" \
+		  FACTORY_SECURITY_FEATURE="$$(conf_get FACTORY_SECURITY_FEATURE)" \
 		  python3 "$(FACTORY_BIN)/gh-security-triage.py" || true ; \
 		# LE MÉNAGE DU CONSOMMATEUR, s'il en a. Un projet a des alertes que \
 		# l'usine ne connaît pas — les erreurs de production de SON schéma \
@@ -508,7 +514,8 @@ loop:
 				case "$$drc" in \
 					0) echo "$(FACTORY_CYAN)— carte #$$issue livrée sur feature/$$feat (PR #$$pr) —$(FACTORY_RST)" ;; \
 					1) rm -f "$$turn/pret" ; echo "$(FACTORY_CYAN)— carte #$$issue refusée à la livraison (needs-human posé, voir la carte) —$(FACTORY_RST)" ;; \
-					3) echo "$(FACTORY_CYAN)— deliver : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ;; \
+					3) printf 'deliver.sh a rendu 3 sur #%s (configuration cassée, ou livraison impossible : voir le journal) ; pret est conservé' "$$issue" > "$$halt" ; \
+					   echo "$(FACTORY_CYAN)— deliver : configuration cassée (voir ci-dessus). Arrêt ; $$halt posé — sous Restart=always, la relance s'arrêterait sinon toutes les trente secondes sur le même 3, pret étant conservé. —$(FACTORY_RST)" ; exit 3 ;; \
 					*) echo "$(FACTORY_CYAN)— deliver : raté (code $$drc) · la carte #$$issue sera reprise, pret est conservé —$(FACTORY_RST)" ;; \
 				esac ; \
 			else \

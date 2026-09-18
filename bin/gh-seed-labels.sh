@@ -2,16 +2,19 @@
 # gh-seed-labels.sh : cree les labels factory:* sur le depot. Idempotent.
 #
 # LA FILE EST OPT-OUT, PAS OPT-IN : les labels ne servent qu'à déclarer
-# l'EXCEPTION — pris, bloqué, arbitrage humain, épopée, priorité, livré,
-# intégré. Une carte sans label est du travail à faire, et c'est le cas normal.
-# Les couleurs distinguent d'un coup d'œil ce qui travaille (bleu), ce qui
-# attend un humain (orange), ce qui est parqué (gris).
+# l'EXCEPTION — pris, bloqué, arbitrage humain, épopée, priorité sur une
+# CARTE ; « intégrée, attend la release » sur une FEATURE (v2). Une carte sans
+# label est du travail à faire, et c'est le cas normal. Les couleurs
+# distinguent d'un coup d'œil ce qui travaille (bleu), ce qui attend un humain
+# (orange), ce qui est parqué (gris).
 #
-# UN SEUL JEU, AUCUNE CONDITION. Il n'y a qu'un modèle : la carte part en PR, la
-# PR est intégrée à la branche de travail, la release la sort. Les sept labels
-# décrivent les sept états d'une carte dans CE modèle. Un jeu qui dépendait
-# d'une clé de configuration laissait un dépôt mal réglé avec un demi-jeu semé,
-# donc une file qui mentait sur un état qu'aucun script ne savait plus poser.
+# UN SEUL JEU, AUCUNE CONDITION. Il n'y a qu'un modèle (docs/release.md) : la
+# carte est un commit sur la branche de sa feature, fermée à la livraison ; la
+# feature est mergée par EVA et porte `staged` jusqu'à la release. Un jeu qui
+# dépendait d'une clé de configuration laissait un dépôt mal réglé avec un
+# demi-jeu semé, donc une file qui mentait sur un état qu'aucun script ne
+# savait plus poser. `delivered` reste semé : le triage de sécurité le lit
+# encore comme un état gelé, et personne ne le pose plus (EVOL.md).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 . "$HERE/lib.sh"
@@ -53,7 +56,9 @@ BLOCKED="$(label_get blocked)"
 HUMAN="$(label_get human)"
 EPIC="$(label_get epic)"
 PRIORITY="$(label_get priority)"
-DONE="$(label_get done)"
+# `'done'` entre guillemets : c'est un mot-clé du shell, et shellcheck (SC1010)
+# prend le mot nu pour la fin d'une boucle.
+DONE_LABEL="$(label_get 'done')"
 STAGED="$(label_get staged)"
 
 seed "$BUSY"     "1d76db" "Un agent tient cette carte en ce moment"
@@ -61,12 +66,11 @@ seed "$BLOCKED"  "d4c5f9" "Bloquee par une autre carte (voir le corps)"
 seed "$HUMAN"    "d93f0b" "Attend un arbitrage humain, hors file"
 seed "$EPIC"     "5319e7" "Chapeau d'epopee : un fil, pas du travail"
 seed "$PRIORITY" "b60205" "Passe devant la file"
-seed "$DONE"     "0e8a16" "PR livree, en attente d'integration"
+seed "$DONE_LABEL" "0e8a16" "PR livree, en attente d'integration"
 
-# LES DEUX ÉTATS D'ATTENTE NE SE CONFONDENT PAS, ET LA COULEUR LE DIT. `livré`
-# veut dire « la PR est posée, elle attend l'intégration » ; `intégré` veut dire
-# « le travail EST dans la branche de travail, il attend la release ». Ce sont
-# les deux que l'humain sépare quand il relit la file de relecture — la liste
-# des cartes intégrées du jalon en cours — donc deux verts voisins seraient
-# précisément la confusion à ne pas fabriquer : sarcelle, pas un second vert.
-seed "$STAGED"   "006b75" "Integree a la branche de travail, attend la release"
+# `staged` EST UN LABEL DE FEATURE (v2) : « la feature EST dans la branche de
+# travail, mergée par EVA, elle attend la release ». C'est le stock que
+# l'humain relit avant de sortir une version ; `delivered`, d'un vert voisin,
+# était l'état d'avant (la PR posée) et n'est plus posé — sarcelle ici, pas un
+# second vert, pour que les deux ne se confondent pas sur une vieille carte.
+seed "$STAGED"   "006b75" "Feature mergee dans la branche de travail, attend la release"

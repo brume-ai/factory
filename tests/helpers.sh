@@ -37,6 +37,11 @@ t_setup() {
         CLAUDE_BIN CODEX_BIN CLAUDE_ROLE_LAUNCH CODEX_ROLE_LAUNCH
 }
 
+# LA LIGNE DE SÉVÉRITÉ D'UN SECRET EXPOSÉ, telle que gh-security-triage.py
+# l'écrit et telle que eva-watch.sh la relit : UNE chaîne, partagée par les
+# deux tests, pour que le triage et la vigie ne divergent pas en silence.
+SECRET_SEVERITE='sévérité **critical** — un secret exposé est un incident.'
+
 assert_eq() {  # <attendu> <obtenu> <message>
   [ "$1" = "$2" ] || { echo "assert_eq: $3 (attendu '$1', obtenu '$2')" >&2; exit 1; }
 }

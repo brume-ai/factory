@@ -10,8 +10,8 @@
 #
 # A SOURCER depuis les scripts de bin/ :  . "$HERE/lib.sh"
 
-# DEPUIS UN WORKTREE, LA RACINE EST L'ARBRE PRINCIPAL. Une carte travaille dans
-# `.worktrees/card-<n>`, où ni `.env` (gitignoré) ni les secrets n'existent :
+# DEPUIS UN WORKTREE, LA RACINE EST L'ARBRE PRINCIPAL. Un tour travaille dans
+# `.worktrees/feature-<F>`, où ni `.env` (gitignoré) ni les secrets n'existent :
 # `git rev-parse --show-toplevel` y rendait le worktree, `conf_get` n'y trouvait
 # rien, et l'agent lisait « configuration cassée » depuis son propre
 # environnement. Le skill lui faisait exporter FACTORY_ROOT à la main — mais
@@ -256,6 +256,36 @@ elif all(r.get("conclusion") == "skipped" for r in runs):
     print("none")
 else:
     print("ok")
+PY
+)"
+
+# LE LOT D'UNE RELEASE, MIS À PLAT UNE FOIS, LU PAR gh-release.sh ET
+# eva-release.sh. Lit sur stdin le JSON de `gh-feature.py lot` — la remontée
+# carte → feature, le SEUL lecteur de la chaîne des parents — et STAGED (le nom
+# du label de feature) dans l'environnement ; imprime une ligne tabulée par
+# feature puis par carte du lot, dans l'ordre des numéros, pour que deux
+# passages rendent la même liste :
+#   F <n> <mini> <state> <staged> <total> <completed> <ouvertes> <titre>
+#   C <feature> <n> <state> <titre>
+# `ouvertes` : les cartes du lot encore ouvertes (« #12 #13 », ou « - ») — le
+# compte de GitHub ne voit que les enfants DIRECTS, un lot fermé au-dessus
+# d'une carte ouverte passerait ; c'est ce champ qui rend la feature
+# incomplète. Titre en dernier, tabulations et sauts de ligne aplatis : `read`
+# lui laisse le reste de la ligne. Le JSON est le contrat ; ceci n'est que la
+# forme que bash sait lire.
+# shellcheck disable=SC2034  # lu par gh-release.sh et eva-release.sh, qui sourcent ce fichier
+LOT_LINES_PY="$(cat <<'PY'
+import json, os, sys
+d = json.load(sys.stdin)
+staged = os.environ["STAGED"]
+def t(s): return (s or "-").replace("\t", " ").replace("\n", " ")
+for f in d["features"]:
+    s = f.get("sub_issues_summary") or {}
+    ouvertes = " ".join("#%d" % c["number"] for c in f["cards"] if c.get("state") == "open") or "-"
+    print("F\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s" % (f["number"], f["mini"], f.get("state") or "-",
+          staged in f["labels"], s.get("total", 0), s.get("completed", 0), ouvertes, t(f["title"])))
+    for c in f["cards"]:
+        print("C\t%d\t%d\t%s\t%s" % (f["number"], c["number"], c.get("state") or "-", t(c["title"])))
 PY
 )"
 

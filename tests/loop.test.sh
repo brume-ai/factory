@@ -188,6 +188,28 @@ assert_eq "2" "$(wc -l < "$TESTTMP/deliver.log")" "deliver est rejoue au second 
 assert_eq "2" "$(wc -l < "$TESTTMP/verify.log")" "la porte est rejouee aussi, dans l'environnement de la boucle"
 assert_contains "$TESTTMP/pret.out" "pret déjà posé" "et la boucle le dit"
 
+# --- 5b bis. deliver en 3 : ARRET, ET loop.halt POSE — pas une relance toutes les 30 s
+# `pret` est conserve (la livraison est a rejouer une fois la configuration
+# reparee) ; sous Restart=always, sans le sentinelle, chaque relance irait
+# droit a la porte et a la livraison, et ressortirait en 3 sur le meme mur.
+C5d="$TESTTMP/conso-deliver-3"; conso "$C5d"
+raz; touch "$TESTTMP/agent.pret" "$TESTTMP/agent.nostop"; printf '3' > "$TESTTMP/deliver.rc"
+set +e; tour "$C5d" > "$TESTTMP/deliver3.out" 2>&1; rc=$?; set -e
+# make rend 2 sur toute recette en echec ; le code de la boucle est dans son journal.
+assert_rc 2 "$rc" "deliver en 3 : la boucle s'arrete"
+assert_contains "$TESTTMP/deliver3.out" "Error 3" "deliver en 3 : la boucle sort en 3"
+[ -f "$C5d/.omc/loop.halt" ] || { echo "deliver en 3 : loop.halt doit etre pose" >&2; exit 1; }
+assert_contains "$C5d/.omc/loop.halt" "deliver.sh a rendu 3 sur #12" "deliver en 3 : la raison est dans loop.halt"
+[ -f "$C5d/.omc/turn/12/pret" ] || { echo "deliver en 3 : pret doit etre conserve" >&2; exit 1; }
+assert_eq "1" "$(wc -l < "$TESTTMP/deliver.log")" "deliver en 3 : un seul appel"
+# La relance s'arrete en une ligne, avant tout geste.
+raz; touch "$TESTTMP/agent.nostop"
+set +e; tour "$C5d" > "$TESTTMP/deliver3-bis.out" 2>&1; rc=$?; set -e
+assert_rc 2 "$rc" "relance apres deliver 3 : la boucle s'arrete"
+assert_contains "$TESTTMP/deliver3-bis.out" "Error 4" "relance apres deliver 3 : 4, sur le sentinelle"
+[ ! -f "$TESTTMP/deliver.log" ] || { echo "relance apres deliver 3 : deliver ne doit pas etre rejoue" >&2; exit 1; }
+assert_contains "$TESTTMP/deliver3-bis.out" "la boucle a ete arretee" "relance : le sentinelle est dit"
+
 # --- 5c. feature-up ou deliver REFUSENT LA CARTE (1) : retour au sondage, pas d'arret --
 C5c="$TESTTMP/conso-refus-carte"; conso "$C5c"
 raz; printf '1' > "$TESTTMP/feature-up.rc"

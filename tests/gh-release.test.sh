@@ -45,17 +45,20 @@ fix() {  # <chemin api> <corps json>
   printf '%s' "$2" > "$H/$(printf '%s' "$1" | tr '/?&=%:' '______').json"
 }
 # Une carte : <n> <état> <titre> [parent] — le parent est l'URL API de l'issue
-# parente, comme GitHub la rend.
+# parente, comme GitHub la rend. LES CLÉS `parent_issue_url`, `type` et
+# `sub_issues_summary` SONT TOUJOURS PRÉSENTES, à null ou à zéro : c'est ce
+# que l'API rend, et gh-feature.py (la remontée carte → feature) refuse une
+# issue qui ne les porte pas plutôt que de lire « pas de parent ».
 card() {
-  local parent=""
-  [ -z "${4:-}" ] || parent=",\"parent_issue_url\":\"https://api.github.com/repos/o/r/issues/$4\""
-  fix "repos/o/r/issues/$1" "{\"number\":$1,\"state\":\"$2\",\"title\":\"$3\",\"type\":{\"name\":\"Task\"}$parent,\"labels\":[]}"
+  local parent=null
+  [ -z "${4:-}" ] || parent="\"https://api.github.com/repos/o/r/issues/$4\""
+  fix "repos/o/r/issues/$1" "{\"number\":$1,\"state\":\"$2\",\"title\":\"$3\",\"type\":{\"name\":\"Task\"},\"parent_issue_url\":$parent,\"sub_issues_summary\":{\"total\":0,\"completed\":0},\"labels\":[]}"
   fix "repos/o/r/issues/$1/comments?per_page=100" '[]'
   fix "repos/o/r/issues/$1/comments" '{}'
 }
 # Une feature : <n> <état> <titre> <total> <complétées> [labels json]
 feature() {
-  fix "repos/o/r/issues/$1" "{\"number\":$1,\"state\":\"$2\",\"title\":\"$3\",\"type\":{\"name\":\"Feature\"},\"sub_issues_summary\":{\"total\":$4,\"completed\":$5},\"labels\":[${6-{\"name\":\"factory:staged\"\}}]}"
+  fix "repos/o/r/issues/$1" "{\"number\":$1,\"state\":\"$2\",\"title\":\"$3\",\"type\":{\"name\":\"Feature\"},\"parent_issue_url\":null,\"sub_issues_summary\":{\"total\":$4,\"completed\":$5},\"labels\":[${6-{\"name\":\"factory:staged\"\}}]}"
   fix "repos/o/r/issues/$1/comments?per_page=100" '[]'
   fix "repos/o/r/issues/$1/comments" '{}'
 }
@@ -98,7 +101,7 @@ feature 5 open "Le CRM" 2 2
 # Mini-feature : fermée à la livraison, sans parent. Elle porte le label
 # d'attente qu'eva-merge.sh a posé sur sa propre branche.
 card 14 closed "Hotfix"
-fix 'repos/o/r/issues/14' '{"number":14,"state":"closed","title":"Hotfix","type":{"name":"Task"},"labels":[{"name":"factory:staged"}]}'
+fix 'repos/o/r/issues/14' '{"number":14,"state":"closed","title":"Hotfix","type":{"name":"Task"},"parent_issue_url":null,"sub_issues_summary":{"total":0,"completed":0},"labels":[{"name":"factory:staged"}]}'
 # Une PULL REQUEST référencée par un commit. /issues/77 répond, et rien ne la
 # distingue d'une carte SAUF la clé `pull_request`.
 fix 'repos/o/r/issues/77' '{"number":77,"state":"open","title":"Une PR","pull_request":{"url":"x"}}'
@@ -288,7 +291,7 @@ g commit -q --allow-empty -m "feat: parent ailleurs
 Refs #19"
 g tag v1.2.0c
 g push -q origin main --tags
-fix 'repos/o/r/issues/19' '{"number":19,"state":"closed","title":"Ailleurs","type":{"name":"Task"},"parent_issue_url":"https://api.github.com/repos/autre/depot/issues/5","labels":[]}'
+fix 'repos/o/r/issues/19' '{"number":19,"state":"closed","title":"Ailleurs","type":{"name":"Task"},"parent_issue_url":"https://api.github.com/repos/autre/depot/issues/5","sub_issues_summary":{"total":0,"completed":0},"labels":[]}'
 : > "$H/calls.log"
 set +e; err="$(bash "$S" 2>&1 >/dev/null)"; rc=$?; set -e
 assert_rc 3 "$rc" "parent hors depot : 3"
@@ -436,5 +439,70 @@ set +e; err="$(bash "$S" 2>&1 >/dev/null)"; rc=$?; set -e
 assert_rc 3 "$rc" "403 sur la feature : la remontee s'arrete en 3, pas en « laissee de cote »"
 assert_not_contains "$err" "laissée de côté" "403 sur la feature : le refus n'est pas avale par la remontee"
 rm -f "$H/repos_o_r_issues_8.code"
+
+# --- n) LA RACINE OUVERTE D'UNE MINI-FEATURE N'EST PAS « COMPLÈTE » ------------------
+# Un hotfix #50 en needs-human ; sa remarque #60 (sous lui) est livrée et
+# fermée ; EVA a mergé. GitHub dit 1/1 : sans la règle « racine fermée », la
+# release fermait #50 « completed » sans qu'il ait été fait.
+g commit -q --allow-empty -m "fix: la remarque sur le hotfix
+
+Refs #60"
+g tag v1.5.0
+g push -q origin main --tags
+card 60 closed "La remarque" 50
+fix 'repos/o/r/issues/50' '{"number":50,"state":"open","title":"Le hotfix","type":{"name":"Task"},"parent_issue_url":null,"sub_issues_summary":{"total":1,"completed":1},"labels":[{"name":"factory:staged"}]}'
+fix 'repos/o/r/issues/50/comments?per_page=100' '[]'; fix 'repos/o/r/issues/50/comments' '{}'
+: > "$H/calls.log"
+out="$(bash "$S" --apply 2>"$TESTTMP/err")" && rc=0 || rc=$?
+assert_rc 0 "$rc" "racine ouverte : rc 0"
+assert_contains "$out" "#50	Le hotfix	(incomplète : 1/1 cartes fermées, racine #50 ouverte" "racine ouverte : dite incomplète, avec la raison"
+assert_contains "$out" "  #60	La remarque" "racine ouverte : la carte livrée est sous elle"
+assert_file_lacks "$H/calls.log" "PATCH repos/o/r/issues/50" "racine ouverte : JAMAIS fermée"
+assert_file_lacks "$H/calls.log" "issues/50/labels" "racine ouverte : garde son label d'attente"
+assert_contains "$H/calls.log" "POST repos/o/r/issues/60/comments" "racine ouverte : la carte sortie reçoit quand même la trace"
+# La même racine FERMÉE : complète, fermée à la livraison, trace et label.
+fix 'repos/o/r/issues/50' '{"number":50,"state":"closed","title":"Le hotfix","type":{"name":"Task"},"parent_issue_url":null,"sub_issues_summary":{"total":1,"completed":1},"labels":[{"name":"factory:staged"}]}'
+: > "$H/calls.log"
+out="$(bash "$S" --apply 2>"$TESTTMP/err")" && rc=0 || rc=$?
+assert_contains "$out" "#50	Le hotfix
+" "racine fermée : complète"
+assert_contains "$H/calls.log" "DELETE repos/o/r/issues/50/labels/factory%3Astaged" "racine fermée : le label est retiré"
+
+# --- o) LA FEATURE PERMANENTE DES ALERTES : NI FERMÉE NI BLOQUANTE ---------------------
+# Complète et staged, elle aurait été fermée : fermée, le triage sortirait en 3
+# au tour suivant et plus aucune alerte ne deviendrait une carte.
+g commit -q --allow-empty -m "fix: dependabot
+
+Refs #61"
+g tag v1.6.0
+g push -q origin main --tags
+card 61 closed "Dependabot — api/uv.lock" 5
+feature 5 open "Sécurité" 1 1
+: > "$H/calls.log"
+out="$(FACTORY_SECURITY_FEATURE=5 bash "$S" --apply 2>"$TESTTMP/err")" && rc=0 || rc=$?
+assert_rc 0 "$rc" "feature permanente : rc 0"
+assert_contains "$out" "#5	Sécurité	(feature permanente des alertes : ni fermée ni bloquante)" "feature permanente : dite sur la liste"
+assert_file_lacks "$H/calls.log" "PATCH repos/o/r/issues/5" "feature permanente : JAMAIS fermée"
+assert_contains "$H/calls.log" "POST repos/o/r/issues/61/comments" "feature permanente : sa carte sortie est commentée"
+assert_contains "$H/calls.log" "DELETE repos/o/r/issues/5/labels/factory%3Astaged" "feature permanente : le label d'attente du lot sorti est retiré"
+assert_contains "$TESTTMP/err" "feature permanente #5" "feature permanente : dite sur stderr"
+# Sans la clé, la même feature complète et staged est fermée : c'est bien la
+# clé qui l'exclut.
+feature 5 open "Sécurité" 1 1
+: > "$H/calls.log"
+bash "$S" --apply >/dev/null 2>&1
+assert_contains "$H/calls.log" "PATCH repos/o/r/issues/5" "sans la clé : fermée comme une feature ordinaire"
+set +e; err="$(FACTORY_SECURITY_FEATURE=abc bash "$S" 2>&1 >/dev/null)"; rc=$?; set -e
+assert_rc 3 "$rc" "clé qui n'est pas un numéro : 3"
+
+# --- p) UN LECTEUR QUI REND UN JSON INCOMPLET EST UN 3, PAS UN LOT VIDE ----------------
+printf '%s\n' '#!/usr/bin/env python3' 'print("{\"cards\": []}")' > "$TESTTMP/faux-gh-feature.py"
+: > "$H/calls.log"
+set +e; out="$(GH_FEATURE_PY="$TESTTMP/faux-gh-feature.py" bash "$S" --apply 2>"$TESTTMP/err")"; rc=$?; set -e
+assert_rc 3 "$rc" "lot illisible : 3"
+assert_eq "" "$out" "lot illisible : rien sur stdout"
+assert_contains "$TESTTMP/err" "illisible" "lot illisible : dit"
+assert_not_contains "$(cat "$TESTTMP/err")" "aucune feature à fermer" "lot illisible : surtout pas « aucune feature »"
+assert_file_lacks "$H/calls.log" "POST" "lot illisible : rien n'est écrit"
 
 echo ok

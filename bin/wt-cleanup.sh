@@ -11,7 +11,9 @@
 #
 # CE QU'IL DÉTRUIT, ET RIEN D'AUTRE : les worktrees `feature-<F>` dont la pull
 # request de feature (tête `feature/<F>`) est MERGÉE ou FERMÉE (v2 : une feature =
-# une branche = une PR, docs/v2-feature.md § 1). Le travail a atterri, ou a été
+# une branche = une PR, docs/v2-feature.md § 1) ET QUI NE PORTENT RIEN DE NON
+# POUSSÉ — un fichier non commité, un commit que origin n'a pas : dit, et
+# conservé, quel que soit l'état de la PR. Le travail a atterri, ou a été
 # abandonné : garder l'environnement ne sert plus. Une feature dont la PR est
 # OUVERTE, ou sans PR (feature-up.sh en crée une à l'admission ; sans PR, c'est
 # un tour mort avant la PR), est du travail EN COURS — on n'y touche pas : la
@@ -106,6 +108,17 @@ for dir in "$ROOT"/.worktrees/feature-*; do
 
   case "${state:-none}" in
     merged|closed)
+      # DU TRAVAIL NON POUSSÉ N'EST JAMAIS DÉTRUIT, même sous une PR mergée ou
+      # fermée : une carte livrée entre l'admission et le merge (deliver.sh l'a
+      # refusée, needs-human) laisse un commit que seul ce worktree porte, et
+      # `remove --force` l'emportait sans un mot — le diagnostic n'était dit
+      # que pour les worktrees conservés. Ici il est dit AVANT tout geste, et
+      # le worktree reste : c'est un humain qui pousse ou qui jette.
+      reste="$(non_pousse "$dir")"
+      if [[ -n "$reste" ]]; then
+        echo "wt-cleanup: $name — PR $state, CONSERVÉ$reste : rien n'est détruit tant qu'un humain n'a pas poussé ou jeté ce travail" >&2
+        continue
+      fi
       if [[ "$DRY" == "--dry-run" ]]; then
         echo "wt-cleanup: [simulation] $name — PR $state, à détruire"
       else

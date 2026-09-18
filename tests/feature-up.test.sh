@@ -162,6 +162,20 @@ git -C "$R" fetch -q origin feature/50
 assert_eq "$STAGING_SHA" "$(gr rev-parse origin/feature/50^)" "aucune pile : feature/50 part de staging"
 assert_contains "$(grep 'POST repos/o/r/pulls {' "$H/calls.log")" '"base": "staging"' "et la PR vise staging"
 
+# --- e3) PAS DE PILE DEPUIS LE CORPS : « Dépend de #10 » est une phrase, pas une relation
+# Aucun bloqueur natif, un corps qui nomme la feature 10 : la base reste la
+# branche de travail — une pile ne vient que d'une dépendance déclarée.
+printf '{"number":60,"title":"Par le corps","body":"Dépend de #10","labels":[],"state":"open","parent_issue_url":null,"type":{"name":"Feature"},"sub_issues_summary":{"total":1,"completed":0},"node_id":"N60"}' > "$H/repos_o_r_issues_60.json"
+printf '[]' > "$H/repos_o_r_issues_60_dependencies_blocked_by_per_page_100.json"
+iss 62 60 Task "carte"
+printf '[]' > "$H/repos_o_r_pulls_state_open_head_o_feature_60_per_page_1.json"
+printf '{"number":48}' > "$H/repos_o_r_pulls.json"
+: > "$H/calls.log"
+run 62
+assert_rc 0 "$rc" "corps sans relation native : admise ($(cat "$TESTTMP/err"))"
+assert_contains "$(grep 'POST repos/o/r/pulls {' "$H/calls.log")" '"base": "staging"' "corps sans relation native : la base est la branche de travail, pas feature/10"
+assert_not_contains "$(cat "$TESTTMP/err")" "pile sur" "corps sans relation native : aucune pile"
+
 # --- f) LA MINI-FEATURE : une carte sans parent, et une carte sous un lot sans Feature
 printf '[]' > "$H/repos_o_r_pulls_state_open_head_o_feature_30_per_page_1.json"
 printf '{"number":47}' > "$H/repos_o_r_pulls.json"
@@ -288,6 +302,21 @@ printf '422' > "$H/repos_o_r_pulls.code"
 run 132
 rm -f "$H/repos_o_r_pulls.code"
 refuse 132 "HTTP 422"
+# 422 APRÈS LE COMMIT « rouvre » : la branche est sur origin, sa PR est
+# mergée, le commit vide est poussé, puis GitHub refuse la PR neuve. La raison
+# dit que la branche porte déjà ce commit vide — l'humain qui relit la branche
+# saurait sinon ni d'où il vient, ni qu'un second essai n'en ajoute pas un autre.
+iss 150 null Feature "Rouverte puis refusée" open 1
+iss 152 150 Task "carte"
+gr push -q origin "origin/staging:refs/heads/feature/150"
+printf '[]' > "$H/repos_o_r_pulls_state_open_head_o_feature_150_per_page_1.json"
+printf '[{"number":66,"state":"closed","merged_at":"2026-09-18T10:00:00Z"}]' > "$H/repos_o_r_pulls_state_all_head_o_feature_150_per_page_1.json"
+printf '422' > "$H/repos_o_r_pulls.code"
+: > "$H/calls.log"
+run 152
+rm -f "$H/repos_o_r_pulls.code"
+refuse 152 "porte déjà le commit vide « chore: rouvre feature/150 »"
+assert_contains "$(gr log -1 --format=%s origin/feature/150)" "rouvre feature/150" "et il est bien sur origin"
 # Un 500, lui, reste un raté passager.
 iss 140 null Feature "Cinq cents" open 1
 iss 142 140 Task "carte"
@@ -298,7 +327,8 @@ rm -f "$H/repos_o_r_pulls.code"
 assert_rc 4 "$rc" "5xx sur la PR = 4"
 
 # --- m) LES TROIS ÉTATS DE WORKTREE (I4) ---------------------------------------------------
-# (1) enregistré mais répertoire supprimé : prune, puis recréé.
+# (1) répertoire de worktree disparu → prune puis recréé : le worktree reste
+#     enregistré (un `rm -rf` à la main), `worktree add` refuserait sans le prune.
 rm -rf "$R/.worktrees/feature-30"
 printf '[{"number":47}]' > "$H/repos_o_r_pulls_state_open_head_o_feature_30_per_page_1.json"
 run 30

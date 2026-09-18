@@ -26,7 +26,7 @@
 # `feature/<G>` existe sur origin — alors F part de `origin/feature/<G>` et sa
 # PR vise `feature/<G>` (une pile ; GitHub la rebase sur la branche de travail
 # quand G est mergée). Rien d'autre ne fait une pile. Plusieurs G possibles :
-# le plus haut numéro, comme gh-stack.sh — et on le dit.
+# le plus haut numéro — et on le dit.
 #
 # CE QUE « base-ref » VEUT DIRE EN SORTIE : le SHA de `origin/feature/<F>` au
 # moment de l'admission — ce contre quoi le tour lit son diff (role.sh,
@@ -158,13 +158,16 @@ mkdir -p "$TURN"
 [ -f "$TURN/card.json" ] || printf '%s' "$info" | jq_ 'd["card_issue"]' > "$TURN/card.json"
 
 # --- 2. La base : la branche de travail, ou la feature dont F dépend --------------
-# Les bloqueurs natifs de F, par gh-dependencies.py (mode numbers, qui n'a
-# besoin que du corps pour le repli historique). Un bloqueur G ne fait une pile
-# que s'il est une Feature OUVERTE dont la branche existe sur origin : une
-# carte de cadrage qui bloque F n'est pas une base, une Feature fermée est déjà
-# dans la branche de travail.
+# Les bloqueurs NATIFS de F, et eux seuls (gh-dependencies.py numbers --natif) :
+# un « Dépend de #12 » dans le corps de la feature est une phrase, pas une
+# relation déclarée — en faire une base empilait une feature sur une autre sans
+# que GitHub le sache, donc sans retarget de la PR quand #12 est mergée. Le
+# repli textuel reste pour la sélection des cartes historiques, pas ici. Un
+# bloqueur G ne fait une pile que s'il est une Feature OUVERTE dont la branche
+# existe sur origin : une carte de cadrage qui bloque F n'est pas une base, une
+# Feature fermée est déjà dans la branche de travail.
 deps="$(printf '%s' "$info" | jq_ 'd["feature_issue"]' \
-  | FACTORY_TOKEN="$TOKEN" python3 "$HERE/gh-dependencies.py" numbers "$GH_REPO" "$F")" || exit $?
+  | FACTORY_TOKEN="$TOKEN" python3 "$HERE/gh-dependencies.py" numbers "$GH_REPO" "$F" --natif)" || exit $?
 BASE_BRANCHE="$FACTORY_STAGING"
 piles=()
 for G in $(printf '%s' "$deps" | python3 -c 'import json,sys; print(" ".join(str(n) for n in json.load(sys.stdin)))'); do
@@ -336,7 +339,13 @@ print(json.dumps({"title": os.environ["TITRE"], "head": os.environ["TETE"], "bas
   rc=0; pr="$(api "repos/$GH_REPO/pulls" POST "$corps")" || rc=$?
   if [ "$rc" != 0 ]; then
     [ "$(cat "$API_CODE_FILE")" = 422 ] || exit "$rc"
-    refus_carte "GitHub refuse la PR $BRANCHE → $BASE_BRANCHE (HTTP 422) : la branche est-elle déjà entièrement dans $BASE_BRANCHE, ou la base a-t-elle disparu ?"
+    # APRÈS UNE RÉOUVERTURE, LA BRANCHE PORTE DÉJÀ LE COMMIT VIDE « rouvre »,
+    # poussé juste avant : la raison le dit, sinon l'humain qui relit la
+    # branche ne comprend pas d'où vient ce commit sans Refs, ni pourquoi un
+    # second essai n'en ajoutera pas un autre (le point de comparaison est
+    # origin, qui l'a).
+    porte=""; [ "$ROUVRIR" = 0 ] || porte=" La branche porte déjà le commit vide « chore: rouvre $BRANCHE », poussé sur origin avant ce refus : il y restera, et un nouvel essai n'en ajoutera pas un second."
+    refus_carte "GitHub refuse la PR $BRANCHE → $BASE_BRANCHE (HTTP 422) : la branche est-elle déjà entièrement dans $BASE_BRANCHE, ou la base a-t-elle disparu ?$porte"
   fi
   PR="$(printf '%s' "$pr" | jq_ 'd["number"]')"
   echo "feature-up: PR #$PR créée en brouillon ($BRANCHE → $BASE_BRANCHE) — « $TITRE »" >&2

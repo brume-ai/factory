@@ -105,7 +105,7 @@ assert_eq "3" "$(r="$(FACTORY_TRUNK='main ' FACTORY_STAGING=' main' try_branches
   "l'egalite se juge apres rognage"
 
 # RIEN SUR LA SORTIE STANDARD QUAND ELLE REFUSE. Des appelants capturent la
-# sortie d'un script qui appelle cette garde (« base="$(gh-stack.sh base 12)" ») :
+# sortie d'un script qui appelle cette garde (« fu="$(feature-up.sh 12)" ») :
 # une seule ligne de bruit sur stdout deviendrait un nom de branche.
 make_conf 'FACTORY_TRUNK = main' 'FACTORY_STAGING = main'
 set +e

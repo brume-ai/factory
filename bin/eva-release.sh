@@ -12,8 +12,9 @@
 #
 # CE QU'IL DÉRIVE, ET DE QUOI. La plage est « dernier tag sur la production ..
 # branche de travail ». Les `Refs #n` de ses commits sont des CARTES ; chacune
-# est remontée à sa FEATURE (`parent_issue_url`, jusqu'à `type.name ==
-# Feature` ; sans feature, la carte est sa propre mini-feature). Une feature
+# est remontée à sa FEATURE par gh-feature.py (`parent_issue_url`, jusqu'à
+# `type.name == Feature` ; sans feature, la RACINE de la chaîne est une
+# mini-feature). Une feature
 # est COMPLÈTE quand toutes ses sous-issues sont fermées
 # (`sub_issues_summary.completed == total`), une mini-feature quand elle est
 # fermée. UNE FEATURE INCOMPLÈTE BLOQUE : une feature dont une carte est
@@ -62,7 +63,9 @@
 # gh-release.sh --apply (ferme les features, retire `factory:staged`), puis la
 # CI de production sondée sur ce SHA jusqu'à conclusion — FACTORY_RELEASE_WAIT
 # secondes au plus (1800), toutes les FACTORY_RELEASE_POLL secondes (30) — et
-# LA DERNIÈRE LIGNE DE STDOUT est le verdict : `deploiement: success|failure|timeout`.
+# LA DERNIÈRE LIGNE DE STDOUT est le verdict : `deploiement: success|failure|timeout|inconnu`
+# (inconnu : l'API a refusé la lecture des runs — l'App d'EVA a-t-elle
+# « Actions: Read » ? — le déploiement est à regarder à la main).
 #
 # Codes : 0 = à blanc, la liste et le numéro proposé ; avec --apply, release
 # sortie ET déployée · 1 = refus (feature incomplète ou pas passée par EVA,
@@ -115,6 +118,11 @@ branches_require
 conf_require GH_REPO
 GH_REPO="$(conf_get GH_REPO)"
 STAGED_LABEL="$(label_get staged)"
+# La feature permanente des alertes : hors des règles bloquer/fermer (le
+# pourquoi est dans gh-release.sh). Ici : jamais « incomplète » ni « pas passée
+# par EVA », elle ne bloque pas une release qui porte un correctif de sécurité.
+SECURITY_FEATURE="$(conf_get FACTORY_SECURITY_FEATURE)"
+case "$SECURITY_FEATURE" in *[!0-9]*) echo "eva-release: FACTORY_SECURITY_FEATURE doit être un numéro d'issue (« $SECURITY_FEATURE »)" >&2; exit 3 ;; esac
 WAIT="$(conf_get FACTORY_RELEASE_WAIT 1800)"
 POLL="$(conf_get FACTORY_RELEASE_POLL 30)"
 
@@ -176,7 +184,7 @@ CURL_RETRY=(--retry 3 --retry-delay 2 --retry-connrefused
 # retour de la suivante, où `$body` n'existe plus (le pourquoi long est dans
 # eva-merge.sh). Les appels ne s'imbriquent jamais.
 API_CODE_FILE="$(mktemp)"; API_BODY="$(mktemp)"
-MEMO="$(mktemp -d)"; trap 'rm -rf "$MEMO" "$API_CODE_FILE" "$API_BODY"' EXIT
+trap 'rm -f "$API_CODE_FILE" "$API_BODY"' EXIT
 api() {  # <chemin> [méthode] [corps] — imprime le corps · 3 = refus · 4 = passager
   local body="$API_BODY" code m="${2:-GET}" data="${3:-}" rc
   : > "$API_CODE_FILE"
@@ -212,89 +220,29 @@ api() {  # <chemin> [méthode] [corps] — imprime le corps · 3 = refus · 4 = 
   cat "$body"
 }
 
-# --- LA REMONTÉE CARTE → FEATURE ---------------------------------------------------
-# Jumelle de celle de gh-release.sh, et pour la même raison écrite en fonctions
-# qui ne sont jamais appelées dans un $( ) : un `exit 3` (403) dans une
-# substitution ne tuerait que le sous-shell, et la release continuerait à
-# moitié sur une App sans droits.
-# LE PARENT EST RELU AVEC SON DÉPÔT. `parent_issue_url` est une URL complète
-# (`…/repos/<o>/<r>/issues/<n>`) ; n'en garder que le numéro ferait d'un parent
-# dans un AUTRE dépôt une issue du nôtre, au même numéro. Le dépôt est rendu
-# tel quel, comparé plus bas à GH_REPO — hors dépôt, c'est un refus 3.
-issue_line() {  # <corps json> : « state kind type parent parent_repo total completed staged » puis le titre
-  printf '%s' "$1" | STAGED="$STAGED_LABEL" python3 -c '
-import json, os, sys
-d = json.load(sys.stdin)
-url = (d.get("parent_issue_url") or "").rstrip("/")
-parts = url.split("/")
-parent = parts[-1] if len(parts) >= 4 and parts[-2] == "issues" and parts[-1].isdigit() else "-"
-prepo = "/".join(parts[-4:-2]) if parent != "-" else "-"
-s = d.get("sub_issues_summary") or {}
-print(d.get("state") or "-", "pr" if "pull_request" in d else "carte",
-      (d.get("type") or {}).get("name") or "-", parent, prepo or "-",
-      s.get("total", 0), s.get("completed", 0),
-      any(l.get("name") == os.environ["STAGED"] for l in d.get("labels") or []))
-print((d.get("title") or "").replace("\n", " "))
-'
-}
-issue_load() {  # <n> : lit l'issue dans $MEMO/<n>.json · 1 = inconnue (dite) · 3/4 sinon
-  local rc=0
-  [ -f "$MEMO/$1.json" ] && return 0
-  api "repos/$GH_REPO/issues/$1" > "$MEMO/$1.json" || rc=$?
-  [ "$rc" -eq 0 ] && return 0
-  rm -f "$MEMO/$1.json"
-  [ "$rc" = 3 ] || exit "$rc"
-  case "$(cat "$API_CODE_FILE")" in
-    404|410) echo "eva-release: #$1 référencée par un commit mais inconnue de GitHub — ignorée" >&2; return 1 ;;
-    *) exit 3 ;;
-  esac
-}
-feature_of() {  # <carte> : pose FEATURE et FEATURE_TYPE · 1 = illisible · 2 = la carte EST une Feature
-  local n="$1" depth=0 kind type parent prepo
-  FEATURE=""; FEATURE_TYPE="-"
-  while [ "$depth" -lt 8 ]; do
-    issue_load "$n" || return 1
-    read -r _ kind type parent prepo _ <<<"$(issue_line "$(cat "$MEMO/$n.json")" | head -n1)"
-    [ "$kind" = carte ] || return 1
-    if [ "$type" = Feature ]; then
-      [ "$n" != "$1" ] || return 2
-      FEATURE="$n"; FEATURE_TYPE=Feature; return 0
-    fi
-    if [ "$parent" = "-" ]; then break; fi
-    if [ "${prepo,,}" != "${GH_REPO,,}" ]; then
-      echo "eva-release: le parent de #$n est dans un autre dépôt ($prepo) — on ne remonte pas hors de $GH_REPO" >&2
-      exit 3
-    fi
-    n="$parent"; depth=$((depth+1))
-  done
-  FEATURE="$1"
-}
-
-declare -A cards_of=()
+# --- LE LOT : CARTES → FEATURES, PAR gh-feature.py -------------------------------------
+# La remontée est celle de gh-release.sh, au même endroit : gh-feature.py, le
+# SEUL lecteur de la chaîne des parents (le pourquoi long est écrit là-bas, et
+# dans gh-feature.py). Ici elle tourne avec le jeton d'EVA. Une Feature citée
+# directement, une pull request, une référence morte sont dites et laissées
+# hors du lot ; tout autre refus sort en 3 — jamais une liste à moitié vide
+# sur une App sans droits.
+lot="$(printf '%s\n' "$cards" | FACTORY_TOKEN="$TOKEN" python3 "${GH_FEATURE_PY:-$HERE/gh-feature.py}" lot "$GH_REPO")" || exit $?
+# L'échec de la mise à plat est un 3, jamais un lot vide (gh-release.sh).
+lignes="$(printf '%s' "$lot" | STAGED="$STAGED_LABEL" python3 -c "$LOT_LINES_PY")" \
+  || { echo "eva-release: la réponse de gh-feature.py lot est illisible — rien n'est sorti" >&2; exit 3; }
+declare -A f_line=() c_line=() cards_of=()
 features=""; has_feature=""
-while read -r n; do
-  [ -n "$n" ] || continue
-  issue_load "$n" || continue
-  read -r _ kind _ _ _ _ <<<"$(issue_line "$(cat "$MEMO/$n.json")" | head -n1)"
-  if [ "$kind" = pr ]; then
-    echo "eva-release: #$n est une pull request, pas une carte — ignorée" >&2
-    continue
-  fi
-  frc=0; feature_of "$n" || frc=$?
-  if [ "$frc" = 2 ]; then
-    echo "eva-release: #$n est une Feature citée directement par un commit — une feature n'est pas une carte, elle reste hors du lot ; ce sont ses cartes (Refs #<carte>) qui la font sortir" >&2
-    continue
-  fi
-  [ "$frc" = 0 ] || { echo "eva-release: la feature de #$n est illisible — carte laissée de côté" >&2; continue; }
-  f="$FEATURE"
-  [ "$FEATURE_TYPE" != Feature ] || has_feature=1
-  if [ "$f" = "$n" ]; then cards_of[$f]="${cards_of[$f]:-}"
-  else cards_of[$f]="${cards_of[$f]:-}${cards_of[$f]:+ }$n"
-  fi
-  case " $features " in *" $f "*) ;; *) features="$features${features:+ }$f" ;; esac
-done <<< "$cards"
-# shellcheck disable=SC2086
-features="$(printf '%s\n' $features | sort -nu | tr '\n' ' ')"
+while IFS=$'\t' read -r kind a b rest; do
+  case "$kind" in
+    F) f_line[$a]="$b	$rest"; features="$features${features:+ }$a"
+       # `b` est `mini` : une vraie Feature dans le lot, c'est un minor.
+       # La feature permanente des alertes n'est pas une nouveauté : seule, elle
+       # fait un patch, pas un minor.
+       if [ "$b" != True ] && { [ -z "$SECURITY_FEATURE" ] || [ "$a" != "$SECURITY_FEATURE" ]; }; then has_feature=1; fi ;;
+    C) cards_of[$a]="${cards_of[$a]:-}${cards_of[$a]:+ }$b"; c_line[$b]="$rest" ;;
+  esac
+done <<<"$lignes"
 [ -n "$cards" ] || echo "eva-release: $count commit(s) dans la plage, mais AUCUN ne référence une carte (Refs #n) — la release sortira sans feature ni note" >&2
 
 # --- LE NUMÉRO --------------------------------------------------------------------
@@ -330,34 +278,36 @@ printf 'tete: %s\n' "$STG_SHA"
 NOTES="## $TAG"$'\n'
 incomplete=""; unstaged=""
 for f in $features; do
-  { read -r f_state _ _ _ _ f_total f_done f_staged; read -r f_title; } <<<"$(issue_line "$(cat "$MEMO/$f.json")")"
+  IFS=$'\t' read -r f_mini f_state f_staged f_total f_done ouvertes f_title <<<"${f_line[$f]}"
+  [ "$ouvertes" != "-" ] || ouvertes=""
   # COMPLÈTE : toutes les sous-issues fermées (le compte de GitHub ne voit que
   # les enfants DIRECTS : un lot fermé au-dessus d'une carte ouverte passerait)
-  # ET aucune carte du lot encore ouverte. Sans sous-issue (mini-feature),
-  # fermée elle-même.
+  # ET aucune carte du lot encore ouverte (`ouvertes`, calculé par LOT_LINES_PY)
+  # ET, pour une mini-feature, sa RACINE fermée : la racine est la carte du
+  # hotfix ; ouverte (needs-human) avec sa remarque livrée dessous, elle
+  # sortait « complète » (gh-release.sh dit le cas).
   if [ "$f_total" -gt 0 ]; then
     if [ "$f_done" -eq "$f_total" ]; then complete=1; else complete=0; fi
   else
     if [ "$f_state" = closed ]; then complete=1; else complete=0; fi
   fi
-  ouvertes=""
-  for n in ${cards_of[$f]:-}; do
-    read -r c_state _ <<<"$(issue_line "$(cat "$MEMO/$n.json")" | head -n1)"
-    [ "$c_state" != open ] || ouvertes="$ouvertes${ouvertes:+ }#$n"
-  done
+  [ "$f_mini" != True ] || [ "$f_state" = closed ] || complete=0
   [ -z "$ouvertes" ] || complete=0
-  if [ "$complete" = 1 ] && [ "$f_staged" != True ]; then
+  racine=""; [ "$f_mini" != True ] || [ "$f_state" = closed ] || racine=", racine #$f ouverte"
+  if [ -n "$SECURITY_FEATURE" ] && [ "$f" = "$SECURITY_FEATURE" ]; then
+    printf '#%s\t%s\t(feature permanente des alertes : ni fermée ni bloquante)\n' "$f" "$f_title"
+  elif [ "$complete" = 1 ] && [ "$f_staged" != True ]; then
     printf '#%s\t%s\t(pas passée par EVA : sans « %s » — bloquante)\n' "$f" "$f_title" "$STAGED_LABEL"
     unstaged="$unstaged${unstaged:+ }#$f"
   elif [ "$complete" = 1 ]; then
     printf '#%s\t%s\n' "$f" "$f_title"
   else
-    printf '#%s\t%s\t(incomplète : %s/%s cartes fermées%s)\n' "$f" "$f_title" "$f_done" "$f_total" "${ouvertes:+, ouvertes dans le lot : $ouvertes}"
+    printf '#%s\t%s\t(incomplète : %s/%s cartes fermées%s%s)\n' "$f" "$f_title" "$f_done" "$f_total" "$racine" "${ouvertes:+, ouvertes dans le lot : $ouvertes}"
     incomplete="$incomplete${incomplete:+ }#$f"
   fi
   NOTES="$NOTES"$'\n'"- #$f $f_title"
   for n in ${cards_of[$f]:-}; do
-    { read -r c_state _ _ _ _ _ _ _; read -r c_title; } <<<"$(issue_line "$(cat "$MEMO/$n.json")")"
+    IFS=$'\t' read -r c_state c_title <<<"${c_line[$n]}"
     if [ "$c_state" = open ]; then printf '  #%s\t%s\t(OUVERTE)\n' "$n" "$c_title"
     else printf '  #%s\t%s\n' "$n" "$c_title"
     fi
@@ -463,7 +413,10 @@ verdict="timeout"
 while :; do
   rrc=0; runs="$(api "repos/$GH_REPO/actions/runs?branch=$FACTORY_TRUNK&head_sha=$SHA&per_page=100")" || rrc=$?
   if [ "$rrc" -ne 0 ]; then
-    [ "$rrc" = 4 ] || exit "$rrc"
+    # UN REFUS (3 : l'App d'EVA sans « Actions: Read ») NE SORT PAS SANS
+    # VERDICT : la release EST sortie, et EVA attend la dernière ligne pour
+    # le dire. « inconnu », et 1 — le déploiement est à regarder à la main.
+    if [ "$rrc" != 4 ]; then verdict="inconnu"; break; fi
     runs='{"workflow_runs":[]}'
   fi
   state="$(printf '%s' "$runs" | python3 -c '

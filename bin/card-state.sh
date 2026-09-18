@@ -7,6 +7,7 @@
 #   bash bin/card-state.sh <carte> unbusy                la carte est rendue
 #   bash bin/card-state.sh <carte> priority              la carte passe devant la file
 #   bash bin/card-state.sh <carte> needs-human "<raison>"  une décision attend
+#   bash bin/card-state.sh <carte> decided "<décision>"    la décision est prise (EVA)
 #
 # POURQUOI CE SCRIPT EXISTE. Le skill de l'orchestrateur nommait ses labels en
 # dur (`factory:needs-human`, `factory:in-progress`) alors que la sélection les
@@ -24,18 +25,34 @@
 # Un marqueur posé sur un label absent aurait fait l'inverse : une carte jamais
 # sortie de la file, mais dont la relecture repart de zéro à chaque tour.
 #
+# decided EST LE GESTE INVERSE, PAR EVA (skill factory-decision) : la décision
+# est ÉCRITE D'ABORD en commentaire, marquée `<!-- factory:decision -->` (Pony
+# lit les dépendances, l'humain dans six mois lit le commentaire — c'est le
+# même endroit), PUIS le label humain est retiré — dans cet ordre, sinon la
+# boucle reprendrait la carte avant que la décision soit lisible. Le nom du
+# label vient de `label_get`, comme partout : le skill l'écrivait en dur, et un
+# consommateur qui le renomme avait une carte débloquée sous un mot que la
+# sélection ne lit pas. LE MARQUEUR `.omc/turn/<n>/needs-human` N'EST PAS
+# RETIRÉ ICI : il appartient à la boucle, qui le consomme à la réadmission
+# pour remettre le tour à zéro (une faille levée repart d'un tour propre) ;
+# retiré par EVA, la carte repartirait avec les artefacts qui l'ont refusée.
+# EVA n'y a d'ailleurs pas accès : l'arbre de la boucle lui est monté en
+# lecture seule. La fermeture d'un cadrage (une question hors feature) reste
+# au skill : ce n'est pas un état de carte.
+#
 # Codes : 0 · 3 = paramètre, configuration, refus de l'API · 4 = raté passager.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
 . "$HERE/lib.sh"
-usage() { echo "usage : bash bin/card-state.sh <carte> busy | unbusy | priority | needs-human \"<raison>\"" >&2; exit 3; }
+usage() { echo "usage : bash bin/card-state.sh <carte> busy | unbusy | priority | needs-human \"<raison>\" | decided \"<décision>\"" >&2; exit 3; }
 [ "$#" -ge 2 ] || usage
 CARTE="$1"; ETAT="$2"; RAISON="${3:-}"
 case "$CARTE" in ''|*[!0-9]*) echo "card-state: « $CARTE » n'est pas un numéro de carte" >&2; exit 3 ;; esac
 case "$ETAT" in
   busy|unbusy|priority) [ "$#" -eq 2 ] || usage ;;
   needs-human) [ "$#" -eq 3 ] && [ -n "$RAISON" ] || { echo "card-state: needs-human exige une raison" >&2; exit 3; } ;;
+  decided)     [ "$#" -eq 3 ] && [ -n "$RAISON" ] || { echo "card-state: decided exige la décision, en clair" >&2; exit 3; } ;;
   *) usage ;;
 esac
 conf_require GH_REPO
@@ -84,5 +101,10 @@ case "$ETAT" in
     TURN="$(factory_root)/.omc/turn/$CARTE"
     mkdir -p "$TURN" && touch "$TURN/needs-human"
     echo "card-state: #$CARTE attend un humain ($HUMAN) — $RAISON" >&2 ;;
+  decided)
+    corps="$(R="$RAISON" python3 -c 'import json,os; print(json.dumps({"body": "<!-- factory:decision -->\n" + os.environ["R"]}, ensure_ascii=False))')"
+    api "repos/$GH_REPO/issues/$CARTE/comments" POST "$corps" || exit $?
+    api "repos/$GH_REPO/issues/$CARTE/labels/${HUMAN//:/%3A}" DELETE || exit $?
+    echo "card-state: #$CARTE tranchée — décision écrite, $HUMAN retiré" >&2 ;;
 esac
 exit 0

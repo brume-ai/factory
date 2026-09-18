@@ -196,6 +196,11 @@ assert_rc 1 "$rc" "PR mergée entre-temps = refus de carte (1) ($(cat "$TESTTMP/
 assert_eq "$(gw rev-parse HEAD)" "$(git -C "$O" rev-parse feature/10)" "le push est fait quand même : rien n'est perdu"
 assert_contains "$H/calls.log" 'POST repos/o/r/issues/12/labels {"labels": ["factory:needs-human"]}' "needs-human posé"
 assert_contains "$(grep 'POST repos/o/r/issues/12/comments' "$H/calls.log")" 'a été mergée entre-temps' "et la raison dite sur la carte"
+# LA RAISON DIT QUE LE COMMIT EST DÉJÀ SUR LA BRANCHE, et de fermer « not
+# planned » plutôt que de réadmettre : la réadmission remet le tour à zéro et
+# referait le travail par-dessus.
+assert_contains "$(grep 'POST repos/o/r/issues/12/comments' "$H/calls.log")" 'DÉJÀ SUR feature/10' "la raison dit que le commit est déjà sur la branche"
+assert_contains "$(grep 'POST repos/o/r/issues/12/comments' "$H/calls.log")" 'not planned' "et de fermer not planned, pas de réadmettre"
 assert_file_lacks "$H/calls.log" 'PATCH repos/o/r/issues/12 {"state":"closed"' "la carte n'est pas fermée"
 [ -d "$TURN" ] || { echo "le tour ne doit pas être archivé sur un refus" >&2; exit 1; }
 printf '[]' > "$H/repos_o_r_pulls_state_all_head_o_feature_10_per_page_1.json"

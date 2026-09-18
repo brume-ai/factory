@@ -82,6 +82,26 @@ assert_contains "$out" "feature-7 — aucune PR, conservé (travail en cours) ; 
   "un commit non poussé est dit"
 [ -f "$C/.worktrees/feature-6/fichier" ] || { echo "le diagnostic ne doit rien toucher" >&2; exit 1; }
 
+# --- c2) DU TRAVAIL NON POUSSÉ SOUS UNE PR MERGÉE N'EST JAMAIS DÉTRUIT ----------------
+# Une carte livrée entre l'admission et le merge (refusée par deliver.sh) :
+# la PR est mergée, le worktree porte un commit que origin n'a pas. Le
+# diagnostic est dit AVANT tout geste, et le worktree reste.
+git -C "$C" worktree add -q -b feature/11 "$C/.worktrees/feature-11"
+git -C "$C/.worktrees/feature-11" push -q -u origin feature/11
+git -C "$C/.worktrees/feature-11" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "livrée trop tard"
+printf '[{"head":{"ref":"feature/11"},"state":"closed","merged_at":"2026-01-01"},{"head":{"ref":"feature/6"},"state":"open","merged_at":null}]' \
+  > "$H/repos_o_r_pulls_state_all_per_page_100.json"
+out="$(bash "$CLEAN" 2>&1)" && rc=0 || rc=$?
+assert_rc 0 "$rc" "PR mergée avec du non poussé : rc 0"
+assert_contains "$out" "feature-11 — PR merged, CONSERVÉ ; porte du travail non poussé : 1 commit(s) non poussé(s)" "PR mergée avec du non poussé : dit, et conservé"
+[ -d "$C/.worktrees/feature-11" ] || { echo "un worktree avec du travail non poussé ne se détruit JAMAIS" >&2; exit 1; }
+git -C "$C" show-ref --verify --quiet refs/heads/feature/11 || { echo "sa branche non plus" >&2; exit 1; }
+assert_not_contains "$out" "feature-11 — PR merged, destruction" "PR mergée avec du non poussé : pas de destruction annoncée"
+# Poussé : détruit, comme avant.
+git -C "$C/.worktrees/feature-11" push -q origin feature/11
+out="$(bash "$CLEAN" 2>&1)" && rc=0 || rc=$?
+[ ! -d "$C/.worktrees/feature-11" ] || { echo "une fois poussé, le worktree mergé est détruit" >&2; exit 1; }
+
 # --- d) le hook worktree-down est préféré quand il existe ---------------------
 git -C "$C" worktree add -q -b feature/8 "$C/.worktrees/feature-8"
 printf '[{"head":{"ref":"feature/8"},"state":"closed","merged_at":"2026-01-01"}]' \

@@ -18,7 +18,7 @@ qui ne PORTE PAS la clé `parent_issue_url`, `type` ou `sub_issues_summary` (une
 réponse de liste qui ne les rendrait pas) est relu par `issues/<n>`, il n'est
 pas lu comme « null ».
 
-Deux modes, un seul lecteur — le transport est celui de gh-dependencies.py :
+Trois modes, un seul lecteur — le transport est celui de gh-dependencies.py :
 
   gh-feature.py of <repo> <carte>
       imprime un objet JSON : card, feature, mini (bool), chain (les numéros de
@@ -41,6 +41,29 @@ Deux modes, un seul lecteur — le transport est celui de gh-dependencies.py :
       comme gh-security-triage.py, pour la même raison. MILESTONE (vide = aucun
       filtre) écarte une carte d'un autre jalon ; une carte sans jalon HÉRITE
       celui de sa feature.
+
+  gh-feature.py lot <repo>
+      LA REMONTÉE D'UN LOT DE CARTES À LEURS FEATURES, pour la release
+      (gh-release.sh, eva-release.sh) : lit des numéros de cartes sur stdin
+      (un par ligne, les `Refs #n` d'une plage de commits) et imprime un objet
+      JSON — `cards`, une entrée par numéro (`feature`, `mini`, `chain` ; ou
+      `pull_request: true`, `direct_feature: true`, `unknown: <http>`), et
+      `features`, triées par numéro, chacune avec `number`, `mini`, `title`,
+      `state`, `labels` (les noms), `sub_issues_summary` et ses `cards` du lot
+      (`number`, `state`, `title`, triées). Trois tolérances, et TROIS
+      SEULEMENT, chacune dite sur stderr : un 404/410 sur la carte elle-même
+      (une faute de frappe dans un message de commit — une release ne
+      s'arrête pas pour ça), une pull request (le squash de GitHub colle son
+      numéro au titre ; l'endpoint /issues ne la distingue d'une carte que par
+      la clé `pull_request`), et UNE ISSUE DE TYPE FEATURE CITÉE DIRECTEMENT
+      (`direct_feature`) — jamais prise pour sa propre mini-feature, sinon la
+      release la fermerait alors que ses cartes ne sont peut-être pas toutes
+      sorties. Tout autre refus (403, un parent hors dépôt, un parent
+      illisible, une chaîne trop profonde) SORT EN 3 : traité carte par carte,
+      il viderait la liste à blanc en silence sur une App sans droits. Deux
+      scripts portaient chacun cette remontée en bash (~30 lignes jumelles) ;
+      elles avaient déjà divergé de la règle de la racine (« la mini-feature
+      est la RACINE de la chaîne ») avant d'être unifiées ici.
 
 Codes : 0 · 3 = refus de l'API ou données incohérentes · 4 = raté passager.
 """
@@ -81,12 +104,21 @@ class Reader:
         return (isinstance(issue, dict) and isinstance(issue.get("number"), int)
                 and "parent_issue_url" in issue and "type" in issue and "sub_issues_summary" in issue)
 
+    def fetch(self, number):
+        """La réponse REST brute de issues/<n> — sans contrôle : `lot` regarde
+        d'abord si c'est une pull request, avant d'exiger les clés d'une carte."""
+        data, _ = request("repos/%s/issues/%s" % (self.repo, number))
+        return data
+
+    def admit(self, number, data):
+        if not self._complete(data) or data["number"] != number:
+            raise LookupFailure("issue #%s illisible (number, parent_issue_url ou type absents)" % number, 3)
+        self.cache[number] = data
+        return data
+
     def issue(self, number):
         if number not in self.cache:
-            data, _ = request("repos/%s/issues/%s" % (self.repo, number))
-            if not self._complete(data) or data["number"] != number:
-                raise LookupFailure("issue #%s illisible (number, parent_issue_url ou type absents)" % number, 3)
-            self.cache[number] = data
+            self.admit(number, self.fetch(number))
         return self.cache[number]
 
     def parent_of(self, issue):
@@ -260,9 +292,70 @@ def cmd_rank(repo):
     return 0
 
 
+def label_names(issue):
+    labels = issue.get("labels")
+    if not isinstance(labels, list):
+        raise LookupFailure("labels illisibles sur #%s" % issue.get("number"), 3)
+    return [label["name"] for label in labels if isinstance(label, dict) and isinstance(label.get("name"), str)]
+
+
+def cmd_lot(repo):
+    reader = Reader(repo)
+    cards, seen = [], set()
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        if not line.isdigit():
+            raise LookupFailure("numéro de carte illisible sur stdin : %r" % line, 3)
+        number = int(line)
+        if number in seen:
+            continue
+        seen.add(number)
+        try:
+            raw = reader.fetch(number)
+        except LookupFailure as error:
+            if error.status not in ("404", "410"):
+                raise
+            print("gh-feature: #%d référencée par un commit mais inconnue de GitHub (HTTP %s) — ignorée" % (number, error.status), file=sys.stderr)
+            cards.append({"card": number, "unknown": int(error.status)})
+            continue
+        if isinstance(raw, dict) and "pull_request" in raw:
+            print("gh-feature: #%d est une pull request, pas une carte — ignorée" % number, file=sys.stderr)
+            cards.append({"card": number, "pull_request": True})
+            continue
+        card = reader.admit(number, raw)
+        if is_feature(card):
+            print("gh-feature: #%d est une Feature citée directement par un commit — une feature n'est pas une carte, elle reste hors du lot ; ce sont ses cartes (Refs #<carte>) qui la font sortir" % number, file=sys.stderr)
+            cards.append({"card": number, "direct_feature": True})
+            continue
+        chain = reader.chain(number)
+        feature, mini = feature_of(reader, chain)
+        cards.append({"card": number, "feature": feature, "mini": mini, "chain": chain})
+    features = {}
+    for entry in cards:
+        if "feature" not in entry:
+            continue
+        f = entry["feature"]
+        if f not in features:
+            issue = reader.issue(f)
+            features[f] = {"number": f, "mini": entry["mini"], "title": issue.get("title") or "",
+                           "state": issue.get("state"), "labels": label_names(issue),
+                           "sub_issues_summary": issue.get("sub_issues_summary"), "cards": []}
+        # La racine d'une mini-feature EST la feature : elle n'est pas aussi
+        # une de ses cartes.
+        if entry["card"] != f:
+            issue = reader.issue(entry["card"])
+            features[f]["cards"].append({"number": entry["card"], "state": issue.get("state"), "title": issue.get("title") or ""})
+    for entry in features.values():
+        entry["cards"].sort(key=lambda c: c["number"])
+    print(json.dumps({"cards": cards, "features": [features[f] for f in sorted(features)]}, ensure_ascii=False))
+    return 0
+
+
 def main():
     if len(sys.argv) < 3:
-        raise LookupFailure("usage : gh-feature.py of <repo> <carte> | rank <repo>", 3)
+        raise LookupFailure("usage : gh-feature.py of <repo> <carte> | rank <repo> | lot <repo>", 3)
     mode, repo = sys.argv[1], sys.argv[2]
     if not re.fullmatch(r"[^/\s]+/[^/\s]+", repo):
         raise LookupFailure("dépôt invalide", 3)
@@ -272,6 +365,8 @@ def main():
         return cmd_of(repo, int(sys.argv[3]))
     if mode == "rank":
         return cmd_rank(repo)
+    if mode == "lot":
+        return cmd_lot(repo)
     raise LookupFailure("mode inconnu : %s" % mode, 3)
 
 

@@ -19,7 +19,15 @@
 #   (d) les PR de feature à CI rouge ;
 #   (e) `.omc/loop.halt` — la boucle arrêtée, et pourquoi ;
 #   (f) `.omc/loop.file-vide` — la file vide, et pourquoi (écrit par la boucle ;
-#       absent = rien à dire).
+#       absent = rien à dire) ;
+#   (g) les CARTES D'ALERTE ouvertes — sous la feature permanente
+#       FACTORY_SECURITY_FEATURE si elle est posée, sinon celles qui portent la
+#       marque `<!-- factory-security:… -->` que gh-security-triage.py écrit —
+#       dont la sévérité, telle que le triage l'écrit dans le titre
+#       (« [high] ») ou le corps (« **critical** »), est critical ou high : un
+#       secret exposé, une faille critique attendent un humain AVANT le tour
+#       qui les répare. En --etat, le compte des cartes d'alerte ouvertes par
+#       sévérité.
 #
 # TROIS MODES :
 #   --etat       (défaut) tout, en clair, par sections ;
@@ -44,7 +52,9 @@
 #                une CLÉ jamais vue : « décision #n », « PR #n à la tête <sha> »
 #                (un push relance la relecture), « feature #n dans le stock »,
 #                « CI rouge sur #n à <sha> », « boucle arrêtée : <raison> »,
-#                « file vide : <raison> ». Rien de nouveau = rien sur stdout.
+#                « file vide : <raison> », « alerte #n à <sévérité> » (une
+#                alerte qui monte de high à critical est une nouveauté). Rien
+#                de nouveau = rien sur stdout.
 #
 # OÙ EST `.omc` : dans $FACTORY_ROOT s'il y en a un (la boucle, le timer hôte),
 # sinon dans l'arbre de la boucle sur le volume partagé — $FACTORY_REPO_DIR,
@@ -83,6 +93,11 @@ STAGED_LABEL="$(label_get staged)"
 # `feature/<F>` : le nom que feature-up.sh donne à la branche, en dur là-bas
 # comme ici (le pourquoi est dans eva-merge.sh).
 FEATURE_PREFIX="feature"
+# La feature permanente des cartes d'alerte (gh-security-triage.py) : posée,
+# les cartes d'alerte sont ses sous-issues ; vide, on les reconnaît à leur
+# marque dans la liste des issues ouvertes.
+SECURITY_FEATURE="$(conf_get FACTORY_SECURITY_FEATURE)"
+case "$SECURITY_FEATURE" in *[!0-9]*) echo "eva-watch: FACTORY_SECURITY_FEATURE doit être un numéro d'issue (« $SECURITY_FEATURE »)" >&2; exit 3 ;; esac
 FACTORY_STATE="$(conf_get FACTORY_STATE /srv/factory)"
 STATE_FILE="$(conf_get FACTORY_EVA_STATE "$FACTORY_STATE/eva/watch.json")"
 ROOT="$(factory_root)"
@@ -145,9 +160,23 @@ api() {  # <chemin> [méthode] [corps] — imprime le corps · 3 = refus · 4 = 
 api "repos/$GH_REPO/issues?state=open&labels=${HUMAN_LABEL//:/%3A}&per_page=100" > "$W/decisions.json" || exit $?
 api "repos/$GH_REPO/issues?state=open&labels=${STAGED_LABEL//:/%3A}&per_page=100" > "$W/staged.json" || exit $?
 api "repos/$GH_REPO/pulls?state=open&per_page=100" > "$W/pulls.json" || exit $?
+# (g) Les cartes d'alerte : les sous-issues de la feature permanente (ouvertes
+# et fermées, l'état est filtré plus bas), ou, sans clé, les issues ouvertes
+# — la marque du triage fait le tri. CETTE SOURCE SE DÉGRADE, elle ne tue pas
+# la vigie : une clé qui pointe une issue disparue (404) ou une App sans
+# droit ferait taire AUSSI les décisions, les PR prêtes, la boucle arrêtée —
+# la panne du 17 septembre par une autre porte. Illisible : dit, comptée à
+# zéro, et les autres sources partent.
+ALERTS_SOURCE=marque; [ -z "$SECURITY_FEATURE" ] || ALERTS_SOURCE=feature
+if [ "$ALERTS_SOURCE" = feature ]; then alerts_path="repos/$GH_REPO/issues/$SECURITY_FEATURE/sub_issues?per_page=100"
+else alerts_path="repos/$GH_REPO/issues?state=open&per_page=100"; fi
+if ! api "$alerts_path" > "$W/alerts.json"; then
+  echo "eva-watch: source alertes illisible (/$alerts_path${SECURITY_FEATURE:+ — FACTORY_SECURITY_FEATURE=#$SECURITY_FEATURE existe-t-elle ?}) : les alertes comptent pour zéro ce tour-ci, les autres sources partent" >&2
+  printf '[]' > "$W/alerts.json"
+fi
 # CENT, C'EST LA PAGE, PAS FORCÉMENT LE TOUT : au-delà, la liste est tronquée
 # et l'état ment par omission. Dit, pas caché.
-for f in decisions staged pulls; do
+for f in decisions staged pulls alerts; do
   [ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$W/$f.json")" -lt 100 ] \
     || echo "eva-watch: la liste « $f » rend 100 éléments — la page est pleine, il y en a peut-être plus : l'état est INCOMPLET" >&2
 done
@@ -218,7 +247,7 @@ HALT_ON=""; VIDE_ON=""
 # c'est voulu — le premier passage dit tout). Les titres passent en dernier
 # champ, ils peuvent porter n'importe quoi sauf une tabulation, retirée.
 lines="$(W="$W" HUMAN="$HUMAN_LOGIN" HUMAN_LABEL="$HUMAN_LABEL" HALT="$halt" VIDE="$vide" HALT_ON="$HALT_ON" VIDE_ON="$VIDE_ON" \
-         STATE="$STATE_FILE" MODE="$MODE" \
+         STATE="$STATE_FILE" MODE="$MODE" ALERTS_SOURCE="$ALERTS_SOURCE" \
          python3 - <<'PY'
 import json, os, sys
 W, human, mode = os.environ["W"], os.environ["HUMAN"], os.environ["MODE"]
@@ -270,11 +299,32 @@ for p in sorted(load(f"{W}/pulls.json"), key=lambda p: p["number"]):
         runs = load(f"{prdir}/{n}.checks.json").get("check_runs") or []
         done = [r for r in runs if r.get("status") == "completed" and r.get("conclusion") is not None]
         if any(r.get("conclusion") not in green for r in done): item("ci", f"ci:{n}:{sha}", n, ref, url, sha)
+# LES CARTES D ALERTE, ET LEUR SEVERITE TELLE QUE LE TRIAGE L ECRIT : « [high] »
+# dans un titre CodeQL, « **critical** » dans un corps (Dependabot : la plus
+# grave du manifeste ; secret exposé : critical). Le titre d abord — il porte
+# la severite de la carte ; le corps liste parfois plusieurs mots, le premier
+# est celui qui compte (le triage ecrit la plus grave en tete). Une carte sans
+# mot de severite compte parmi les « autres ». Seules critical et high pingent.
+sev_title = re.compile(r"\[(critical|high|medium|moderate|low)\]", re.I)
+sev_body = re.compile(r"\*\*(critical|high|medium|moderate|low)\*\*", re.I)
+counts = {"critical": 0, "high": 0, "autres": 0}
+for d in load(f"{W}/alerts.json"):
+    if "pull_request" in d or d.get("state") != "open": continue
+    body = d.get("body") or ""
+    if os.environ["ALERTS_SOURCE"] == "marque" and "<!-- factory-security:" not in body: continue
+    m = sev_title.search(d.get("title") or "") or sev_body.search(body)
+    sev = m.group(1).lower() if m else "-"
+    if sev in ("critical", "high"):
+        counts[sev] += 1
+        item("alerte", f"alerte:{d['number']}:{sev}", d["number"], sev, d.get("html_url") or "-", clean(d.get("title")))
+    else:
+        counts["autres"] += 1
+out.append(("alertes", 0, "", (counts["critical"], counts["high"], counts["autres"])))
 if os.environ.get("HALT_ON"): item("halt", "halt:" + os.environ["HALT"], 0, clean(os.environ["HALT"]) or "(sans raison)")
 if os.environ.get("VIDE_ON"): item("vide", "vide:" + os.environ["VIDE"], 0, clean(os.environ["VIDE"]) or "(sans raison)")
-order = {"decision": 0, "pr": 1, "staged": 2, "ci": 3, "halt": 4, "vide": 5}
+order = {"decision": 0, "alerte": 1, "pr": 2, "staged": 3, "ci": 4, "alertes": 5, "halt": 6, "vide": 7}
 for kind, num, key, fields in sorted(out, key=lambda t: (order[t[0]], t[1])):
-    num_field = [] if kind in ("halt", "vide") else [str(num)]
+    num_field = [] if kind in ("halt", "vide", "alertes") else [str(num)]
     print("\t".join([kind, "0" if key in old else "1"] + num_field + [str(f) for f in fields]))
 if mode == "diff":
     # L ETAT PROPOSE, pas l etat : eva-notify.sh le promeut apres l envoi.
@@ -288,9 +338,10 @@ PY
 # --- LA MISE EN FORME ---------------------------------------------------------------
 # Les champs, par kind : decision = numéro, feature, depuis, url, nature,
 # titre · pr = numéro, branche, cartes, url, sha · staged = numéro, titre ·
-# ci = numéro, branche, url, sha · halt/vide = raison.
+# ci = numéro, branche, url, sha · alerte = numéro, sévérité, url, titre ·
+# alertes = critical, high, autres (les comptes) · halt/vide = raison.
 n_dec=0; n_pr=0; n_staged=0; n_ci=0; staged_new=0
-dec=""; pr=""; staged=""; ci=""; halt_l=""; vide_l=""
+dec=""; pr=""; staged=""; ci=""; halt_l=""; vide_l=""; al=""; al_c=0; al_h=0; al_a=0
 feat() { if [ "$1" = "-" ]; then echo "-"; else echo "#$1"; fi; }
 while IFS=$'\t' read -r kind new f1 f2 f3 f4 f5 f6; do
   [ -n "${kind:-}" ] || continue
@@ -314,6 +365,12 @@ while IFS=$'\t' read -r kind new f1 f2 f3 f4 f5 f6; do
         etat) ci="$ci  PR #$f1  $f2  $f3"$'\n' ;;
         diff) if [ "$new" = 1 ]; then ci="$ci🔴 CI rouge sur $f2 (PR #$f1) $f3"$'\n'; fi ;;
       esac ;;
+    alerte)
+      case "$MODE" in
+        etat) al="$al  #$f1  [$f2]  $f4  $f3"$'\n' ;;
+        diff) if [ "$new" = 1 ]; then al="$al🛡️ alerte critique #$f1 : $f4 $f3"$'\n'; fi ;;
+      esac ;;
+    alertes) al_c="$f1"; al_h="$f2"; al_a="$f3" ;;
     halt) case "$MODE" in
         etat) halt_l="boucle : ARRÊTÉE — $f1"$'\n' ;;
         diff) if [ "$new" = 1 ]; then halt_l="⛔ boucle arrêtée : $f1"$'\n'; fi ;;
@@ -333,9 +390,10 @@ case "$MODE" in
     printf 'PR prêtes à relire (%s)\n%s' "$n_pr" "$pr"
     printf 'features dans %s, en attente de release (%s)\n%s' "$FACTORY_STAGING" "$n_staged" "$staged"
     printf 'CI rouge (%s)\n%s' "$n_ci" "$ci"
+    printf 'alertes de sécurité ouvertes (%s) : critical %s, high %s, autres %s\n%s' "$((al_c+al_h+al_a))" "$al_c" "$al_h" "$al_a" "$al"
     printf '%s%s' "$halt_l" "$vide_l" ;;
   diff)
-    printf '%s%s' "$dec" "$pr"
+    printf '%s%s%s' "$dec" "$al" "$pr"
     if [ "$staged_new" = 1 ]; then printf '📦 %s feature(s) dans %s attendent une release\n' "$n_staged" "$FACTORY_STAGING"; fi
     printf '%s%s%s' "$ci" "$halt_l" "$vide_l" ;;
 esac

@@ -240,19 +240,30 @@ case "$p_merge" in
 esac
 
 # --- LA CI, SUR LA TÊTE COURANTE ----------------------------------------------
-# Même verdict que partout (CI_VERDICT_PY, lib.sh) : liste blanche, la liste
-# entière ou rien, aucun contrôle = refus. On ne peut pas distinguer « ce
-# dépôt n'a pas de CI » de « la CI n'a pas encore enregistré ses runs ».
-ci="?"
+# Même verdict que partout (checks_verdict, lib.sh) : liste blanche, LA LISTE
+# ENTIÈRE — page après page jusqu'à total_count, donc « truncated » ne peut
+# plus sortir : un dépôt à plus de cent contrôles était refusé à chaque ordre,
+# et le job e2e en page deux n'existait pour personne —, aucun contrôle =
+# refus. On ne peut pas distinguer « ce dépôt n'a pas de CI » de « la CI n'a
+# pas encore enregistré ses runs ». checks_verdict lit FACTORY_TOKEN : c'est le
+# jeton d'EVA qu'on lui donne, nommément. Ses rouges (une ligne chacun) sont
+# cités dans le motif.
+ci="?"; rouges=""
 if [[ "$p_sha" != "-" ]]; then
-  runs="$(api "repos/$GH_REPO/commits/$p_sha/check-runs?per_page=100")" || exit $?
-  ci="$(printf '%s' "$runs" | python3 -c "$CI_VERDICT_PY")" || ci="?"
+  crc=0; ci_out="$(FACTORY_TOKEN="$TOKEN" checks_verdict "$p_sha")" || crc=$?
+  if [[ "$crc" -eq 0 ]]; then
+    ci="$(printf '%s\n' "$ci_out" | head -n1)"
+    rouges="$(printf '%s\n' "$ci_out" | tail -n +2 | cut -f1 | tr '\n' ' ')"
+  elif [[ "$crc" -eq 4 ]]; then
+    echo "eva-merge: contrôles de $p_sha illisibles (raté passager) — relancez" >&2; exit 4
+  else
+    exit "$crc"
+  fi
 fi
 case "$ci" in
   ok) ;;
-  failure)   refus+=("la CI est rouge (ou annulée, ou expirée) sur $p_sha") ;;
+  failure)   refus+=("la CI est rouge (ou annulée, ou expirée) sur $p_sha${rouges:+ : $rouges}") ;;
   pending)   refus+=("la CI tourne encore sur $p_sha — attendez son verdict") ;;
-  truncated) refus+=("plus de cent contrôles sur $p_sha, la liste est incomplète : on ne juge pas une CI qu'on n'a pas lue en entier") ;;
   none)      refus+=("aucun contrôle n'a tourné sur $p_sha — sans CI, rien ne prouve ce code") ;;
   *)         refus+=("contrôles de $p_sha de forme inattendue") ;;
 esac

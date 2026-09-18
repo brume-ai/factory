@@ -9,9 +9,13 @@ import tempfile
 
 
 class LookupFailure(Exception):
-    def __init__(self, message, code=4):
+    # `status` : le code HTTP quand l'échec vient de l'API — l'appelant qui
+    # tolère un 404 (une référence morte dans un message de commit) le lit ici,
+    # jamais dans le texte du message.
+    def __init__(self, message, code=4, status=None):
         super().__init__(message)
         self.code = code
+        self.status = status
 
 
 def request(path):
@@ -33,7 +37,7 @@ def request(path):
         if status != "200":
             transient = status in ("000", "429") or status.startswith("5") or (
                 status == "403" and "rate limit" in raw.lower())
-            raise LookupFailure("HTTP %s sur /%s" % (status, path), 4 if transient else 3)
+            raise LookupFailure("HTTP %s sur /%s" % (status, path), 4 if transient else 3, status)
         try:
             value = json.loads(raw)
         except ValueError:
@@ -61,7 +65,12 @@ def issue_state(issue):
     return {label["name"] for label in labels}
 
 
-def dependencies(repo, number, body, numbers_only=False):
+def dependencies(repo, number, body, numbers_only=False, natif=False):
+    """`natif` : les relations natives SEULEMENT, jamais le repli textuel du corps.
+    La base d'une PILE (feature-up.sh) ne vient que d'une dépendance déclarée :
+    un « Dépend de #12 » dans le corps d'une feature est une phrase, pas une
+    relation, et en faire une base de branche empilait une feature sur une
+    autre sans que GitHub le sache — donc sans retarget au merge."""
     path = "repos/%s/issues/%s/dependencies/blocked_by?per_page=100" % (repo, number)
     prefix = path.split("?", 1)[0] + "?"
     seen, blockers = set(), []
@@ -74,7 +83,7 @@ def dependencies(repo, number, body, numbers_only=False):
             raise LookupFailure("la liste des dépendances est illisible")
         blockers.extend(page)
     source = "native"
-    if not blockers:
+    if not blockers and not natif:
         source = "body"
         numbers = set()
         for match in re.finditer(r"(?:Bloqu[ée]e? par|Blocked by|D[ée]pend de)\s*:?\s*((?:#\d+[ \t,;/et]*)+)", body or "", re.I):
@@ -109,43 +118,23 @@ def dependencies(repo, number, body, numbers_only=False):
 
 
 def main():
+    # Trois modes, tous nourris par l'issue sur stdin : `check` (la sélection :
+    # 0 prête, 1 bloquée), `inspect` (gh-unblock : le JSON des bloqueurs et leur
+    # source), `numbers` (feature-up : les numéros, pour la base d'une pile ;
+    # avec `--natif`, sans le repli textuel). Le repli textuel (« Bloquée par
+    # #n » dans le corps) reste pour la SÉLECTION des cartes historiques.
+    # `resume` et `maintenance` (la reprise d'un worktree, l'entretien d'une PR
+    # de carte) sont partis avec la v1 : plus d'appelant, plus de mode.
     mode, repo, number = sys.argv[1:4]
-    if mode not in ("resume", "maintenance", "check", "inspect", "numbers"):
-        raise LookupFailure("mode inconnu", 3)
+    natif = sys.argv[4:] == ["--natif"]
+    if mode not in ("check", "inspect", "numbers") or (sys.argv[4:] and not natif) or (natif and mode != "numbers"):
+        raise LookupFailure("mode inconnu (check | inspect | numbers [--natif])", 3)
     if not re.fullmatch(r"[^/\s]+/[^/\s]+", repo) or not number.isdigit():
         raise LookupFailure("dépôt ou numéro invalide", 3)
-    if mode == "maintenance":
-        pr, _ = request("repos/%s/pulls/%s" % (repo, number))
-        if not isinstance(pr, dict) or pr.get("number") != int(number):
-            raise LookupFailure("identité de la PR incohérente")
-        head = pr.get("head") or {}
-        card = re.fullmatch(r"card/([0-9]+)", head.get("ref") or "")
-        if (not card or ((head.get("repo") or {}).get("full_name") or "").lower() != repo.lower() or
-                (pr.get("base") or {}).get("ref") != os.environ["FACTORY_STAGING"] or
-                pr.get("state") != "open" or
-                (os.environ.get("FACTORY_EXPECTED_CARD") and card[1] != os.environ["FACTORY_EXPECTED_CARD"])):
-            print("gh-dependencies: PR #%s hors périmètre de maintenance" % number, file=sys.stderr)
-            return 1
-        excluded = set(json.loads(os.environ["FACTORY_EXCLUDED_LABELS"]))
-        if issue_state(pr) & excluded:
-            return 1
-        number = card[1]
-    if mode in ("resume", "maintenance"):
-        issue, _ = request("repos/%s/issues/%s" % (repo, number))
-        labels = issue_state(issue)
-        if issue.get("number") != int(number):
-            raise LookupFailure("identité de l issue incohérente")
-        excluded = set(json.loads(os.environ["FACTORY_EXCLUDED_LABELS"]))
-        milestone = os.environ.get("FACTORY_MILESTONE", "")
-        if (issue["state"] != "open" or labels & excluded or
-                (milestone and issue.get("milestone") and issue["milestone"].get("title") != milestone)):
-            print("gh-dependencies: #%s hors file ; worktree conservé" % number, file=sys.stderr)
-            return 1
-    else:
-        issue = json.load(sys.stdin)
+    issue = json.load(sys.stdin)
     if not isinstance(issue, dict):
         raise LookupFailure("issue illisible")
-    blockers, source = dependencies(repo, number, issue.get("body"), mode == "numbers")
+    blockers, source = dependencies(repo, number, issue.get("body"), mode == "numbers", natif)
     if mode == "numbers":
         print(json.dumps([blocker["number"] for blocker in blockers]))
         return 0

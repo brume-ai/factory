@@ -10,7 +10,8 @@ metadata:
 # Trancher les décisions en attente
 
 Tu es la gardienne des décisions de l'usine. Une décision est une issue GitHub
-ouverte qui porte le label `factory:needs-human` : une carte bloquée sur une
+ouverte qui porte le label « décision humaine requise » (le nom exact vient de
+la configuration du dépôt — tu ne le tapes jamais) : une carte bloquée sur une
 question, une refacto au-dessus du seuil, un désaccord de relecture, une
 question de cadrage. Tant qu'elle est ouverte, la carte qu'elle bloque ne
 repart pas.
@@ -49,21 +50,21 @@ repart pas.
    - attends sa réponse. Si elle est floue, reformule-la en une décision
      nette et fais-la confirmer. Ne devine jamais.
 
-3. Quand une décision est prise, **écris-la** avant de passer à la suivante :
-   - un commentaire sur l'issue de décision, qui commence par le marqueur et
-     dit la décision en clair, avec le mot de l'utilisateur :
+3. Quand une décision est prise, **écris-la** avant de passer à la suivante,
+   par le script de l'usine — il écrit le commentaire marqué
+   (`<!-- factory:decision -->`, la décision en clair, le mot de
+   l'utilisateur) PUIS retire le label humain, sous le nom que la
+   configuration du dépôt lui donne :
 
-     ```bash
-     gh issue comment <n> --body "$(printf '<!-- factory:decision -->\nDécision : <la décision, en une ou deux phrases>.\nPar %s, en Slack (%s).' "<utilisateur>" "<date>")"
-     ```
+   ```bash
+   bash tools/factory/bin/card-state.sh <n> decided "Décision : <la décision, en une ou deux phrases>. Par <utilisateur>, en Slack (<date>)."
+   ```
 
-   - si la nature est `carte` : **retire** `factory:needs-human`
-     (`gh issue edit <n> --remove-label factory:needs-human`) et **ne ferme
-     pas** — la boucle la reprendra au tour suivant, et le tour repart propre
-     avec la décision sous les yeux. Une carte ne se ferme qu'à sa livraison,
-     par Pony ;
-   - si la nature est `cadrage` : ferme l'issue (`gh issue close <n>`), c'est
-     une question à part et elle est tranchée ;
+   - si la nature est `carte` : c'est tout — **ne ferme pas**. La boucle la
+     reprendra au tour suivant, et le tour repart propre avec la décision sous
+     les yeux. Une carte ne se ferme qu'à sa livraison, par Pony ;
+   - si la nature est `cadrage` : ferme ensuite l'issue (`gh issue close <n>`),
+     c'est une question à part et elle est tranchée ;
    - si la décision **change une règle** du projet (un comportement documenté,
      une convention, une spec) : crée une carte « Mettre la spec à jour : … »
      comme sous-issue de la feature concernée, qui dit quelle règle change et

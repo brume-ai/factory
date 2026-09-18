@@ -1,6 +1,9 @@
 # La v2 : la feature comme unité de livraison
 
-Un seul modèle, et il remplace celui de `docs/release.md` :
+> Ce document est le récit de la décision. **La doctrine opérationnelle — ce
+> que le code livré fait, script par script — est [`docs/release.md`](release.md).**
+
+Un seul modèle, et il a remplacé celui de la v1 :
 
 ```
 feature (issue) ─ cartes (sous-issues) ─ commits sur feature/<x> ─ PR relue par lot
@@ -96,8 +99,10 @@ du 17 septembre signalait déjà.
 
 **Les piles.** La feature B qui déclare dépendre nativement de la feature A
 part de `feature/A` ; sa PR vise `feature/A` ; GitHub la rebase sur `staging`
-quand A est mergée. `gh-stack.sh base` lit déjà ces relations. Rien d'autre ne
-fait une pile — pas « touche les mêmes fichiers », qui ne se voit qu'après.
+quand A est mergée. `gh-stack.sh base` lisait déjà ces relations ; c'est
+`feature-up.sh` qui les lit désormais (et `gh-stack.sh` a été retiré en T5).
+Rien d'autre ne fait une pile — pas « touche les mêmes fichiers », qui ne se
+voit qu'après.
 
 **L'ordre de travail** dans une feature : dépendances natives, puis
 `factory:priority`, puis l'ordre des lots (celui de la liste des sous-issues,

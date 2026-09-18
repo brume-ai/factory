@@ -25,6 +25,9 @@ for n in 234 235; do
 done
 fix 'repos/o/r/issues?state=open&labels=factory%3Astaged&per_page=100' '[]'
 fix 'repos/o/r/pulls?state=open&per_page=100' '[]'
+# Les cartes d'alerte (source g de eva-watch.sh) : sans feature permanente, la
+# liste des issues ouvertes, filtrée sur la marque du triage.
+fix 'repos/o/r/issues?state=open&per_page=100' '[]'
 
 # LE FAUX EXPÉDITEUR journalise ses arguments et ce qu'il reçoit sur stdin.
 cat > "$TESTTMP/faux-eva" <<'SH'

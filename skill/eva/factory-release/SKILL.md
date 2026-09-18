@@ -30,7 +30,7 @@ good pour le CRM, on sort », « release ».
    de travail (`tete: <sha>`) et la liste — une ligne par feature, ses cartes
    en dessous. Code 1 avec « feature(s) incomplète(s) » : rapporte-le tel
    quel ; sortir quand même est `--force-incomplete`, et c'est à l'utilisateur
-   de le demander en toutes lettres. Code 1 avec « sans factory:staged » :
+   de le demander en toutes lettres. Code 1 avec « sans « <le label d'attente> » » :
    une feature est entrée dans la branche de travail sans passer par toi ;
    rapporte-le, ça ne se force pas.
 
@@ -54,9 +54,14 @@ good pour le CRM, on sort », « release ».
    la main avant qu'il finisse.
 
 4. Rapporte la **dernière ligne** de sa sortie — `deploiement: success`,
-   `failure` ou `timeout` — avec le numéro sorti. Sur `failure` ou `timeout`,
-   dis que la version EST sortie (mergée, taguée) mais que le déploiement
-   n'est pas confirmé : c'est à l'utilisateur de regarder la CI.
+   `failure`, `timeout` ou `inconnu` — avec le numéro sorti. Sur `failure` ou
+   `timeout`, dis que la version EST sortie (mergée, taguée) mais que le
+   déploiement n'est pas confirmé : c'est à l'utilisateur de regarder la CI.
+   Sur `inconnu`, la version est sortie mais la lecture des runs a été refusée :
+   dis-le, et suggère de vérifier les droits `Actions` (lecture) de l'App
+   d'EVA. Si la ligne porte `; fermeture: a-rejouer`, dis que les cartes et
+   features n'ont pas été fermées et qu'il faut rejouer
+   `bash tools/factory/bin/gh-release.sh --apply`.
 
 ## Ce que tu ne fais jamais
 

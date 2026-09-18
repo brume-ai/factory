@@ -94,6 +94,14 @@ branches_require
 conf_require GH_REPO
 GH_REPO="$(conf_get GH_REPO)"
 STAGED="$(label_get staged)"
+# LA FEATURE PERMANENTE DES ALERTES (gh-security-triage.py) EST HORS DES RÈGLES
+# DE FERMETURE : elle reçoit des cartes à chaque tour de ménage, elle n'est
+# jamais « complète » longtemps, et fermée par une release elle ferait sortir
+# le triage en 3 au tour suivant (une feature fermée est une configuration
+# cassée) — plus aucune carte d'alerte. Ses cartes sorties sont commentées,
+# son label retiré ; elle n'est ni fermée ni bloquante, et c'est dit.
+SECURITY_FEATURE="$(conf_get FACTORY_SECURITY_FEATURE)"
+case "$SECURITY_FEATURE" in *[!0-9]*) echo "gh-release: FACTORY_SECURITY_FEATURE doit être un numéro d'issue (« $SECURITY_FEATURE »)" >&2; exit 3 ;; esac
 
 ROOT="$(factory_root)"
 git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || {
@@ -224,119 +232,40 @@ api() {  # <chemin> [méthode] [corps] — imprime le corps · 3 = refus · 4 = 
   cat "$body"
 }
 
-# LA CARTE EST RELUE AVANT D'ÊTRE TOUCHÉE, ET SA FEATURE AVEC ELLE. Une ligne
-# de jetons sans blanc, puis le titre : état, nature (carte ou PR), type
-# (`Feature` ou autre), numéro et DÉPÔT du parent (`parent_issue_url` est une
-# URL complète : n'en garder que le numéro ferait d'un parent dans un autre
-# dépôt une issue du nôtre), le compte des sous-issues — c'est lui qui dit si
-# une feature est complète — et si elle porte le label d'attente.
-issue_line() {  # <corps json> : « state kind type parent parent_repo total completed staged » puis le titre
-  printf '%s' "$1" | STAGED="$STAGED" python3 -c '
-import json, os, sys
-d = json.load(sys.stdin)
-url = (d.get("parent_issue_url") or "").rstrip("/")
-parts = url.split("/")
-parent = parts[-1] if len(parts) >= 4 and parts[-2] == "issues" and parts[-1].isdigit() else "-"
-prepo = "/".join(parts[-4:-2]) if parent != "-" else "-"
-s = d.get("sub_issues_summary") or {}
-print(d.get("state") or "-", "pr" if "pull_request" in d else "carte",
-      (d.get("type") or {}).get("name") or "-", parent, prepo or "-",
-      s.get("total", 0), s.get("completed", 0),
-      any(l.get("name") == os.environ["STAGED"] for l in d.get("labels") or []))
-print((d.get("title") or "").replace("\n", " "))
-'
-}
-# 404/410 = l'API ne connaît pas CE numéro (une faute de frappe dans un message
-# de commit) : une release ne s'arrête pas pour ça, mais elle le DIT. Tout
-# autre refus — 401, 403, un dépôt mal nommé — concerne la configuration
-# ENTIÈRE et s'arrête : traité carte par carte, il vidait la liste à blanc en
-# silence. 4 = le transport flanche, et là aussi il faut s'arrêter : continuer
-# laisserait des features fermées et d'autres non, sans rien dire.
-read_issue() {  # <n> → 0 et le corps · 1 = inconnue (dite) · sort en 3/4 sinon
-  local rc=0 body
-  body="$(api "repos/$GH_REPO/issues/$1")" || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    API_CODE="$(cat "$API_CODE_FILE")"
-    [ "$rc" = 3 ] || exit "$rc"
-    [[ "$API_CODE" == 404 || "$API_CODE" == 410 ]] || exit 3
-    echo "gh-release: #$1 référencée par un commit mais inconnue de GitHub (HTTP $API_CODE) — ignorée" >&2
-    return 1
-  fi
-  printf '%s' "$body"
-}
-
-# LA REMONTÉE : de la carte à sa feature, par `parent_issue_url`, jusqu'à une
-# issue de type `Feature`. Huit niveaux au plus (la limite de GitHub) : une
-# boucle sans borne sur un parent qui se citerait lui-même ne finirait jamais.
-# Sans feature au-dessus, la carte est sa propre mini-feature. Une carte qui
-# EST une Feature (un `Refs #<feature>` direct) n'est pas une carte : elle est
-# signalée et laissée hors du lot — la prendre pour sa propre mini-feature la
-# fermerait alors que ses cartes ne sont peut-être pas toutes sorties. Un
-# parent hors de ce dépôt est un refus 3. Chaque issue n'est lue qu'UNE fois
-# (mémo sur disque : la feature partagée par vingt cartes ne coûte qu'un appel).
-#
-# AUCUNE DE CES FONCTIONS N'EST APPELÉE DANS UN $( ), ET C'EST VOULU : un `exit 3`
-# (403 : l'App n'a pas les droits) dans une substitution ne tue que le
-# sous-shell, et l'appelant lirait « feature illisible, carte laissée de côté »
-# — la release continuerait, à moitié, sur une App sans droits. Elles écrivent
-# donc dans des fichiers et dans FEATURE, jamais sur stdout.
-MEMO="$(mktemp -d)"; trap 'rm -rf "$MEMO" "$API_CODE_FILE" "$API_BODY"' EXIT
-issue_load() {  # <n> : lit l'issue dans $MEMO/<n>.json · 1 = inconnue (dite)
-  [ -f "$MEMO/$1.json" ] && return 0
-  read_issue "$1" > "$MEMO/$1.json" || { rm -f "$MEMO/$1.json"; return 1; }
-}
-feature_of() {  # <carte> : pose FEATURE (la carte elle-même si mini-feature) · 1 = illisible · 2 = la carte EST une Feature
-  local n="$1" depth=0 kind type parent prepo
-  FEATURE=""
-  while [ "$depth" -lt 8 ]; do
-    issue_load "$n" || return 1
-    read -r _ kind type parent prepo _ <<<"$(issue_line "$(cat "$MEMO/$n.json")" | head -n1)"
-    [ "$kind" = carte ] || return 1
-    if [ "$type" = Feature ]; then
-      [ "$n" != "$1" ] || return 2
-      FEATURE="$n"; return 0
-    fi
-    if [ "$parent" = "-" ]; then break; fi
-    if [ "${prepo,,}" != "${GH_REPO,,}" ]; then
-      echo "gh-release: le parent de #$n est dans un autre dépôt ($prepo) — on ne remonte pas hors de $GH_REPO" >&2
-      exit 3
-    fi
-    n="$parent"; depth=$((depth+1))
-  done
-  # Aucune Feature au-dessus : la carte de départ est sa propre mini-feature.
-  FEATURE="$1"
-}
-
-# --- LE LOT : CARTES → FEATURES ---------------------------------------------------
-# `cards_of` porte, par feature, ses cartes du lot — dans l'ordre des numéros,
-# pour que deux passages rendent la même liste.
-declare -A cards_of=()
+# --- LE LOT : CARTES → FEATURES, PAR gh-feature.py -------------------------------------
+# LA REMONTÉE N'EST PLUS ICI. gh-feature.py est le SEUL lecteur de la chaîne des
+# parents (`parent_issue_url` jusqu'à une issue de type Feature, huit niveaux
+# au plus, le dépôt du parent contrôlé ; sans Feature, la RACINE de la chaîne
+# est une mini-feature) ; ce script et eva-release.sh en portaient chacun une
+# copie bash, et elles avaient divergé. Son mode `lot` tolère TROIS choses et
+# les dit : une référence inconnue (404 — une faute de frappe dans un commit),
+# une pull request (le numéro que le squash colle au titre), une Feature citée
+# directement (`direct_feature` : jamais prise pour sa propre mini-feature —
+# elle serait fermée alors que ses cartes ne sont peut-être pas toutes
+# sorties). Tout autre refus (403 : l'App n'a pas les droits ; un parent hors
+# dépôt) SORT EN 3 ET ARRÊTE : traité carte par carte, il vidait la liste à
+# blanc en silence, et la release continuait à moitié sur une App sans droits.
+# `|| exit $?` sur la substitution : le code du processus enfant est celui de
+# l'affectation, rien n'est avalé.
+# GH_FEATURE_PY remplace le lecteur (tests : un JSON incomplet doit sortir en 3,
+# pas rendre un lot vide) — même porte que CLAUDE_BIN, même règle : posé par la
+# boucle ou un test, jamais par un agent.
+lot="$(printf '%s\n' "$cards" | FACTORY_TOKEN="$TOKEN" python3 "${GH_FEATURE_PY:-$HERE/gh-feature.py}" lot "$GH_REPO")" || exit $?
+# La mise à plat vit dans lib.sh (LOT_LINES_PY), partagée avec eva-release.sh :
+# une ligne par feature, une par carte du lot, dans l'ordre des numéros. SON
+# ÉCHEC EST UN 3, PAS UN LOT VIDE : dans un here-string, le code de python
+# serait avalé et une release « sans feature à fermer » sortirait sur un JSON
+# que personne n'a lu.
+lignes="$(printf '%s' "$lot" | STAGED="$STAGED" python3 -c "$LOT_LINES_PY")" \
+  || { echo "gh-release: la réponse de gh-feature.py lot est illisible — rien n'est fermé" >&2; exit 3; }
+declare -A f_line=() c_line=() cards_of=()
 features=""
-while read -r n; do
-  [ -n "$n" ] || continue
-  issue_load "$n" || continue
-  read -r _ kind _ <<<"$(issue_line "$(cat "$MEMO/$n.json")" | head -n1)"
-  if [ "$kind" = pr ]; then
-    echo "gh-release: #$n est une pull request, pas une carte — ignorée" >&2
-    continue
-  fi
-  frc=0; feature_of "$n" || frc=$?
-  if [ "$frc" = 2 ]; then
-    echo "gh-release: #$n est une Feature citée directement par un commit — une feature n'est pas une carte, elle reste hors du lot" >&2
-    continue
-  fi
-  [ "$frc" = 0 ] || { echo "gh-release: la feature de #$n est illisible — carte laissée de côté" >&2; continue; }
-  f="$FEATURE"
-  if [ "$f" = "$n" ]; then
-    # Mini-feature : la carte est la feature, elle n'a pas de sous-liste.
-    cards_of[$f]="${cards_of[$f]:-}"
-  else
-    cards_of[$f]="${cards_of[$f]:-}${cards_of[$f]:+ }$n"
-  fi
-  case " $features " in *" $f "*) ;; *) features="$features${features:+ }$f" ;; esac
-done <<< "$cards"
-# shellcheck disable=SC2086
-features="$(printf '%s\n' $features | sort -nu | tr '\n' ' ')"
+while IFS=$'\t' read -r kind a b rest; do
+  case "$kind" in
+    F) f_line[$a]="$b	$rest"; features="$features${features:+ }$a" ;;
+    C) cards_of[$a]="${cards_of[$a]:-}${cards_of[$a]:+ }$b"; c_line[$b]="$rest" ;;
+  esac
+done <<<"$lignes"
 
 # LES COMMENTAIRES PORTENT UNE MARQUE, ET ELLE EST RELUE AVANT D'ÉCRIRE : c'est
 # ce qui rend le script rejouable. eva-release.sh le relance à chaque reprise
@@ -374,35 +303,39 @@ unstage() {  # <n>
 
 closed=0; listed=0
 for f in $features; do
-  { read -r f_state _ _ _ _ f_total f_done f_staged; read -r f_title; } <<<"$(issue_line "$(cat "$MEMO/$f.json")")"
+  IFS=$'\t' read -r f_mini f_state f_staged f_total f_done ouvertes f_title <<<"${f_line[$f]}"
+  [ "$ouvertes" != "-" ] || ouvertes=""
   # COMPLÈTE : toutes les sous-issues fermées — le compte de GitHub ne voit
   # que les enfants DIRECTS, un lot fermé au-dessus d'une carte ouverte
-  # passerait, donc AUSSI aucune carte du lot encore ouverte ; sans
-  # sous-issue (mini-feature), fermée elle-même. « Ouverte » se teste
-  # strictement : un état absent ne fait pas fermer une feature.
+  # passerait, donc AUSSI aucune carte du lot encore ouverte (`ouvertes`).
+  # UNE MINI-FEATURE EST COMPLÈTE SSI SA RACINE EST FERMÉE — la racine est une
+  # CARTE (le hotfix lui-même), pas un chapeau : un hotfix en needs-human dont
+  # la remarque (#60, sous lui) a été livrée porte 1/1 sous-issue fermée, et
+  # sans cette ligne la release le fermait « completed » sans qu'il ait été
+  # fait. « Ouverte » se teste strictement : un état absent ne ferme rien.
   if [ "$f_total" -gt 0 ]; then
     if [ "$f_done" -eq "$f_total" ]; then complete=1; else complete=0; fi
   else
     if [ "$f_state" = closed ]; then complete=1; else complete=0; fi
   fi
-  ouvertes=""
-  for n in ${cards_of[$f]:-}; do
-    read -r c_state _ <<<"$(issue_line "$(cat "$MEMO/$n.json")" | head -n1)"
-    [ "$c_state" != open ] || ouvertes="$ouvertes${ouvertes:+ }#$n"
-  done
+  [ "$f_mini" != True ] || [ "$f_state" = closed ] || complete=0
   [ -z "$ouvertes" ] || complete=0
+  permanente=0; [ -z "$SECURITY_FEATURE" ] || [ "$f" != "$SECURITY_FEATURE" ] || permanente=1
   # STDOUT = CE QUI PART, dans les deux modes : la feature, puis ses cartes du
   # lot, indentées. C'est la liste qu'on relit avant `--apply`, et la même après.
-  if [ "$complete" = 1 ] && [ "$f_staged" != True ] && [ "$f_state" = open ]; then
+  if [ "$permanente" = 1 ]; then
+    printf '#%s\t%s\t(feature permanente des alertes : ni fermée ni bloquante)\n' "$f" "$f_title"
+  elif [ "$complete" = 1 ] && [ "$f_staged" != True ] && [ "$f_state" = open ]; then
     printf '#%s\t%s\t(pas passée par EVA : sans « %s » — laissée ouverte)\n' "$f" "$f_title" "$STAGED"
   elif [ "$complete" = 1 ]; then
     printf '#%s\t%s\n' "$f" "$f_title"
   else
-    printf '#%s\t%s\t(incomplète : %s/%s cartes fermées%s — laissée ouverte)\n' "$f" "$f_title" "$f_done" "$f_total" "${ouvertes:+, ouvertes : $ouvertes}"
+    racine=""; [ "$f_mini" != True ] || [ "$f_state" = closed ] || racine=", racine #$f ouverte"
+    printf '#%s\t%s\t(incomplète : %s/%s cartes fermées%s%s — laissée ouverte)\n' "$f" "$f_title" "$f_done" "$f_total" "$racine" "${ouvertes:+, ouvertes : $ouvertes}"
   fi
   listed=$((listed+1))
   for n in ${cards_of[$f]:-}; do
-    { read -r c_state _ _ _ _ _ _ _; read -r c_title; } <<<"$(issue_line "$(cat "$MEMO/$n.json")")"
+    IFS=$'\t' read -r c_state c_title <<<"${c_line[$n]}"
     if [ "$c_state" = open ]; then
       printf '  #%s\t%s\t(encore OUVERTE — signalée, jamais fermée par la release)\n' "$n" "$c_title"
     else
@@ -418,12 +351,19 @@ for f in $features; do
   # est de l'ordre de 80 écritures par minute.
   for n in ${cards_of[$f]:-}; do
     already_marked "$n" && continue
-    read -r c_state _ <<<"$(issue_line "$(cat "$MEMO/$n.json")" | head -n1)"
+    IFS=$'\t' read -r c_state _ <<<"${c_line[$n]}"
     if [ "$c_state" = open ]; then api "repos/$GH_REPO/issues/$n/comments" POST "$OPEN_COMMENT" >/dev/null || exit $?
     else api "repos/$GH_REPO/issues/$n/comments" POST "$COMMENT" >/dev/null || exit $?
     fi
     sleep 1
   done
+  if [ "$permanente" = 1 ]; then
+    # Le label d'attente, s'il est là (EVA a mergé un lot d'alertes), est
+    # retiré : ce lot-ci est sorti. La feature reste ouverte pour les suivants.
+    [ "$f_staged" != True ] || unstage "$f"
+    echo "gh-release: feature permanente #$f — ses cartes sorties sont commentées, elle n'est ni fermée ni bloquante" >&2
+    continue
+  fi
   if [ "$complete" != 1 ]; then
     echo "gh-release: feature #$f incomplète ($f_done/$f_total${ouvertes:+, ouvertes : $ouvertes}) — commentée sur ses cartes, PAS fermée" >&2
     continue

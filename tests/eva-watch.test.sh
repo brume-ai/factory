@@ -16,6 +16,9 @@
 #   4. LA NATURE d'une décision (carte / cadrage), le compte des cartes livrées
 #      par les `Refs #`, une PR `needs-human` qui n'est pas « prête », et le
 #      `.omc` de la boucle lu là où la boucle écrit.
+#   5. LES ALERTES (g) — critical/high telles que le triage les écrit, sous la
+#      feature permanente ou par la marque ; le compte par sévérité en --etat ;
+#      une alerte qui monte de sévérité est une nouveauté.
 #
 # Hors ligne : le faux curl tient lieu de GitHub, l'état vit dans $TESTTMP.
 . "$(dirname "$0")/helpers.sh"
@@ -76,6 +79,9 @@ vert='{"check_runs":[{"conclusion":"success","status":"completed"}],"total_count
 fix 'repos/o/r/commits/s12/check-runs?per_page=100' "$vert"
 fix 'repos/o/r/commits/s13/check-runs?per_page=100' '{"check_runs":[{"conclusion":"failure","status":"completed"}],"total_count":1}'
 fix 'repos/o/r/commits/s15/check-runs?per_page=100' "$vert"
+# Les cartes d'alerte (g) : sans FACTORY_SECURITY_FEATURE, la liste des issues
+# ouvertes, filtrée sur la marque du triage — vide ici, le cas l) les pose.
+fix 'repos/o/r/issues?state=open&per_page=100' '[]'
 
 # --- a) --etat : TOUT, TRIÉ, STABLE ------------------------------------------------
 run --etat
@@ -96,6 +102,7 @@ assert_contains "$out" "  #3  Le catalogue" "etat : le stock, trie par numero"
 assert_contains "$out" "CI rouge (1)" "etat : une CI rouge"
 assert_contains "$out" "  PR #13  feature/9  https://x/pr/13" "etat : la PR a CI rouge"
 assert_contains "$out" "boucle : en marche" "etat : sans loop.halt, la boucle est en marche"
+assert_contains "$out" "alertes de sécurité ouvertes (0) : critical 0, high 0, autres 0" "etat : le compte des alertes, à zéro"
 assert_not_contains "$out" "file :" "etat : sans loop.file-vide, rien a dire sur la file"
 # L'ORDRE EST CELUI DES NUMÉROS.
 l229="$(printf '%s\n' "$out" | grep -n '#229' | cut -d: -f1)"; l234="$(printf '%s\n' "$out" | grep -n '#234' | cut -d: -f1)"
@@ -264,5 +271,61 @@ assert_rc 0 "$rc" "lecture avec FACTORY_TOKEN : 0"
 : > "$H/calls.log"
 set +e; FACTORY_HUMAN_LABEL="usine:decision" bash "$S" --decisions >/dev/null 2>&1; set -e
 assert_contains "$H/calls.log" "labels=usine%3Adecision" "label renomme : la conf est honoree, deux-points encode"
+
+# --- l) LES ALERTES DE SÉCURITÉ (g) ------------------------------------------------------
+# Sans clé : les issues ouvertes qui portent la marque du triage. Trois cartes
+# d'alerte — un CodeQL [high] (le titre), un Dependabot dont le corps dit
+# « la plus grave : **critical** », un Dependabot low — et une issue ordinaire
+# sans marque, qui ne compte pas.
+promote 2>/dev/null || true
+dep_body='<!-- factory-security:dependabot:api/uv.lock -->\n\n`api/uv.lock` porte **3 alertes Dependabot ouvertes** (la plus grave : **critical**).\n\n| `x` | high | 1 | y |'
+fix 'repos/o/r/issues?state=open&per_page=100' "[{\"number\":300,\"state\":\"open\",\"title\":\"CodeQL [high] — js/xss (2 occurrences)\",\"html_url\":\"https://x/300\",\"body\":\"<!-- factory-security:code-scanning:js/xss -->\\n\\nsévérité **high**\",\"labels\":[]},
+ {\"number\":301,\"state\":\"open\",\"title\":\"Dependabot — 3 alertes dans api/uv.lock\",\"html_url\":\"https://x/301\",\"body\":\"$dep_body\",\"labels\":[]},
+ {\"number\":302,\"state\":\"open\",\"title\":\"Dependabot — 1 alerte dans web/package-lock.json\",\"html_url\":\"https://x/302\",\"body\":\"<!-- factory-security:dependabot:web/package-lock.json -->\\n\\n(la plus grave : **low**)\",\"labels\":[]},
+ {\"number\":303,\"state\":\"open\",\"title\":\"Une carte ordinaire critical dans son titre\",\"html_url\":\"https://x/303\",\"body\":\"**critical** mais sans marque\",\"labels\":[]}]"
+run --etat
+assert_rc 0 "$rc" "alertes : rc 0 ($err)"
+assert_contains "$out" "alertes de sécurité ouvertes (3) : critical 1, high 1, autres 1" "alertes : le compte par sévérité, sans l'issue sans marque"
+assert_contains "$out" "  #300  [high]  CodeQL [high] — js/xss (2 occurrences)  https://x/300" "alertes : la high, par son titre"
+assert_contains "$out" "  #301  [critical]  Dependabot — 3 alertes dans api/uv.lock  https://x/301" "alertes : la critical, par son corps (la plus grave d'abord, pas le « high » du tableau)"
+assert_not_contains "$out" "#302  [" "alertes : une low n'est pas listée, seulement comptée"
+assert_not_contains "$out" "#303" "alertes : sans marque, ce n'est pas une carte d'alerte"
+premier="$out"; run --etat; assert_eq "$premier" "$out" "alertes : stable"
+run --diff
+assert_contains "$out" "🛡️ alerte critique #301 : Dependabot — 3 alertes dans api/uv.lock https://x/301" "diff : la critical, prête à envoyer"
+assert_contains "$out" "🛡️ alerte critique #300 : CodeQL [high] — js/xss (2 occurrences) https://x/300" "diff : la high aussi"
+assert_not_contains "$out" "#302" "diff : pas la low"
+assert_contains "$FACTORY_EVA_STATE.pending" '"alerte:301:critical"' "diff : la clé porte la sévérité"
+promote
+run --diff
+assert_not_contains "$out" "🛡️" "diff promu : rien de nouveau"
+# La low monte en critical : c'est une nouveauté.
+fix 'repos/o/r/issues?state=open&per_page=100' "[{\"number\":302,\"state\":\"open\",\"title\":\"Dependabot — 1 alerte dans web/package-lock.json\",\"html_url\":\"https://x/302\",\"body\":\"<!-- factory-security:dependabot:web/package-lock.json -->\\n\\n(la plus grave : **critical**)\",\"labels\":[]}]"
+run --diff
+assert_contains "$out" "🛡️ alerte critique #302" "diff : une alerte qui monte de sévérité est dite"
+# Avec la clé : les sous-issues de la feature permanente, et seulement elles ;
+# une sous-issue FERMÉE ne compte pas.
+# Le corps du secret exposé porte la ligne que le triage écrit — la même
+# chaîne que gh-security-triage.test.sh vérifie (tests/helpers.sh).
+fix 'repos/o/r/issues/77/sub_issues?per_page=100' "[{\"number\":310,\"state\":\"open\",\"title\":\"Secret exposé — clé AWS (alerte #4)\",\"html_url\":\"https://x/310\",\"body\":\"<!-- factory-security:secret-scanning:4 -->\\n\\n**Clé AWS** détecté (validité rapportée : \`active\`), $SECRET_SEVERITE\",\"labels\":[]},{\"number\":311,\"state\":\"closed\",\"title\":\"CodeQL [critical] — fermée\",\"html_url\":\"https://x/311\",\"body\":\"\",\"labels\":[]}]"
+: > "$H/calls.log"
+FACTORY_SECURITY_FEATURE=77 run --etat
+assert_rc 0 "$rc" "alertes sous la feature : rc 0 ($err)"
+assert_contains "$H/calls.log" "GET repos/o/r/issues/77/sub_issues" "avec clé : les sous-issues de la feature sont lues"
+assert_file_lacks "$H/calls.log" "issues?state=open&per_page=100" "avec clé : la liste des issues ouvertes n'est pas lue"
+assert_contains "$out" "alertes de sécurité ouvertes (1) : critical 1, high 0, autres 0" "avec clé : la sous-issue fermée ne compte pas"
+assert_contains "$out" "  #310  [critical]  Secret exposé — clé AWS (alerte #4)  https://x/310" "avec clé : le secret exposé, critical par son corps"
+FACTORY_SECURITY_FEATURE=abc run --etat
+assert_rc 3 "$rc" "clé qui n'est pas un numéro : 3"
+# LA SOURCE (g) SE DÉGRADE : une feature en 404 ne tue pas la vigie, les
+# décisions et le reste partent, les alertes comptent pour zéro, et c'est dit.
+printf '404' > "$H/repos_o_r_issues_77_sub_issues_per_page_100.code"
+FACTORY_SECURITY_FEATURE=77 run --etat
+assert_rc 0 "$rc" "alertes en 404 : la vigie tourne ($err)"
+assert_contains "$err" "source alertes illisible" "alertes en 404 : dit"
+assert_contains "$err" "FACTORY_SECURITY_FEATURE=#77" "alertes en 404 : la clé est nommée"
+assert_contains "$out" "décisions en attente (" "alertes en 404 : les décisions partent quand même"
+assert_contains "$out" "alertes de sécurité ouvertes (0)" "alertes en 404 : comptées à zéro"
+rm -f "$H/repos_o_r_issues_77_sub_issues_per_page_100.code"
 
 echo ok

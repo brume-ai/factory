@@ -67,6 +67,21 @@ assert_rc 3 "$rc" "label en 403 = 3"
 [ ! -f "$MARQUEUR" ] || { echo "marqueur posé malgré un 403" >&2; exit 1; }
 rm -f "$H"/*.code
 
+# d2) decided : la décision est ÉCRITE (marquée) AVANT que le label soit retiré ;
+#     le marqueur de la boucle n'est pas touché (il est consommé à la réadmission).
+touch "$MARQUEUR"; : > "$H/calls.log"
+printf '[]' > "$H/repos_o_r_issues_12_labels_factory_3Aneeds-human.json"
+run 12 decided
+assert_rc 3 "$rc" "decided sans décision = 3"
+run 12 decided "Décision : le format ISO. Par vince, en Slack (2026-09-18)."
+assert_rc 0 "$rc" "decided = 0 ($(cat "$TESTTMP/err"))"
+assert_contains "$(grep 'POST repos/o/r/issues/12/comments' "$H/calls.log")" '<!-- factory:decision -->\nDécision : le format ISO' "decided : la décision est commentée, marquée"
+assert_contains "$H/calls.log" 'DELETE repos/o/r/issues/12/labels/factory%3Aneeds-human' "decided : le label humain est retiré"
+[ "$(grep -n 'comments' "$H/calls.log" | cut -d: -f1)" -lt "$(grep -n 'DELETE' "$H/calls.log" | cut -d: -f1)" ] \
+  || { echo "decided : la décision doit être écrite AVANT le retrait du label" >&2; exit 1; }
+[ -f "$MARQUEUR" ] || { echo "decided : le marqueur de la boucle ne doit pas être retiré" >&2; exit 1; }
+assert_file_lacks "$H/calls.log" 'PATCH' "decided : la carte n'est jamais fermée"
+
 # e) LES NOMS VIENNENT DE factory.conf
 make_conf 'FACTORY_HUMAN_LABEL = usine:humain' 'FACTORY_BUSY_LABEL = usine:prise'
 printf '[]' > "$H/repos_o_r_issues_12_labels_usine_prise.json"

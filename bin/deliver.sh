@@ -49,8 +49,11 @@
 # LA PR MERGÉE OU FERMÉE ENTRE L'ADMISSION ET LA LIVRAISON n'est pas un arrêt de
 # l'usine : le push est fait (le travail est sur la branche, rien n'est perdu),
 # et la carte est REFUSÉE — code 1, `needs-human` avec la raison — parce que
-# personne ne relira ce commit dans une PR fermée. C'est feature-up.sh qui
-# rouvrira la feature quand l'humain aura tranché.
+# personne ne relira ce commit dans une PR fermée. La raison dit que le commit
+# est DÉJÀ sur la branche et que la carte ne se réadmet pas telle quelle (le
+# tour repartirait de zéro et referait le travail) : elle se ferme « not
+# planned », et le commit est relu dans la PR que feature-up.sh rouvre à la
+# carte suivante de la feature.
 #
 # Codes : 0 · 1 = carte refusée (PR de la feature mergée ou fermée entre-temps ;
 # needs-human posé) · 3 = paramètre, worktree, base, branche qui n'est pas
@@ -151,8 +154,16 @@ if [ -z "$PR" ]; then
     etat="$(printf '%s' "$toutes" | jq_ '"mergée" if d[0].get("merged_at") else "fermée"')"
     num="$(printf '%s' "$toutes" | jq_ 'd[0]["number"]')"
     echo "deliver: la PR #$num de $BRANCHE a été $etat entre l'admission et la livraison de #$CARTE — le commit $SHA7 est poussé, la carte attend un humain" >&2
+    # LA RAISON DIT QUE LE COMMIT EST DÉJÀ SUR LA BRANCHE, et ce qu'il ne faut
+    # PAS faire : réadmettre la carte telle quelle. Le marqueur needs-human
+    # remet le tour à zéro à la réadmission, et un orchestrateur neuf referait
+    # la carte PAR-DESSUS son propre commit. Le travail est fait ; il sera relu
+    # dans la prochaine PR de la feature, que feature-up.sh rouvrira à la
+    # carte suivante (« chore: rouvre »). La carte se ferme donc « not planned »
+    # — pas « completed », que deliver.sh réserve à une livraison relue dans
+    # une PR — ou son commit se jette de la branche avant de la réadmettre.
     FACTORY_TOKEN="$TOKEN" bash "$HERE/card-state.sh" "$CARTE" needs-human \
-      "livrée dans $SHA7 sur $BRANCHE, mais la PR #$num de la feature a été $etat entre-temps : personne ne relira ce commit. Rouvrir la feature (feature-up.sh le fera à la réadmission), ou rattacher la carte ailleurs." || exit $?
+      "livrée dans $SHA7 sur $BRANCHE, mais la PR #$num de la feature a été $etat entre-temps : personne ne relira ce commit dans une PR fermée. LE COMMIT EST DÉJÀ SUR $BRANCHE — ne réadmettez pas la carte telle quelle (un tour neuf referait le travail par-dessus). Fermez-la « not planned » : le commit sera relu dans la prochaine PR de la feature, que feature-up.sh rouvre à la carte suivante ; ou retirez le commit de la branche avant de la réadmettre." || exit $?
     exit 1
   fi
   echo "deliver: aucune PR n'a jamais existé pour $BRANCHE — feature-up.sh aurait dû la créer à l'admission" >&2; exit 3

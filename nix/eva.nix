@@ -150,8 +150,25 @@ in
       requires = [ "factory-eva-image.service" "factory-eva-config.service" ];
       wants = [ "factory-eva-workspace.service" ];
       unitConfig.RequiresMountsFor = [ state secrets ];
+      # L'ALLOWLIST SLACK EST LA SEULE SERRURE SUR QUI ORDONNE A EVA (merger,
+      # sortir une version) : sans elle, ou vide, la passerelle prendrait le mot
+      # de n'importe qui pour un ordre. Elle n'est provisionnee par rien — c'est
+      # un geste humain dans runtime.env, IDs Slack separes par des virgules
+      # (voir la doc Hermes) — donc elle est VERIFIEE avant de lancer la
+      # passerelle, avec un message qui dit quoi poser. `ConditionPathExists`
+      # ne suffit pas : le fichier existe (tmpfiles le cree vide).
+      path = with pkgs; [ coreutils gnugrep ];
       serviceConfig = {
-        ExecStartPre = "-${docker} rm -f factory-eva";
+        ExecStartPre = [
+          ("+" + toString (pkgs.writeShellScript "factory-eva-allowlist" ''
+            f=${lib.escapeShellArg "${secrets}/runtime.env"}
+            if ! grep -Eq '^[[:space:]]*SLACK_ALLOWED_USERS[[:space:]]*=[[:space:]]*[^[:space:]]' "$f" 2>/dev/null; then
+              echo "factory-eva : SLACK_ALLOWED_USERS absent ou vide dans $f — sans allowlist, n'importe qui commanderait EVA (merge, release). Posez-y les IDs Slack autorises, separes par des virgules (voir la doc Hermes), puis relancez." >&2
+              exit 1
+            fi
+          ''))
+          "-${docker} rm -f factory-eva"
+        ];
         ExecStart = "${docker} run --rm --name factory-eva ${runArgs} ${envArgs} ${image} gateway run";
         ExecStop = "${docker} stop --time 30 factory-eva";
         Restart = "on-failure";

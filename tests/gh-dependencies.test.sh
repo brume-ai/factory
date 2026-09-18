@@ -55,19 +55,27 @@ printf '[]' > "$D"
 printf '{"state":"open","labels":[]}' > "$H/repos_o_r_issues_99.json"
 out="$(bash "$S" 2>/dev/null)" && rc=0 || rc=$?
 assert_rc 1 "$rc" "legacy colon syntax still blocks with a proven empty native list"
-# Stack bases read native links too; errors must never print a base branch.
-printf '{"body":"Blocked by #99"}' > "$H/repos_o_r_issues_7.json"
+# Le mode `numbers` (la base d'une pile, feature-up.sh) lit les relations
+# natives aussi ; un bloqueur hors dépôt, ou sans dépôt, ne devient JAMAIS un
+# numéro — donc jamais une branche feature/<n> locale du même numéro.
+numbers() { printf '{"body":"Blocked by #99"}' | FACTORY_TOKEN=t python3 "$REPO/bin/gh-dependencies.py" numbers o/r 7 2>/dev/null; }
 printf '[{"number":4,"state":"open","labels":[],"repository_url":"https://api.github.com/repos/o/r"}]' > "$D"
-printf '[{"number":40,"head":{"ref":"card/4"},"base":{"ref":"staging"}}]' > "$H/repos_o_r_pulls_state_open_per_page_100.json"
-assert_eq card/4 "$(bash "$REPO/bin/gh-stack.sh" base 7 2>/dev/null)" "native relationship drives manual stack base"
+assert_eq '[4]' "$(numbers)" "native relationship drives the stack base"
 printf '[{"number":4,"state":"open","labels":[],"repository_url":"https://api.github.com/repos/other/repo"}]' > "$D"
-out="$(bash "$REPO/bin/gh-stack.sh" base 7 2>/dev/null)" && rc=0 || rc=$?
+out="$(numbers)" && rc=0 || rc=$?
 assert_rc 3 "$rc" "cross-repository blockers cannot become same-number local branches"
-assert_eq '' "$out" "unsupported stack relationship never returns a base"
+assert_eq '' "$out" "unsupported stack relationship never returns a number"
 printf '[{"number":4,"state":"open","labels":[]}]' > "$D"
-out="$(bash "$REPO/bin/gh-stack.sh" base 7 2>/dev/null)" && rc=0 || rc=$?
+out="$(numbers)" && rc=0 || rc=$?
 assert_rc 4 "$rc" "missing blocker repository must not be guessed for a stack"
-assert_eq '' "$out" "unknown repository never returns a base"
+assert_eq '' "$out" "unknown repository never returns a number"
+# `--natif` : une liste native vide reste vide, le corps n'est pas relu — la
+# base d'une pile ne vient jamais d'une phrase.
+printf '[]' > "$D"
+assert_eq '[]' "$(printf '{"body":"Blocked by #99"}' | FACTORY_TOKEN=t python3 "$REPO/bin/gh-dependencies.py" numbers o/r 7 --natif 2>/dev/null)" "natif : le corps n'est pas un bloqueur"
+assert_eq '[99]' "$(printf '{"body":"Blocked by #99"}' | FACTORY_TOKEN=t python3 "$REPO/bin/gh-dependencies.py" numbers o/r 7 2>/dev/null)" "sans natif : le repli textuel reste pour la sélection"
+out="$(printf '{}' | FACTORY_STAGED_LABEL=factory:staged python3 "$REPO/bin/gh-dependencies.py" check o/r 7 --natif 2>/dev/null)" && rc=0 || rc=$?
+assert_rc 3 "$rc" "natif : refusé hors du mode numbers"
 
 # Unblock native-only cards, including those beyond page one, without touching
 # their human exclusion. An unreadable second dependency page prevents DELETE.

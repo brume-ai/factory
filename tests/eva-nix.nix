@@ -74,6 +74,13 @@ assert hasRule "C+ /srv/factory/eva/home/skills/factory/factory-merge/SKILL.md";
 assert hasRule "C+ /srv/factory/eva/home/skills/factory/factory-release/SKILL.md";
 assert hasRule "C+ /srv/factory/eva/home/skills/factory/factory-etat/SKILL.md";
 assert !(hasRule "C /srv/factory/eva/home/SOUL.md");
+# L'allowlist Slack est verifiee AVANT la passerelle : un ExecStartPre qui
+# grep SLACK_ALLOWED_USERS non vide dans runtime.env, avec un message qui dit
+# quoi poser (ConditionPathExists ne suffit pas : tmpfiles cree le fichier vide).
+assert builtins.isList enabled.systemd.services.factory-eva.serviceConfig.ExecStartPre;
+assert builtins.any (p: hasInfix "factory-eva-allowlist" p) enabled.systemd.services.factory-eva.serviceConfig.ExecStartPre;
+assert hasInfix "SLACK_ALLOWED_USERS" (builtins.readFile (builtins.head (builtins.filter (p: hasInfix "factory-eva-allowlist" p) (map (p: nixpkgs.lib.removePrefix "+" p) enabled.systemd.services.factory-eva.serviceConfig.ExecStartPre))));
+assert hasInfix "/srv/factory/secrets/eva/runtime.env" (builtins.readFile (builtins.head (builtins.filter (p: hasInfix "factory-eva-allowlist" p) (map (p: nixpkgs.lib.removePrefix "+" p) enabled.systemd.services.factory-eva.serviceConfig.ExecStartPre))));
 # Les pings partent de l'HOTE par un timer, jamais de la boucle (qui tourne
 # dans le conteneur factory-loop, sans wrapper `eva`).
 assert builtins.elem "timers.target" enabled.systemd.timers.factory-eva-notify.wantedBy;

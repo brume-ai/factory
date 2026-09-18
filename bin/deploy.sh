@@ -24,12 +24,11 @@ set -euo pipefail
 # `checkout --force` sur la mauvaise branche n'est pas une erreur qu'on rattrape.
 branches_require
 FACTORY_NAME="$(conf_get FACTORY_NAME usine)"
-FACTORY_HOST="$(conf_get FACTORY_HOST)"; conf_require FACTORY_HOST FACTORY_KEY
-STATE="$(conf_get FACTORY_STATE /srv/factory)"
+conf_require FACTORY_HOST FACTORY_KEY
 conf_require GH_REPO
 REPO_DIR="$(conf_get FACTORY_REPO_DIR "$(conf_get FACTORY_STATE /srv/factory)/workspace/$(basename "$(conf_get GH_REPO)")")"
 
-B="$(tput bold 2>/dev/null || true)"; C="$(tput setaf 6 2>/dev/null || true)"
+B="$(tput bold 2>/dev/null || true)"
 D="$(tput dim 2>/dev/null || true)"; R="$(tput sgr0 2>/dev/null || true)"
 
 echo

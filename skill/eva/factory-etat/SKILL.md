@@ -25,8 +25,9 @@ bash tools/factory/bin/eva-watch.sh --etat
 Il rend, par sections : les décisions en attente (numéro, titre, feature,
 depuis quand), les PR de feature prêtes à relire sans approbation sur leur
 tête courante, les features intégrées qui attendent une release, les PR à CI
-rouge, l'état de la boucle (en marche, ou arrêtée et pourquoi), et la file si
-elle est vide et pourquoi.
+rouge, les cartes d'alerte de sécurité ouvertes (le compte par sévérité, et
+les critical/high une par une), l'état de la boucle (en marche, ou arrêtée et
+pourquoi), et la file si elle est vide et pourquoi.
 
 Rends-le en clair, dans cet ordre, sans rien ajouter que le script ne dit
 pas. Une section vide se dit en un mot. Si l'utilisateur veut trancher une

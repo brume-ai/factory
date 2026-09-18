@@ -84,13 +84,24 @@ $h"
 grep -q 'nature' "$D" || fail "factory-decision : ne lit pas la nature de la décision (carte / cadrage)"
 grep -qE 'ne ferme[s]? +(pas|jamais)|jamais' "$D" || fail "factory-decision : ne dit pas qu'une carte ne se ferme jamais"
 grep -q 'livrée' "$D" || fail "factory-decision : ne dit pas pourquoi (fermée = livrée)"
-grep -q -- '--remove-label factory:needs-human' "$D" || fail "factory-decision : ne retire pas le label de la carte"
+grep -q 'retire le label humain' "$D" || fail "factory-decision : ne dit pas que le label humain est retiré (par card-state.sh decided)"
 M="$REPO/skill/eva/factory-merge/SKILL.md"
 grep -q -- '--tete' "$M" || fail "factory-merge : ne passe pas --tete"
 grep -q 'headRefOid' "$M" || fail "factory-merge : ne lit pas la tête courante (headRefOid)"
 R="$REPO/skill/eva/factory-release/SKILL.md"
 grep -q -- '--apply --ordre "slack:<ts du message>" --version X.Y.Z --tete <sha montré>' "$R" || fail "factory-release : --apply sans --version et --tete"
 grep -q 'tete: <sha>' "$R" || fail "factory-release : ne montre pas la tête à l'utilisateur"
+
+# 5 bis. AUCUN NOM DE LABEL EN DUR dans les skills d'EVA : les noms viennent de
+# factory.conf par label_get (card-state.sh) ; un skill qui en tape un
+# débloque ou lit sous un mot que la sélection ne connaît pas. Seul le
+# marqueur `factory:decision` (pas un label) est permis.
+for F in "$REPO"/skill/eva/*/SKILL.md; do
+  if grep -qE 'factory:(needs-human|in-progress|staged|blocked|epic|delivered|priority)' "$F"; then
+    fail "$(basename "$(dirname "$F")") : un nom de label factory:* en dur ($(grep -oE 'factory:[a-z-]+' "$F" | sort -u | tr '\n' ' '))"
+  fi
+done
+grep -q 'card-state.sh <n> decided' "$REPO/skill/eva/factory-decision/SKILL.md" || fail "factory-decision : la décision ne passe pas par card-state.sh decided"
 
 # 6. Le SOUL.
 SOUL="$REPO/nix/eva-soul.md"

@@ -13,6 +13,9 @@ fix() { printf '%s' "$2" > "$H/$(printf '%s' "$1" | tr '/?&=%:' '______').json";
 fix 'repos/o/r/issues?state=open&labels=factory%3Aneeds-human&per_page=100' '[]'
 fix 'repos/o/r/issues?state=open&labels=factory%3Astaged&per_page=100' '[{"number":5,"title":"Le CRM"}]'
 fix 'repos/o/r/pulls?state=open&per_page=100' '[]'
+# Les cartes d'alerte (source g de eva-watch.sh) : sans feature permanente, la
+# liste des issues ouvertes, filtrée sur la marque du triage.
+fix 'repos/o/r/issues?state=open&per_page=100' '[]'
 run() { set +e; out="$(bash "$S" 2>"$TESTTMP/err")"; rc=$?; set -e; err="$(cat "$TESTTMP/err")"; }
 
 # a) Aucune décision : rien, même si le stock et le reste ont des choses à dire.

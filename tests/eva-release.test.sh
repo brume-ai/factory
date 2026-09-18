@@ -32,15 +32,18 @@ H="$FAKE_HTTP_DIR"
 fix() {  # <chemin api> <corps json>
   printf '%s' "$2" > "$H/$(printf '%s' "$1" | tr '/?&=%:' '______').json"
 }
-card() {  # <n> <état> <titre> [parent] [labels json]
-  local parent=""
-  [ -z "${4:-}" ] || parent=",\"parent_issue_url\":\"https://api.github.com/repos/o/r/issues/$4\""
-  fix "repos/o/r/issues/$1" "{\"number\":$1,\"state\":\"$2\",\"title\":\"$3\",\"type\":{\"name\":\"Task\"}$parent,\"labels\":[${5:-}]}"
+# Les clés `parent_issue_url`, `type` et `sub_issues_summary` sont TOUJOURS
+# présentes (null, zéro) : c'est ce que l'API rend, et gh-feature.py refuse une
+# issue qui ne les porte pas plutôt que de lire « pas de parent ».
+card() {  # <n> <état> <titre> [parent] [labels json] [sous-issues "total,complétées"]
+  local parent=null sub="${6:-0,0}"
+  [ -z "${4:-}" ] || parent="\"https://api.github.com/repos/o/r/issues/$4\""
+  fix "repos/o/r/issues/$1" "{\"number\":$1,\"state\":\"$2\",\"title\":\"$3\",\"type\":{\"name\":\"Task\"},\"parent_issue_url\":$parent,\"sub_issues_summary\":{\"total\":${sub%,*},\"completed\":${sub#*,}},\"labels\":[${5:-}]}"
   fix "repos/o/r/issues/$1/comments?per_page=100" '[]'
   fix "repos/o/r/issues/$1/comments" '{}'
 }
 feature() {  # <n> <état> <titre> <total> <complétées> [labels json]
-  fix "repos/o/r/issues/$1" "{\"number\":$1,\"state\":\"$2\",\"title\":\"$3\",\"type\":{\"name\":\"Feature\"},\"sub_issues_summary\":{\"total\":$4,\"completed\":$5},\"labels\":[${6-{\"name\":\"factory:staged\"\}}]}"
+  fix "repos/o/r/issues/$1" "{\"number\":$1,\"state\":\"$2\",\"title\":\"$3\",\"type\":{\"name\":\"Feature\"},\"parent_issue_url\":null,\"sub_issues_summary\":{\"total\":$4,\"completed\":$5},\"labels\":[${6-{\"name\":\"factory:staged\"\}}]}"
   fix "repos/o/r/issues/$1/comments?per_page=100" '[]'
   fix "repos/o/r/issues/$1/comments" '{}'
 }
@@ -133,15 +136,23 @@ run --version v0.9.0
 assert_rc 3 "$rc" "--version sous le dernier tag : 3"
 
 # --- c) PATCH QUAND AUCUNE FEATURE -------------------------------------------------
-# La même plage, mais #5 n'est plus une Feature : deux cartes orphelines
-# (chacune sa mini-feature, mergée par EVA donc étiquetée) et un hotfix — des
-# correctifs, donc patch.
-fix 'repos/o/r/issues/5' '{"number":5,"state":"open","title":"Un lot","type":{"name":"Task"},"labels":[]}'
-card 12 closed "Le filtre souverain" 5 '{"name":"factory:staged"}'
-card 13 closed "La modal ne dit rien" 5 '{"name":"factory:staged"}'
+# La même plage, mais #5 n'est plus une Feature : une Task qui porte #12 et
+# #13 — sans Feature dans la chaîne, la RACINE est la mini-feature
+# (gh-feature.py), donc #5 est la mini-feature de ses deux cartes, mergée par
+# EVA (étiquetée), complète — la racine est FERMÉE, c'est la carte du hotfix
+# — et un hotfix. Des correctifs, donc patch.
+card 5 closed "Un lot" "" '{"name":"factory:staged"}' 2,2
 run
-assert_rc 0 "$rc" "patch : rc 0"
+assert_rc 0 "$rc" "patch : rc 0 ($err)"
 assert_contains "$out" "version: v1.0.1 (patch" "patch : aucune Feature dans le lot"
+assert_contains "$out" "#5	Un lot" "patch : la racine de la chaîne est la mini-feature"
+assert_contains "$out" "  #12	Le filtre souverain" "patch : et #12 est sa carte, pas sa propre mini-feature"
+# LA RACINE OUVERTE : 2/2 sous-issues fermées mais le hotfix lui-même ne l'est
+# pas (needs-human) — incomplète, refus, jamais sortie « complète ».
+card 5 open "Un lot" "" '{"name":"factory:staged"}' 2,2
+run
+assert_rc 1 "$rc" "racine ouverte : refus 1"
+assert_contains "$out" "#5	Un lot	(incomplète : 2/2 cartes fermées, racine #5 ouverte" "racine ouverte : dite, avec la raison"
 feature 5 open "Le CRM" 2 2
 card 12 closed "Le filtre souverain" 5
 card 13 closed "La modal ne dit rien" 5
@@ -179,6 +190,33 @@ run --force-incomplete
 assert_rc 1 "$rc" "sans staged : --force-incomplete ne force pas ca"
 feature 5 open "Le CRM" 2 2
 
+# --- d3 bis) LA FEATURE PERMANENTE DES ALERTES NE BLOQUE JAMAIS --------------------------
+# Incomplète (une alerte reste ouverte) : sans la clé, refus ; avec la clé,
+# la release sort — un correctif de sécurité n'attend pas que TOUTES les
+# alertes soient réparées. Et sans `factory:staged` non plus.
+feature 5 open "Le CRM" 3 2
+run
+assert_rc 1 "$rc" "sans clé : une feature incomplète bloque"
+FACTORY_SECURITY_FEATURE=5 run
+assert_rc 0 "$rc" "feature permanente incomplète : rc 0 sans --force-incomplete ($err)"
+assert_contains "$out" "#5	Le CRM	(feature permanente des alertes : ni fermée ni bloquante)" "feature permanente : dite sur la liste"
+assert_not_contains "$err" "REFUS" "feature permanente : aucun refus"
+# Seule dans le lot, la feature permanente n'est pas une nouveaute : patch.
+assert_contains "$out" "(patch" "feature permanente seule : patch, pas minor"
+feature 5 open "Le CRM" 2 2 ''
+FACTORY_SECURITY_FEATURE=5 run
+assert_rc 0 "$rc" "feature permanente sans staged : rc 0 ($err)"
+feature 5 open "Le CRM" 2 2
+FACTORY_SECURITY_FEATURE=abc run
+assert_rc 3 "$rc" "clé qui n'est pas un numéro : 3"
+
+# --- d3 ter) UN LECTEUR QUI REND UN JSON INCOMPLET EST UN 3, PAS UN LOT VIDE ---------------
+printf '%s\n' '#!/usr/bin/env python3' 'print("{\"cards\": []}")' > "$TESTTMP/faux-gh-feature.py"
+GH_FEATURE_PY="$TESTTMP/faux-gh-feature.py" run
+assert_rc 3 "$rc" "lot illisible : 3"
+assert_contains "$err" "illisible" "lot illisible : dit"
+assert_file_lacks "$H/calls.log" "POST" "lot illisible : rien n'est écrit"
+
 # --- d4) UNE FEATURE CITÉE DIRECTEMENT RESTE HORS DU LOT ------------------------------
 g checkout -q staging
 g commit -q --allow-empty -m "chore: cite la feature
@@ -195,7 +233,7 @@ g checkout -q staging; g reset -q --hard HEAD~1; g push -q -f origin staging; g 
 # --- d5) UN PARENT HORS DU DÉPÔT EST UN REFUS ----------------------------------------
 # Réduire `parent_issue_url` à son numéro ferait d'un parent dans un autre
 # dépôt une issue du nôtre — et #5 est justement une feature ici.
-fix 'repos/o/r/issues/12' '{"number":12,"state":"closed","title":"Le filtre souverain","type":{"name":"Task"},"parent_issue_url":"https://api.github.com/repos/autre/depot/issues/5","labels":[]}'
+fix 'repos/o/r/issues/12' '{"number":12,"state":"closed","title":"Le filtre souverain","type":{"name":"Task"},"parent_issue_url":"https://api.github.com/repos/autre/depot/issues/5","sub_issues_summary":{"total":0,"completed":0},"labels":[]}'
 run
 assert_rc 3 "$rc" "parent hors depot : 3"
 assert_contains "$err" "autre/depot" "parent hors depot : le depot est nomme"
@@ -268,6 +306,14 @@ printf '500' > "$H/repos_o_r_actions_runs_branch_main_head_sha_m1_per_page_100.c
 run --apply --ordre "slack:3b" --version 1.1.0 --tete "$TETE"
 assert_rc 1 "$rc" "CI qui flanche : 1, pas 4"
 assert_eq "deploiement: timeout" "$(printf '%s\n' "$out" | tail -n1)" "CI qui flanche : le verdict est quand meme rendu"
+rm -f "$H/repos_o_r_actions_runs_branch_main_head_sha_m1_per_page_100.code"
+# UN REFUS DE L'API PENDANT LE SONDAGE (403 : l'App sans « Actions: Read »)
+# rend quand même la dernière ligne : la release est sortie, EVA doit le dire.
+printf '403' > "$H/repos_o_r_actions_runs_branch_main_head_sha_m1_per_page_100.code"
+run --apply --ordre "slack:3c" --version 1.1.0 --tete "$TETE"
+assert_rc 1 "$rc" "runs refusés : 1, pas 3"
+assert_eq "deploiement: inconnu" "$(printf '%s\n' "$out" | tail -n1)" "runs refusés : le verdict est « inconnu », en dernière ligne"
+assert_contains "$H/calls.log" 'POST repos/o/r/releases' "runs refusés : la release est sortie"
 rm -f "$H/repos_o_r_actions_runs_branch_main_head_sha_m1_per_page_100.code"
 # `cancelled` n'est pas vert.
 fix 'repos/o/r/actions/runs?branch=main&head_sha=m1&per_page=100' '{"workflow_runs":[{"status":"completed","conclusion":"cancelled"}]}'

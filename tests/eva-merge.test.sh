@@ -195,8 +195,19 @@ nominal; fix 'repos/o/r/commits/s12/check-runs?per_page=100' '{"check_runs":[{"c
 refuse "CI en cours" "tourne encore"
 nominal; fix 'repos/o/r/commits/s12/check-runs?per_page=100' '{"check_runs":[],"total_count":0}'
 refuse "sans CI" "aucun contrôle"
-nominal; fix 'repos/o/r/commits/s12/check-runs?per_page=100' '{"check_runs":[{"conclusion":"success","status":"completed"}],"total_count":101}'
-refuse "CI tronquee" "plus de cent contrôles"
+# PLUS DE CENT CONTRÔLES : la liste est lue PAGE APRÈS PAGE (checks_verdict,
+# lib.sh), jamais « tronquée » ; le rouge en page deux refuse, 101 verts mergent.
+verts100="$(python3 -c 'import json; print(json.dumps({"check_runs":[{"name":"j%d"%i,"conclusion":"success","status":"completed"} for i in range(100)],"total_count":101}))')"
+nominal; fix 'repos/o/r/commits/s12/check-runs?per_page=100' "$verts100"
+fix 'repos/o/r/commits/s12/check-runs?per_page=100&page=2' '{"check_runs":[{"name":"e2e","conclusion":"failure","status":"completed"}],"total_count":101}'
+refuse "CI rouge en page deux" "la CI est rouge (ou annulée, ou expirée) sur s12 : e2e"
+assert_contains "$H/calls.log" "check-runs?per_page=100&page=2" "page deux : la seconde page est lue"
+nominal; fix 'repos/o/r/commits/s12/check-runs?per_page=100' "$verts100"
+fix 'repos/o/r/commits/s12/check-runs?per_page=100&page=2' '{"check_runs":[{"name":"e2e","conclusion":"success","status":"completed"}],"total_count":101}'
+run 12 --ordre "slack:2" --tete s12
+assert_rc 0 "$rc" "101 contrôles verts : mergée ($err)"
+assert_contains "$H/calls.log" "PUT repos/o/r/pulls/12/merge" "101 verts : le merge a lieu"
+rm -f "$H/repos_o_r_commits_s12_check-runs_per_page_100_page_2.json"
 # `cancelled` n'est PAS vert : la liste blanche, pas la liste noire.
 nominal; fix 'repos/o/r/commits/s12/check-runs?per_page=100' '{"check_runs":[{"conclusion":"cancelled","status":"completed"}],"total_count":1}'
 refuse "CI annulee" "la CI est rouge"
