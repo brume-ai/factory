@@ -19,10 +19,10 @@ assert_contains "$FAKE_HTTP_DIR/calls.log" "GET repos/o/r/pulls" "journal des ap
 # claude -p --output-format json : UN objet, `result`, `modelUsage` dont les
 # clés sont les modèles appelés.
 printf 'texte\n' > "$FAKE_CLI_DIR/claude.response"
-out="$(claude -p --output-format json --model claude-opus-5 "prompt")"
+out="$(printf 'prompt' | claude -p --output-format json --model claude-opus-5)"
 assert_eq "texte" "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["result"].strip())')" "claude : result"
 assert_eq "claude-opus-5" "$(printf '%s' "$out" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["modelUsage"]))')" "claude : modelUsage porte le modèle de --model"
-assert_contains "$FAKE_CLI_DIR/calls.log" "claude -p --output-format json --model claude-opus-5 <prompt>" "claude : journal, prompt masqué"
+assert_contains "$FAKE_CLI_DIR/calls.log" "claude -p --output-format json --model claude-opus-5 <stdin>" "claude : journal, prompt sur stdin"
 # codex exec --json : des lignes JSON — thread.started (thread_id),
 # item.completed (agent_message), turn.completed — SANS modèle ; le modèle
 # est dans le rollout $CODEX_HOME/sessions/<date>/rollout-*-<thread_id>.jsonl,

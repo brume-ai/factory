@@ -23,8 +23,12 @@ while [ "$i" -lt "$n" ]; do
   case "${args[$i]}" in --model) i=$((i+1)); model="${args[$i]}" ;; esac
   i=$((i+1))
 done
-printf '%s' "${args[$((n-1))]}" > "$FAKE_CLI_DIR/claude.last-prompt"
-printf 'claude %s <prompt>\n' "${args[*]:0:$((n-1))}" >> "$FAKE_CLI_DIR/calls.log"
+# LE PROMPT ARRIVE SUR STDIN (role.sh, depuis le 18 septembre 2026 : un prompt
+# en dernier argument après --allowedTools était avalé par l'option variadique).
+# Le faux le lit là, et journalise TOUS les arguments : un prompt qui
+# reviendrait en argument se verrait dans calls.log.
+cat > "$FAKE_CLI_DIR/claude.last-prompt"
+printf 'claude %s <stdin>\n' "${args[*]}" >> "$FAKE_CLI_DIR/calls.log"
 if [ -f "$FAKE_CLI_DIR/claude.rc" ]; then
   echo "fake-claude: échec simulé" >&2
   exit "$(cat "$FAKE_CLI_DIR/claude.rc")"
