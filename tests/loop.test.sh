@@ -5,7 +5,7 @@
 # la seule surface du depot ou un nom de branche decide d'un geste d'ECRITURE
 # (fetch, merge --ff-only, et la garde qui autorise le depart) ; et c'est elle
 # qui enchaine selection → feature-up → tour → porte → livraison, avec un
-# repertoire de tour qui persiste, une base ecrite UNE fois, et une porte
+# repertoire de tour qui persiste, une base reecrite a chaque admission, et une porte
 # rejouee dans SON environnement. Chaque maillon est un stub qui journalise ;
 # la boucle, elle, est la vraie.
 . "$(dirname "$0")/helpers.sh"
@@ -158,18 +158,19 @@ echo ok
 
 # --- 4. LA BASE EST ECRITE UNE FOIS, PUIS RELUE -----------------------------------
 # Un second tour de la meme carte : feature-up rend une AUTRE base (la branche a
-# avance), mais le tour relit celle du premier — sinon l'analyste de la reprise
-# ne verrait jamais la base contre laquelle le premier codeur a travaille.
+# avance : une autre carte a ete livree entre-temps). La base EST REECRITE —
+# origin/feature/<F> maintenant. Mesure la nuit de la mise en service : une base
+# relue faisait lire a la porte les commits de l'autre carte comme « d'un tour
+# precedent sans preuve ». Les commits propres de la carte sont au-dessus
+# d'origin ; ce que l'analyste doit avoir vu est head-admission.
 C4="$TESTTMP/conso-base"; conso "$C4"
 mkdir -p "$C4/.omc/turn/12"; printf 'base-du-premier-tour' > "$C4/.omc/turn/12/base"
-# ... ALORS QUE head-admission, ELLE, EST REECRITE : celle du premier tour
-# (posee ici) ne vaut plus, le worktree a une autre tete maintenant.
 printf 'tete-du-premier-tour' > "$C4/.omc/turn/12/head-admission"
 raz; printf 'sha-avance' > "$TESTTMP/base"; touch "$TESTTMP/agent.pret"
 tour "$C4" > "$TESTTMP/base.out" 2>&1
-assert_eq "base-du-premier-tour" "$(cat "$C4/.omc/turn/12/base")" "la base n'est pas reecrite"
-assert_contains "$TESTTMP/agent.log" "Base : base-du-premier-tour" "l'orchestrateur recoit la base du premier tour"
-assert_eq "12 $C4/.worktrees/feature-3 base-du-premier-tour" "$(cat "$TESTTMP/verify.log")" "la porte aussi"
+assert_eq "sha-avance" "$(cat "$C4/.omc/turn/12/base")" "la base est reecrite a chaque admission : origin/feature/<F> maintenant"
+assert_contains "$TESTTMP/agent.log" "Base : sha-avance" "l'orchestrateur recoit la base courante"
+assert_eq "12 $C4/.worktrees/feature-3 sha-avance" "$(cat "$TESTTMP/verify.log")" "la porte aussi"
 assert_eq "$(git -C "$C4/.worktrees/feature-3" rev-parse HEAD)" "$(cat "$C4/.omc/turn/12/head-admission")" \
   "head-admission est reecrite a chaque admission : HEAD du worktree maintenant, pas celle du premier tour"
 echo ok

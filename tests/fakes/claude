@@ -29,6 +29,8 @@ done
 # reviendrait en argument se verrait dans calls.log.
 cat > "$FAKE_CLI_DIR/claude.last-prompt"
 printf 'claude %s <stdin>\n' "${args[*]}" >> "$FAKE_CLI_DIR/calls.log"
+# claude.hang : le faux ne rend jamais la main (un role.sh que la boucle tue).
+if [ -f "$FAKE_CLI_DIR/claude.hang" ]; then sleep 60; fi
 if [ -f "$FAKE_CLI_DIR/claude.rc" ]; then
   echo "fake-claude: échec simulé" >&2
   exit "$(cat "$FAKE_CLI_DIR/claude.rc")"
