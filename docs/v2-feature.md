@@ -207,16 +207,33 @@ doc/config peut s'en passer, sur justification écrite dans l'artefact :
 officielles). Un rôle hors catalogue est refusé par la boucle : c'est un coût et
 une identité que personne n'a validés.
 
-**Les règles tiennent en bash, pas en prompt.** Chaque phase dépose un artefact
-sous `.factory/turn/<n>/` — `etat-des-lieux.md`, `plan.md`,
-`review-maint.json` (verdict, compteur), `review-secu.json`, `docs.json`,
-`equipe.json` — où **le modèle est inscrit par le CLI**, jamais déclaré par
-l'agent. Le push sur `feature/*` est **refusé** si un artefact obligatoire
-manque, si le verdict sécurité n'est pas vert, si le compteur maintenabilité
-dépasse N sans `needs-human`, si un rôle est hors catalogue, ou si un artefact
-porte un autre modèle que celui du rôle. La liberté de composer l'équipe reste
-entière *au-dessus* de ce socle. C'est la leçon du 17 septembre : une consigne
-sans vérification a laissé un agent seul faire quinze cartes.
+**Les règles tiennent en bash, pas en prompt.** Chaque rôle est lancé par
+`role.sh` et dépose sous `.omc/turn/<issue>/` (à la racine de l'arbre
+principal, jamais dans le worktree) : `<rôle>-<k>.prompt.md` (le prompt
+envoyé), `<rôle>-<k>.brut` (la sortie du CLI, telle quelle), `<rôle>-<k>.md`
+(la réponse), `<rôle>-<k>.stderr`, et `<rôle>-<k>.json` (modèle attendu et
+prouvé, verdict, fenêtre `debut`/`fin`, `head_avant`/`head_apres`) ; l'analyste
+laisse aussi `analyse.json`. L'orchestrateur y écrit `card.json`,
+`socle-omis.md` (la justification d'une carte doc sans socle), `livraison.md`
+(le commentaire que la boucle poste) et `pret` (le signal du push). **Le
+modèle est inscrit par le CLI**, jamais déclaré par l'agent. `turn-verify.sh`
+**refuse** le push sur `feature/*` si un artefact obligatoire manque, si le
+verdict sécurité n'est pas vert, si le compteur maintenabilité dépasse N sans
+`needs-human`, si un rôle est hors catalogue, si un artefact porte un autre
+modèle que celui du catalogue, si le dernier relecteur n'a pas vu la tête
+poussée, ou si un commit n'est tombé dans la fenêtre d'aucun rôle qui écrit.
+La liberté de composer l'équipe reste entière *au-dessus* de ce socle. C'est
+la leçon du 17 septembre : une consigne sans vérification a laissé un agent
+seul faire quinze cartes.
+
+**Ce que la porte ferme, et ce qu'elle ne ferme pas.** Elle protège contre un
+orchestrateur qui néglige, pas contre un qui triche à uid égal : ce qu'elle
+exige est que la preuve vienne du CLI, recalculée depuis sa sortie brute
+(`modelUsage` relu dans le `.brut`, `turn_context` relu dans le rollout que
+l'artefact nomme). Fermer la classe adversariale (`role.sh` sous un uid
+distinct, artefacts signés) est une décision de T2 ; le cycle de vie de
+`.omc/turn/<issue>/` (remise à zéro, levée d'une faille après arbitrage, N par
+tour ou par carte) aussi.
 
 **La trace dans la PR** : un commentaire de livraison par carte — ce qui a été
 fait, ce qui a été vérifié, les captures, le plan cité, et **une ligne par
@@ -304,6 +321,9 @@ si l'une gêne :
   feature : brouillon, puis prête à la première carte livrée.
 - Un budget (durée, coût) par tour, comme garde-fou ; la valeur se fixe à
   l'implémentation, sur mesure.
+- Les artefacts du tour vivent sous `.omc/turn/<issue>/` — le répertoire
+  d'orchestration que `.gitignore` exclut déjà — et non sous un `.factory/`
+  neuf : un seul endroit ignoré, pas deux.
 
 ## Vérifié le 18 septembre 2026, avant la première ligne
 

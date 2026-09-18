@@ -6,8 +6,15 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 t_setup() {
   TESTTMP="$(mktemp -d)"
   trap 'rm -rf "$TESTTMP"' EXIT
-  mkdir -p "$TESTTMP/http"
+  mkdir -p "$TESTTMP/http" "$TESTTMP/cli" "$TESTTMP/codex"
   export FAKE_HTTP_DIR="$TESTTMP/http"
+  # LES FAUX CLI (tests/fakes/claude, tests/fakes/codex) SONT PILOTÉS COMME LE
+  # FAUX CURL : des fichiers dans un répertoire du test, un journal des appels.
+  # CODEX_HOME est posé ICI, pour tous les tests, parce que le faux codex y
+  # écrit un rollout et qu'un test qui l'oublierait ferait écrire le faux dans
+  # le vrai ~/.codex de qui lance la suite.
+  export FAKE_CLI_DIR="$TESTTMP/cli"
+  export CODEX_HOME="$TESTTMP/codex"
   export FACTORY_ROOT="$TESTTMP"
   export FACTORY_TOKEN="t0k3n"
   export PATH="$REPO/tests/fakes:$PATH"
@@ -21,6 +28,13 @@ t_setup() {
   unset FACTORY_STAGED_LABEL FACTORY_BUSY_LABEL FACTORY_BLOCKED_LABEL \
         FACTORY_HUMAN_LABEL FACTORY_EPIC_LABEL FACTORY_DONE_LABEL \
         FACTORY_PRIORITY_LABEL
+  # Même règle pour le catalogue des rôles et ce qui lance leurs CLI : un
+  # FACTORY_ROLE_CODEUR ou un CLAUDE_BIN exporté par le shell ferait passer une
+  # suite qui ne prouve plus le défaut du catalogue, ni que factory.conf est lu.
+  unset FACTORY_ROLE_ANALYSTE FACTORY_ROLE_CODEUR FACTORY_ROLE_RELECTEUR_MAINT \
+        FACTORY_ROLE_RELECTEUR_SECU FACTORY_ROLE_WRITER FACTORY_ROLE_TEST_ENGINEER \
+        FACTORY_ROLE_DESIGNER FACTORY_ROLE_DOCUMENT_SPECIALIST FACTORY_REVIEW_MAX FACTORY_REFACTO_MAX \
+        CLAUDE_BIN CODEX_BIN CLAUDE_ROLE_LAUNCH CODEX_ROLE_LAUNCH
 }
 
 assert_eq() {  # <attendu> <obtenu> <message>

@@ -253,6 +253,79 @@ grep -qF "<Tend_A_Pull_Request>" "$REPO/factory.mk" \
   || fail "factory.mk ne cite plus <Tend_A_Pull_Request> : le prompt et le skill ont diverge"
 
 # ---------------------------------------------------------------------------
+# 9 bis. LES SKILLS DE LA V2 PASSENT LES MEMES CONTROLES GENERIQUES. Le skill de
+# l'orchestrateur et les huit prompts de role sont servis TELS QUELS a tous les
+# consommateurs, comme github-loop : un motif d'un depot, un nom de branche en
+# dur, un `Closes #` ou un `git push` dans un bloc de code y coutent la meme
+# chose. On rejoue ici les controles 1, 2, 3, 4 et 7, fichier par fichier ; les
+# controles propres a la procedure v1 (6, 8, 9) ne s'appliquent pas. `git push`
+# s'ajoute a la liste des commandes interdites : dans la v2, l'orchestrateur ne
+# pousse JAMAIS — la boucle pousse sur `pret` — et un bloc de code qui le
+# montre est ce qu'un agent copie.
+for F in "$REPO/skill/orchestrator/SKILL.md" "$REPO"/skill/roles/*.md; do
+  nom="${F#"$REPO"/}"
+  [ -f "$F" ] || fail "skill v2 absent : $nom"
+  for motif in "vincent-lahaye" "wt.sh" "eva-brume-agent" "vlh.agency" "--from demo" \
+               "tools/factory/gh-" "eva-psr-agent" "Laravel Cloud" "db:sync" \
+               "gh-promotion-pr" "gh-review-cards" "factory-close-cards" "docs/superpowers"; do
+    if grep -qF -- "$motif" "$F"; then fail "$nom : motif d'un depot restant : $motif"; fi
+  done
+  h="$(grep -niF -- "promotion" "$F" || true)"
+  [ -z "$h" ] || fail "$nom : politique de promotion d'un depot :
+$h"
+  h="$(awk '/^```/ { f = 1 - f; next } f == 1 { printf "%d\t%s\n", NR, $0 }' "$F" | grep -E '\b(main|staging)\b' || true)"
+  [ -z "$h" ] || fail "$nom : nom de branche en dur dans un bloc de code :
+$h"
+  h="$(grep -nE '`(main|staging)`' "$F" || true)"
+  [ -z "$h" ] || fail "$nom : nom de branche en dur en prose :
+$h"
+  h="$(grep -nE '\bstaging\b' "$F" || true)"
+  [ -z "$h" ] || fail "$nom : nom de branche de travail d'un depot (staging) :
+$h"
+  h="$(grep -n 'conf_get FACTORY_\|FACTORY_TRUNK' "$F" || true)"
+  [ -z "$h" ] || fail "$nom : relit une cle de l'usine ou nomme la branche de production :
+$h"
+  for p in $(grep -oE 'tools/factory/bin/[A-Za-z0-9_.-]+\.(sh|py)' "$F" | sort -u); do
+    [ -f "$REPO/bin/${p#tools/factory/bin/}" ] || fail "$nom : chemin cite inexistant : $p"
+  done
+  for sc in $(grep -oE '\b(gh|role|turn)-[a-z0-9-]+\.(sh|py)' "$F" | sort -u); do
+    [ -f "$REPO/bin/$sc" ] || fail "$nom : script nomme mais inexistant : $sc (voir bin/)"
+  done
+  for m in 'Closes #' 'factory:staged' 'gh pr merge' 'gh pr review' 'git push' 'gh issue close'; do
+    h="$(awk '/^```/ { f = 1 - f; next } f == 1 { printf "%d\t%s\n", NR, $0 }' "$F" | grep -F -- "$m" || true)"
+    [ -z "$h" ] || fail "$nom : commande interdite dans un bloc de code ($m) :
+$h"
+  done
+done
+# L'orchestrateur a des balises equilibrees (controle 4) et un frontmatter.
+awk '
+  /^<\/?[A-Z][A-Za-z_]*>$/ {
+    t = $0
+    if (substr(t, 2, 1) == "/") {
+      n = substr(t, 3, length(t) - 3)
+      if (top == 0)          { print "fermante orpheline <" n "> ligne " NR; exit 1 }
+      if (st[top] != n)      { print "<" st[top] "> ferme par <" n "> ligne " NR; exit 1 }
+      top--
+    } else {
+      st[++top] = substr(t, 2, length(t) - 2)
+    }
+  }
+  END { if (top > 0) { print "balise jamais fermee : <" st[top] ">"; exit 1 } }
+' "$REPO/skill/orchestrator/SKILL.md" || fail "skill/orchestrator : balises desequilibrees (voir ci-dessus)"
+[ "$(sed -n 1p "$REPO/skill/orchestrator/SKILL.md")" = "---" ] || fail "skill/orchestrator : pas de frontmatter"
+grep -q '^name: orchestrator$' "$REPO/skill/orchestrator/SKILL.md" || fail "skill/orchestrator : frontmatter sans name"
+# ET LES HUIT ROLES DU CATALOGUE ONT LEUR PROMPT, et rien de plus : un fichier
+# de trop serait un role que role.sh refuse (3) mais que l'orchestrateur croit
+# exister ; un fichier de moins, un role du catalogue que role.sh refuse.
+attendus="analyste codeur designer document-specialist relecteur-maint relecteur-secu test-engineer writer"
+vus="$(ls "$REPO/skill/roles" | sed 's/\.md$//' | sort | tr '\n' ' ' | sed 's/ $//')"
+[ "$vus" = "$attendus" ] || fail "skill/roles : le catalogue et les prompts divergent (vus : $vus)"
+for r in relecteur-maint relecteur-secu; do
+  grep -q 'VERDICT: ok' "$REPO/skill/roles/$r.md" || fail "skill/roles/$r.md ne dit pas la forme du verdict"
+done
+grep -q '```json' "$REPO/skill/roles/analyste.md" || fail "skill/roles/analyste.md ne dit pas la forme du bloc JSON final"
+
+# ---------------------------------------------------------------------------
 # SOUS MUTATION, ON S'ARRETE ICI : ce qui suit relance ce fichier, et un mutant
 # qui engendre des mutants ne s'arrete jamais.
 if [ -n "${SKILL_TEST_MUTANT:-}" ]; then echo "ok-lint"; exit 0; fi

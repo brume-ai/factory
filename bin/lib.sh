@@ -179,6 +179,42 @@ label_get() {  # <rôle> : imprime le nom du label ; 3 sur un rôle inconnu
   esac
 }
 
+# LE CATALOGUE DES RÔLES DU TOUR, FERMÉ, ET SON UNIQUE LECTEUR (docs/v2-feature.md
+# § 4). Un rôle est un NOM et un MODÈLE ; le CLI qui le fait poper se déduit du
+# modèle (préfixe `claude-` → claude, sinon codex), donc il n'y a rien d'autre à
+# écrire ici. Même esprit que `label_get` : le défaut de chaque modèle vit à UN
+# endroit, la clé de factory.conf le surcharge, et on appelle par RÔLE — jamais
+# `conf_get FACTORY_ROLE_CODEUR gpt-6-astra` ailleurs, sinon le défaut retrouve
+# un second domicile et deux lecteurs finissent par lancer deux modèles
+# différents sous le même nom de rôle.
+#
+# POURQUOI LE CATALOGUE EST FERMÉ. Un rôle hors catalogue est un coût et une
+# identité que personne n'a validés ; la boucle REFUSE le push d'un tour qui en
+# porte un (turn-verify.sh). C'est la leçon du 17 septembre : « composez l'équipe
+# adaptée » sans liste a laissé un agent seul faire quinze cartes. Le catalogue
+# est donc à la fois ce que role.sh accepte de lancer et ce que turn-verify.sh
+# accepte de lire — une seule liste, ici.
+#
+# UN RÔLE INCONNU REND 3 ET N'IMPRIME RIEN, comme `label_get`, et pour la même
+# raison : un modèle VIDE lancerait le CLI sur son modèle par défaut, c'est-à-dire
+# un modèle que personne n'a choisi pour ce rôle — précisément ce que la preuve
+# de modèle existe pour empêcher. Ne jamais écrire `local X="$(role_get …)"`.
+role_get() {  # <rôle> : imprime le modèle du rôle ; 3 sur un rôle inconnu
+  case "${1:-}" in
+    analyste)            conf_get FACTORY_ROLE_ANALYSTE            claude-opus-5 ;;
+    codeur)              conf_get FACTORY_ROLE_CODEUR              gpt-6-astra ;;
+    relecteur-maint)     conf_get FACTORY_ROLE_RELECTEUR_MAINT     claude-opus-5 ;;
+    relecteur-secu)      conf_get FACTORY_ROLE_RELECTEUR_SECU      claude-fable-5-1 ;;
+    writer)              conf_get FACTORY_ROLE_WRITER              claude-haiku-4-5-20251001 ;;
+    test-engineer)       conf_get FACTORY_ROLE_TEST_ENGINEER       claude-fable-5-1 ;;
+    designer)            conf_get FACTORY_ROLE_DESIGNER            gpt-6-astra ;;
+    document-specialist) conf_get FACTORY_ROLE_DOCUMENT_SPECIALIST claude-haiku-4-5-20251001 ;;
+    *)
+      echo "factory: role_get « ${1:-} » : rôle hors catalogue. Les huit rôles sont analyste codeur relecteur-maint relecteur-secu writer test-engineer designer document-specialist." >&2
+      return 3 ;;
+  esac
+}
+
 # LE VERDICT DE CI, ÉCRIT UNE FOIS, LU PAR L'INTÉGRATION ET PAR L'ENTRETIEN.
 # Lit sur stdin la réponse de `commits/<sha>/check-runs?per_page=100` et
 # imprime UN mot : ok · failure · pending · none · truncated.
