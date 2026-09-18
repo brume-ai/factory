@@ -8,9 +8,47 @@ Chaque entrée porte la même forme : le fait qui la rend nécessaire, la décis
 ce qu'elle exige, et ce qui reste à vérifier. Une décision dont le fait n'est pas
 écrit se rediscute tous les mois.
 
-**L'ordre compte.** Le modèle de release est livré (`docs/release.md`) ; ce qui
-reste commence donc par le trou qu'il laisse ouvert — toute la garantie tient
-maintenant sur une protection de branche que rien ne vérifie.
+**L'ordre compte.** Le modèle de release est livré (`docs/release.md`) — et il
+est remplacé : le 17 septembre 2026, ses deux conditions non négociables se sont
+révélées fausses sur le premier dépôt consommateur. Ce qui reste commence donc
+par le modèle qui le remplace ; les chantiers suivants sont à relire à travers
+lui, et le n° 1 (vérifier la protection de branche) perd son objet.
+
+---
+
+## 0. La v2 : la feature comme unité de livraison — `docs/v2-feature.md`
+
+### Le fait
+
+Quinze cartes intégrées dans `staging` en seize heures sans qu'un humain ait vu
+un diff ; un agent seul par carte, sans relecteur, alors que le skill dit
+« composez l'équipe » ; une file vide sur quinze décisions humaines que l'usine
+répétait à journald et à personne d'autre. Le détail est en tête du document.
+
+### La décision
+
+Une feature (issue GitHub, sous-issues natives pour les cartes) = une branche =
+un worktree = une PR vers `staging`, relue **par lot** ; Pony commite
+directement et ne merge plus rien ; EVA seule écrit sur `staging` et `main`,
+sur un ordre Slack ou un *approve* ; le tour est une équipe orchestrée par
+Claude (Codex code, Opus relit, Fable garde la sécurité) dont chaque rôle
+obligatoire laisse un artefact **vérifié par la boucle avant tout push** ; EVA
+interviewe l'humain sur chaque décision, avec des heures calmes ; preview par PR
+sur la machine, pour l'humain seul.
+
+### Ce qu'elle exige
+
+Réécrire `docs/release.md` en le remplaçant par `docs/v2-feature.md` ; retirer
+`gh-stage-pr.sh` et les labels de cycle des cartes ; un orchestrateur de tour
+en bash (phases, artefacts, refus de push) ; un skill par rôle ; le SOUL d'EVA
+et ses droits ; les hooks de preview côté consommateur ; `DOCS.md` comme contrat
+optionnel. La v1 reste arrêtée sur Paris Showroom jusque-là.
+
+### Ce qui reste à vérifier
+
+La section « À vérifier avant la première ligne » du document : types d'issue
+en plan gratuit, modèles joignables depuis le conteneur, preuve du modèle dans
+la sortie des CLI, DNS des previews.
 
 ---
 
