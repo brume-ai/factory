@@ -91,7 +91,11 @@ LOOP_MAIN_BIN    := claude
 # Laravel disparaissent de la liste, ceux de l'utilisateur restent. Les rôles
 # (role.sh) gardent les skills du projet : le codeur et les relecteurs en ont
 # l'usage, l'orchestrateur non.
-LOOP_SKILL        = --setting-sources user --append-system-prompt-file "$(FACTORY_DIR)/skill/orchestrator/SKILL.md"
+# EN CHEMIN ABSOLU : FACTORY_DIR vaut `tools/factory` chez un consommateur qui
+# inclut ce fichier en relatif, et l'orchestrateur est lancé APRÈS `cd $wt` —
+# un chemin relatif se résolvait dans le worktree, donc sur le skill épinglé
+# (tour de #247, encore, une fois le service redémarré).
+LOOP_SKILL        = --setting-sources user --append-system-prompt-file "$(abspath $(FACTORY_DIR))/skill/orchestrator/SKILL.md"
 LOOP_RUN_VERBOSE  = $(CLAUDE_LAUNCH) $(LOOP_SKILL) --output-format stream-json --verbose -p "$$prompt" | "$(FACTORY_BIN)/claude-stream.sh"
 LOOP_RUN_QUIET    = $(CLAUDE_LAUNCH) $(LOOP_SKILL) -p "$$prompt"
 
