@@ -227,6 +227,10 @@ import json, sys
 d = [x for x in json.load(open(sys.argv[1])) if x["number"] == int(sys.argv[2])][0]
 sys.exit(0 if any((l.get("name") or "").startswith("factory:") and l.get("name") != sys.argv[3] for l in d.get("labels") or []) else 1)' "$W/decisions.json" "$n" "$HUMAN_LABEL"; then nature=carte
   elif of="$(FACTORY_TOKEN="$TOKEN" python3 "$HERE/gh-feature.py" of "$GH_REPO" "$n" 2>"$W/nature/$n.err")"; then
+    # La chaîne lue ici donne aussi le parent direct : un jeton d'App ne voit
+    # pas `parent_issue_url` (mesuré le 18 septembre 2026), la colonne « feature »
+    # viendrait donc vide sans elle.
+    printf '%s' "$of" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=d.get("chain") or []; print(c[1] if len(c) > 1 else "")' > "$W/nature/$n.parent"
     if [ "$(printf '%s' "$of" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("mini"))')" = "False" ]; then nature=carte; else nature=cadrage; fi
   else
     echo "eva-watch: gh-feature.py n'a pas pu lire la chaîne de #$n ($(tr '\n' ' ' < "$W/nature/$n.err")) — traitée comme une carte : dans le doute, on ne ferme jamais" >&2
@@ -274,6 +278,10 @@ human_label = os.environ["HUMAN_LABEL"]
 for d in load(f"{W}/decisions.json"):
     if "pull_request" in d: continue
     parent = (d.get("parent_issue_url") or "").rstrip("/").rsplit("/", 1)[-1]
+    try:
+        with open(f"{W}/nature/{d['number']}.parent") as f: parent = f.read().strip() or parent
+    except FileNotFoundError:
+        pass
     with open(f"{W}/nature/{d['number']}") as f: nature = f.read().strip() or "carte"
     item("decision", f"decision:{d['number']}", d["number"],
          parent if parent.isdigit() else "-", (d.get("created_at") or "")[:10] or "-",
