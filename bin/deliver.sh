@@ -21,6 +21,13 @@
 #      temporaire, write-tree, commit-tree), sans worktree, et sans commit si
 #      l'arbre n'a pas changé ; l'API GitHub n'accepte pas d'image dans un
 #      commentaire avec un jeton d'App, d'où la branche ;
+#   2 bis. la PREVIEW, pour une carte UI seulement — des captures dans
+#      captures/, ou un artefact designer-<k>.json prouvé : `preview.sh request
+#      up <F> deliver:#<carte>` dépose une DEMANDE, que l'hôte traite par le
+#      crochet du consommateur (la boucle, dans son conteneur, ne lance rien) ;
+#      l'URL va dans le commentaire de livraison. Pas UI → rien. Sans crochet,
+#      sans registre, ou sur un raté : dit, et la livraison continue — une
+#      preview est un confort de relecture, jamais une condition ;
 #   3. le commentaire de livraison sur la PR : `livraison.md` (la prose de
 #      l'orchestrateur) SUIVI d'un bloc généré depuis les ARTEFACTS — une ligne
 #      par relecteur (rôle, modèle prouvé, passes, dernier verdict), la ligne
@@ -214,13 +221,39 @@ if [ "${#captures[@]}" -gt 0 ]; then
   fi
 fi
 
+# --- 2 bis. La preview, pour une carte UI ---------------------------------------------------
+# UI = des captures (même trop lourdes : elles ont été prises), ou un designer
+# PROUVÉ (modele_prouve non vide dans son artefact — la même preuve que la
+# porte lit ; un designer déclaré sans preuve ne prouve pas plus une UI qu'un
+# code). La demande est rejouée à chaque rejeu de la livraison : un fichier par
+# feature, la dernière parole compte, l'hôte ne remonte que si la tête a bougé.
+UI=""
+[ "${#captures[@]}" -eq 0 ] && [ "${#trop_lourdes[@]}" -eq 0 ] || UI="captures"
+if [ -z "$UI" ]; then
+  for f in "$TURN"/designer-[0-9]*.json; do
+    [ -f "$f" ] || continue
+    if python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+sys.exit(0 if isinstance(d, dict) and d.get("modele_prouve") else 1)' "$f" 2>/dev/null; then UI="designer prouvé"; break; fi
+  done
+fi
+PREVIEW_URL=""
+if [ -n "$UI" ]; then
+  prc=0; PREVIEW_URL="$(bash "$HERE/preview.sh" request up "$F" "deliver:#$CARTE")" || prc=$?
+  if [ "$prc" != 0 ]; then
+    echo "deliver: la demande de preview a rendu $prc — la livraison continue sans preview" >&2; PREVIEW_URL=""
+  elif [ -n "$PREVIEW_URL" ]; then
+    echo "deliver: carte UI ($UI) : preview demandée pour $BRANCHE, $PREVIEW_URL" >&2
+  fi
+fi
+
 # --- 3. Le commentaire de livraison, généré depuis les artefacts -----------------------------
 MARQUE_LIVRAISON="<!-- factory:livraison #$CARTE -->"
 commentaires="$(api_all "repos/$GH_REPO/issues/$PR/comments?per_page=100")" || exit $?
 if contient_marque "$commentaires" "$MARQUE_LIVRAISON"; then
   echo "deliver: commentaire de livraison déjà posté sur la PR #$PR" >&2
 else
-  corps="$(TURN="$TURN" CARTE="$CARTE" PR="$PR" URL="$CAPTURE_URL" MARQUE="$MARQUE_LIVRAISON" \
+  corps="$(TURN="$TURN" CARTE="$CARTE" PR="$PR" URL="$CAPTURE_URL" MARQUE="$MARQUE_LIVRAISON" PREVIEW_URL="$PREVIEW_URL" \
     CAPTURES="$(printf '%s\n' "${captures[@]+"${captures[@]}"}")" TROP_LOURDES="$(printf '%s\n' "${trop_lourdes[@]+"${trop_lourdes[@]}"}")" python3 - <<'PY'
 import glob, json, os, re
 turn, carte, pr = os.environ["TURN"], os.environ["CARTE"], os.environ["PR"]
@@ -277,6 +310,10 @@ body += "\n".join(lignes) if lignes else "- aucun artefact de relecture (tour sa
 lourdes = [c for c in os.environ["TROP_LOURDES"].splitlines() if c]
 if images or lourdes:
     body += "\n\n**Captures**\n\n" + "\n".join(images + ["- %s : non poussée, plus de 10 Mo (la limite d'une image sur GitHub)" % c for c in lourdes])
+# L'URL de la preview : là où elle SERA — l'hôte la monte après cette
+# livraison, en quelques minutes ; le commentaire ne promet pas qu'elle y est.
+if os.environ.get("PREVIEW_URL"):
+    body += "\n\nPreview : %s (sera montée sur la machine en quelques minutes, LAN seulement)" % os.environ["PREVIEW_URL"]
 body += "\n"
 print(json.dumps({"body": body}, ensure_ascii=False))
 PY

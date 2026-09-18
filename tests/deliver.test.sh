@@ -27,6 +27,13 @@ BASE="$(gw rev-parse HEAD)"
 printf 'du code\n' > "$WT/app.sh"; gw add app.sh; gw commit -qm "feat: la carte 12" -m "Refs #12"
 HEAD_SHA="$(gw rev-parse HEAD)"; SHA7="$(gw rev-parse --short=7 HEAD)"
 export FACTORY_ROOT="$R"
+# La preview : un registre (ce que nix/preview.nix crée sur l'hôte), le crochet
+# du consommateur (deliver.sh ne l'appelle pas, preview.sh vérifie qu'il existe),
+# l'hôte de l'URL dans la conf.
+export FACTORY_STATE="$TESTTMP/state" FACTORY_PREVIEW_HOST="usine.test"
+mkdir -p "$FACTORY_STATE/previews/requests" "$FACTORY_STATE/previews/state" "$R/tools/factory-hooks"
+printf '#!/usr/bin/env bash\necho cont\n' > "$R/tools/factory-hooks/preview-up"; cp "$R/tools/factory-hooks/preview-up" "$R/tools/factory-hooks/preview-down"
+chmod +x "$R/tools/factory-hooks/preview-up" "$R/tools/factory-hooks/preview-down"
 export GIT_AUTHOR_NAME=usine GIT_AUTHOR_EMAIL=usine@example.invalid GIT_COMMITTER_NAME=usine GIT_COMMITTER_EMAIL=usine@example.invalid
 
 # Le répertoire de tour, avec de VRAIS artefacts T1 (la forme que role.sh écrit).
@@ -111,6 +118,14 @@ assert_contains "$liv" '![01-bouton.png](https://github.com/o/r/blob/screenshots
 assert_contains "$liv" 'test-engineer — claude-fable-5-1 : 1 passe(s)' "un rôle optionnel prouvé est résumé aussi (M6)"
 assert_contains "$liv" 'codeur — gpt-6-astra : 2 passe(s)' "le codeur aussi"
 assert_contains "$liv" '02-lourde.png : non poussée, plus de 10 Mo' "la capture trop lourde est dite, pas inlinée (M7)"
+# 2 bis. une carte UI (des captures) : la preview est DEMANDÉE (pas montée —
+# la boucle ne lance rien), et l'URL est dans le commentaire.
+assert_contains "$liv" 'Preview : http://usine.test:8110 (sera montée sur la machine en quelques minutes, LAN seulement)' "la ligne de preview, port = base + F, dans le commentaire de livraison — au futur : la boucle ne l'a pas montée"
+[ -f "$FACTORY_STATE/previews/requests/10" ] || { echo "aucune demande de preview écrite pour feature 10" >&2; exit 1; }
+read -r pverb _ porigine < "$FACTORY_STATE/previews/requests/10"
+assert_eq "up" "$pverb" "la demande est un « up »"
+assert_eq "deliver:#12" "$porigine" "l'origine est la livraison de la carte"
+rm -f "$FACTORY_STATE/previews/requests/10"
 git -C "$O" cat-file -e screenshots:44/12/02-lourde.png 2>/dev/null && { echo "la capture de plus de 10 Mo a été poussée" >&2; exit 1; }
 # 4. la PR passe prête (GraphQL : REST ne lève pas un brouillon)
 assert_contains "$log" 'POST graphql {' "une mutation GraphQL est envoyée"
@@ -130,6 +145,45 @@ assert_contains "$log" 'PATCH repos/o/r/issues/12 {"state":"closed","state_reaso
 ls -d "$R"/.omc/turns-done/12-* >/dev/null 2>&1 || { echo "l'archive n'existe pas" >&2; exit 1; }
 ls "$R"/.omc/turns-done/12-*/livraison.md >/dev/null 2>&1 || { echo "l'archive est vide" >&2; exit 1; }
 assert_file_lacks "$H/calls.log" 'pulls/44/comments/' "aucune réponse dans un fil : la carte n'est pas née d'une remarque"
+
+# --- b2) PAS UI, PAS DE PREVIEW ; UN DESIGNER PROUVÉ EN EST UNE -------------------------
+# Sans capture ni designer : aucune demande, aucune ligne. Un designer déclaré
+# mais NON prouvé ne compte pas ; prouvé, il compte même sans capture.
+monter_tour
+rm -f "$TURN"/captures/*.png
+printf '[]' > "$H/repos_o_r_issues_44_comments_per_page_100.json"
+pr_fixture false 'Feature #10\n'
+printf '{"number":12,"state":"open","body":"un corps"}' > "$H/repos_o_r_issues_12.json"
+: > "$H/calls.log"
+run 12 "$WT" "$BASE"
+assert_rc 0 "$rc" "livraison sans UI : 0 ($(cat "$TESTTMP/err"))"
+assert_file_lacks "$H/calls.log" 'Preview :' "sans capture ni designer : pas de ligne de preview"
+[ ! -e "$FACTORY_STATE/previews/requests/10" ] || { echo "sans UI, une demande de preview a été écrite" >&2; exit 1; }
+monter_tour
+rm -f "$TURN"/captures/*.png
+art_write "$TURN" "$WT" designer 1 gpt-6-astra "" ok
+: > "$H/calls.log"
+run 12 "$WT" "$BASE"
+assert_rc 0 "$rc" "designer non prouvé : 0"
+[ ! -e "$FACTORY_STATE/previews/requests/10" ] || { echo "un designer NON prouvé a demandé une preview" >&2; exit 1; }
+monter_tour
+rm -f "$TURN"/captures/*.png
+art_write "$TURN" "$WT" designer 1 gpt-6-astra gpt-6-astra ok
+: > "$H/calls.log"
+run 12 "$WT" "$BASE"
+assert_rc 0 "$rc" "designer prouvé : 0 ($(cat "$TESTTMP/err"))"
+assert_contains "$(grep 'POST repos/o/r/issues/44/comments ' "$H/calls.log")" 'Preview : http://usine.test:8110' "un designer prouvé, sans capture, demande la preview"
+assert_contains "$(cat "$FACTORY_STATE/previews/requests/10")" 'up' "et la demande est écrite"
+rm -f "$FACTORY_STATE/previews/requests/10"
+# Sans crochet consommateur : pas de ligne, la livraison passe.
+monter_tour
+mv "$R/tools/factory-hooks" "$TESTTMP/hooks-sauve"
+: > "$H/calls.log"
+run 12 "$WT" "$BASE"
+assert_rc 0 "$rc" "sans crochet : la livraison passe ($(cat "$TESTTMP/err"))"
+assert_file_lacks "$H/calls.log" 'Preview :' "sans crochet : pas de ligne de preview"
+assert_contains "$TESTTMP/err" "pas de crochet" "sans crochet : dit"
+mv "$TESTTMP/hooks-sauve" "$R/tools/factory-hooks"
 
 # --- c) IDEMPOTENCE : rejoué sur le même état, rien n'est posté deux fois -------------
 # L'API rend maintenant ce que la première passe a écrit : la marque sur la PR,

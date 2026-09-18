@@ -12,9 +12,9 @@ ce qu'elle exige, et ce qui reste à vérifier. Une décision dont le fait n'est
 (`docs/v2-feature.md`), la doctrine opérationnelle dans `docs/release.md` —
 est livrée : le tour orchestré et sa porte, la boucle qui pousse elle-même,
 EVA seule sur les branches partagées, les remarques qui deviennent des cartes,
-les pings et les relances. Ce qui suit est ce que la v2 a laissé de côté en le
-disant (1, 2), ce qu'elle a changé d'objet (3) et ce qu'elle n'a pas touché
-(4, 5, 6).
+les pings et les relances, les previews par PR sur la machine. Ce qui suit est
+ce que la v2 a laissé de côté en le disant (1), ce qu'elle a changé d'objet
+(2) et ce qu'elle n'a pas touché (3, 4, 5).
 
 ---
 
@@ -70,52 +70,7 @@ l'orchestrateur lit.
 
 ---
 
-## 2. Les previews par PR, sur la machine
-
-### Le fait
-
-La spec (`docs/v2-feature.md` § 2, § 8) exige une preview par PR de feature,
-sur la machine d'usine, pour l'humain seul : le serveur du worktree exposé
-derrière un proxy, **par port** (pas de DNS wildcard sur le réseau — vérifié le
-18 septembre 2026), une base par PR remplie par les seeders du dépôt, montée
-quand Pony livre une carte UI et sur demande à EVA, éteinte après inactivité
-ou à la fermeture de la PR. **Rien de cela n'existe** : `worktree-up` fabrique
-l'environnement d'une feature, mais aucun crochet n'expose quoi que ce soit, et
-les captures de `deliver.sh` sont prises dans le worktree, sans preview. Le
-« coup d'œil humain » sur une carte UI se fait donc sur les captures, ou sur
-`staging` après le merge — c'est-à-dire après l'approbation qu'il devait
-éclairer.
-
-### La décision
-
-Deux crochets côté consommateur, `preview-up <nom> <pr>` (alloue un port,
-expose le serveur du worktree derrière le proxy, imprime l'URL) et
-`preview-down <nom>` ; la boucle appelle `preview-up` après une livraison qui
-porte des captures (le signe d'une carte UI) et met l'URL dans le commentaire
-de livraison ; EVA le fait sur demande (« monte-moi la preview de #12 ») ;
-`wt-cleanup.sh` appelle `preview-down` avant `worktree-down`. **Une base par
-PR, remplie par les seeders** : si les seeders ne racontent pas assez, c'est
-une carte « enrichir les seeders », jamais un dump.
-
-### Ce qu'elle exige
-
-Un proxy sur la machine, joignable du LAN ou du VPN et **jamais d'Internet** ;
-une allocation de port déterministe par PR (le crochet la tient) ; que
-`worktree-up` sache créer et seeder une base par feature — c'est déjà son
-contrat, à vérifier chez le premier consommateur ; une entrée dans
-`docs/configuration.md` (le tableau des crochets) et une ligne dans
-`docs/release.md`.
-
-### Ce qui reste à vérifier
-
-- L'inactivité : qui la mesure (le proxy ? un timer ?) et à quel délai.
-- Ce qu'EVA a le droit de faire : `preview-up` est un geste de lecture du
-  point de vue de GitHub, mais un geste d'écriture sur la machine — par quel
-  chemin EVA l'ordonne-t-elle à la boucle, depuis son conteneur ?
-
----
-
-## 3. `factory doctor` — ce que la v2 laisse à un humain, et que rien ne vérifie
+## 2. `factory doctor` — ce que la v2 laisse à un humain, et que rien ne vérifie
 
 > **Réécrit après la v2.** Ce chantier disait « personne ne vérifie la
 > protection de branche » ; la v2 n'a plus de serrure de forge par défaut, et
@@ -176,7 +131,7 @@ poste (le contrat du dépôt) en disant lequel des deux il ne peut pas voir.
 
 ---
 
-## 4. Sortir du verrou GitHub — un sujet de coût, relu après la v2
+## 3. Sortir du verrou GitHub — un sujet de coût, relu après la v2
 
 > **Réécrit deux fois** : après le modèle de release v1, qui réduisait
 > l'exigence de forge à une protection de branche ; puis après la v2, qui
@@ -263,7 +218,7 @@ ouverts.
 
 ---
 
-## 5. La pagination — ce qui reste borné à cent
+## 4. La pagination — ce qui reste borné à cent
 
 > **Le gros est fait.** `gh-next-issue.sh` suit l'en-tête `Link` sur la liste
 > des cartes ; `deliver.sh`, `gh-pr-attention.sh`, `wt-cleanup.sh` et
@@ -284,7 +239,7 @@ second passage recommenterait). Cent suffit aujourd'hui.
 
 ---
 
-## 6. Ce que la v2 laisse ouvert
+## 5. Ce que la v2 laisse ouvert
 
 Relu le 18 septembre 2026, après les cinq tranches. Ce qui a été corrigé l'a
 été (`git log`) ; ce qui suit est ce qu'on a choisi de ne pas faire tout de
@@ -316,6 +271,16 @@ suite, et pourquoi.
 - **Deux épinglages de version** (le flake de l'hôte et le submodule du dépôt)
   qui peuvent diverger : le README dit de les commiter ensemble ; `factory
   bump` n'existe pas.
+- **Les previews ne sont pas derrière un proxy** (la spec § 2 en nommait un) :
+  chaque preview est publiée sur son port, `FACTORY_PREVIEW_PORT_BASE + F`,
+  par docker, **sur l'adresse LAN explicite de la machine** — docker publie
+  par DNAT, en amont du pare-feu de l'hôte, qui ne voit pas ces ports ; ce
+  qui borne l'exposition au LAN est l'adresse de publication et le réseau où
+  vit la machine, pas une règle de pare-feu. Un proxy n'apporterait qu'un
+  nom par PR, que le réseau ne sait pas résoudre sans DNS wildcard (§ 8). Et
+  **l'inactivité n'est pas mesurée** : la preview s'éteint
+  `FACTORY_PREVIEW_TTL` après la dernière demande `up` (8 h), pas après la
+  dernière requête HTTP — mesurer les requêtes demanderait ce proxy.
 - **`gh-release.sh` choisit la borne basse par date de création**, pas par
   distance dans le graphe : un correctif tagué APRÈS sur une ligne plus
   ancienne élargit la plage à blanc aux cartes déjà sorties — déjà

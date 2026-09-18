@@ -63,6 +63,15 @@ assert enabled.systemd.services.factory-eva-workspace.serviceConfig.User == "fac
 # L'arbre de la boucle est monte en lecture seule : eva-watch.sh y lit
 # loop.halt et loop.file-vide en repli.
 assert hasInfix "/srv/factory/workspace/repo:/factory-repo:ro" start;
+# Les previews : EVA DEMANDE (requests monté en écriture — le seul montage où
+# elle écrit hors de son état) et RELIT (state en lecture seule, l'hôte seul y
+# écrit) ; elle ne lance rien, la socket docker n'est toujours pas là.
+# Le répertoire ENTIER en écriture (le brouillon de .tmp se renomme dans
+# requests/ sur le même montage), et state/ en lecture seule par-dessus.
+assert hasInfix "/srv/factory/previews:/previews " start;
+assert !(hasInfix "/srv/factory/previews:/previews:ro" start);
+assert hasInfix "/srv/factory/previews/state:/previews/state:ro" start;
+assert hasInfix "/srv/custom/previews:/previews " custom.systemd.services.factory-eva.serviceConfig.ExecStart;
 # Sans les identifiants d'EVA, le timer de pings ne part pas.
 assert builtins.elem "/srv/factory/secrets/eva/github-app.env" enabled.systemd.services.factory-eva-notify.unitConfig.ConditionPathExists;
 # Le SOUL est RAFRAICHI a chaque demarrage (`C+`), pas seulement pose la
@@ -73,6 +82,7 @@ assert hasRule "C+ /srv/factory/eva/home/skills/factory/factory-decision/SKILL.m
 assert hasRule "C+ /srv/factory/eva/home/skills/factory/factory-merge/SKILL.md";
 assert hasRule "C+ /srv/factory/eva/home/skills/factory/factory-release/SKILL.md";
 assert hasRule "C+ /srv/factory/eva/home/skills/factory/factory-etat/SKILL.md";
+assert hasRule "C+ /srv/factory/eva/home/skills/factory/factory-preview/SKILL.md";
 assert !(hasRule "C /srv/factory/eva/home/SOUL.md");
 # L'allowlist Slack est verifiee AVANT la passerelle : un ExecStartPre qui
 # grep SLACK_ALLOWED_USERS non vide dans runtime.env, avec un message qui dit

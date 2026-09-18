@@ -19,6 +19,8 @@
 #   5. LES ALERTES (g) — critical/high telles que le triage les écrit, sous la
 #      feature permanente ou par la marque ; le compte par sévérité en --etat ;
 #      une alerte qui monte de sévérité est une nouveauté.
+#   6. LES PREVIEWS (h) — en --etat, la liste de preview.sh status depuis le
+#      registre de FACTORY_STATE ; jamais en --diff (rien n'attend personne).
 #
 # Hors ligne : le faux curl tient lieu de GitHub, l'état vit dans $TESTTMP.
 . "$(dirname "$0")/helpers.sh"
@@ -103,6 +105,7 @@ assert_contains "$out" "CI rouge (1)" "etat : une CI rouge"
 assert_contains "$out" "  PR #13  feature/9  https://x/pr/13" "etat : la PR a CI rouge"
 assert_contains "$out" "boucle : en marche" "etat : sans loop.halt, la boucle est en marche"
 assert_contains "$out" "alertes de sécurité ouvertes (0) : critical 0, high 0, autres 0" "etat : le compte des alertes, à zéro"
+assert_contains "$out" "previews sur la machine (0)" "etat : sans registre, aucune preview"
 assert_not_contains "$out" "file :" "etat : sans loop.file-vide, rien a dire sur la file"
 # L'ORDRE EST CELUI DES NUMÉROS.
 l229="$(printf '%s\n' "$out" | grep -n '#229' | cut -d: -f1)"; l234="$(printf '%s\n' "$out" | grep -n '#234' | cut -d: -f1)"
@@ -180,6 +183,18 @@ mkdir -p "$TESTTMP/clone-eva/.omc/skills"
 set +e; out="$(FACTORY_ROOT="$TESTTMP/clone-eva" FACTORY_STATE="$TESTTMP/state" bash "$S" --etat 2>/dev/null)"; set -e
 assert_contains "$out" "boucle : ARRÊTÉE — tourniquet" "omc de la boucle : un .omc/skills versionne ne cache pas le loop.halt du volume"
 rm -rf "$TESTTMP/state" "$TESTTMP/clone-eva"
+
+# --- c3) LES PREVIEWS (h) : la liste de preview.sh status, en --etat seulement --------
+mkdir -p "$TESTTMP/state/previews/state" "$TESTTMP/state/previews/requests"
+printf '{"feature":12,"etat":"montee","url":"http://usine.test:8112","head":"0123456789","started":1758182400,"expires":1758211200,"origine":"deliver:#40"}' > "$TESTTMP/state/previews/state/12.json"
+printf '{"feature":7,"etat":"erreur","expires":1758211200,"erreur":"preview-up 7 a échoué :\\ncreatedb: refusé"}' > "$TESTTMP/state/previews/state/7.json"
+set +e; out="$(FACTORY_STATE="$TESTTMP/state" bash "$S" --etat 2>/dev/null)"; set -e
+assert_contains "$out" "previews sur la machine (2)" "previews : le compte"
+assert_contains "$out" "  #12  http://usine.test:8112  tête 0123456  montée " "previews : la montée, avec son adresse et sa tête"
+assert_contains "$out" "  #7  ERREUR — createdb: refusé" "previews : l'erreur, avec la sortie du crochet"
+set +e; out="$(FACTORY_STATE="$TESTTMP/state" bash "$S" --diff 2>/dev/null)"; set -e
+assert_not_contains "$out" "preview" "previews : jamais en --diff, une preview n'attend personne"
+rm -rf "$TESTTMP/state" "$FACTORY_EVA_STATE.pending"
 
 # --- d) --diff : PREMIER PASSAGE, TOUT EST NOUVEAU ------------------------------------
 run --diff

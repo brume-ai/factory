@@ -15,7 +15,7 @@ let
   docker = "${config.virtualisation.docker.package}/bin/docker";
 in
 {
-  imports = [ ./eva.nix ];
+  imports = [ ./eva.nix ./preview.nix ];
 
   options.services.factory = {
     enable = lib.mkEnableOption "usine github-loop";

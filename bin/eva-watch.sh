@@ -27,7 +27,10 @@
 #       (« [high] ») ou le corps (« **critical** »), est critical ou high : un
 #       secret exposé, une faille critique attendent un humain AVANT le tour
 #       qui les répare. En --etat, le compte des cartes d'alerte ouvertes par
-#       sévérité.
+#       sévérité ;
+#   (h) en --etat seulement, les PREVIEWS montées sur la machine (preview.sh
+#       status : le registre $FACTORY_STATE/previews, ou /previews depuis le
+#       conteneur d'EVA) — une preview n'attend personne, elle ne pinge pas.
 #
 # TROIS MODES :
 #   --etat       (défaut) tout, en clair, par sections ;
@@ -391,7 +394,16 @@ case "$MODE" in
     printf 'features dans %s, en attente de release (%s)\n%s' "$FACTORY_STAGING" "$n_staged" "$staged"
     printf 'CI rouge (%s)\n%s' "$n_ci" "$ci"
     printf 'alertes de sécurité ouvertes (%s) : critical %s, high %s, autres %s\n%s' "$((al_c+al_h+al_a))" "$al_c" "$al_h" "$al_a" "$al"
-    printf '%s%s' "$halt_l" "$vide_l" ;;
+    printf '%s%s' "$halt_l" "$vide_l"
+    # (h) Les previews : la liste de preview.sh status, telle quelle, indentée.
+    # Un status en échec se dit et ne cache pas le reste.
+    if prev="$(bash "$HERE/preview.sh" status 2>&1)"; then
+      n_prev=0; [ -z "$prev" ] || n_prev="$(printf '%s\n' "$prev" | wc -l)"
+      printf 'previews sur la machine (%s)\n' "$n_prev"
+      [ -z "$prev" ] || printf '%s\n' "$prev" | sed 's/^/  /'
+    else
+      printf 'previews sur la machine : illisibles — %s\n' "$(printf '%s' "$prev" | tr '\n' ' ')"
+    fi ;;
   diff)
     printf '%s%s%s' "$dec" "$al" "$pr"
     if [ "$staged_new" = 1 ]; then printf '📦 %s feature(s) dans %s attendent une release\n' "$n_staged" "$FACTORY_STAGING"; fi

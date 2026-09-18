@@ -339,6 +339,100 @@ la seule forme mesurée (4 août 2026) qui s'affiche sur un dépôt privé ;
 `raw.githubusercontent.com` rend 404 dans un navigateur. L'API n'accepte pas
 d'image dans un commentaire avec un jeton d'App.
 
+## Les previews
+
+**Une preview par PR de feature, sur la machine, pour l'humain seul** (§ 2,
+§ 8 de la spec) : le serveur du worktree `.worktrees/feature-<F>`, exposé
+**par port** — `FACTORY_PREVIEW_PORT_BASE + F`, 8100 par défaut, donc
+`http://<FACTORY_PREVIEW_HOST>:8112` pour la feature 12 —, **publié par le
+crochet sur l'adresse LAN de la machine, explicitement** (`-p <ip
+lan>:<port>:8010`), jamais sur `0.0.0.0` : docker publie un port par DNAT,
+en amont du pare-feu de l'hôte, qui ne voit pas ces ports — une règle
+`allowedTCPPorts` n'y changerait rien, dans un sens comme dans l'autre. Ce
+qui tient « LAN seulement, jamais Internet », c'est l'adresse de publication
+et le réseau où vit la machine (rien ne redirige ces ports depuis
+l'extérieur). Avec **une base par PR remplie par les seeders** du dépôt. Pas
+de proxy, pas de DNS wildcard : le réseau n'en a pas.
+
+**Ce que l'humain y perd, et qui est voulu.** La base est recréée à neuf
+(`migrate:fresh --seed`) à chaque montage — chaque carte UI livrée, chaque
+redémarrage : ce qu'il a saisi dans la preview disparaît. Ce qui doit se voir
+à la relecture est dans les seeders, et un seeder qui ne raconte pas assez est
+une carte « enrichir les seeders », jamais un dump. La preview suit **l'arbre
+vivant** du worktree (monté en lecture seule : elle n'y écrit rien), pas la
+tête livrée : entre deux livraisons, un commit local de l'agent s'y voit.
+
+**Le fait qui donne sa forme au mécanisme : ni la boucle ni EVA ne peuvent
+lancer `docker`.** La boucle tourne dans le conteneur `factory-loop`, EVA dans
+`factory-eva`, sans socket docker ni `systemctl`. Tout ce qui démarre un
+conteneur tourne sur l'**hôte**, par une unité systemd ; la boucle et EVA ne
+font que **déposer une demande** dans un registre partagé.
+
+**Le registre** (`bin/preview.sh`), sous `$FACTORY_STATE/previews/` — deux
+répertoires créés par `nix/preview.nix` (tmpfiles, 0770 usine), montés dans le
+conteneur d'EVA sous `/previews/requests` (écriture) et `/previews/state`
+(lecture) :
+
+- `requests/<F>` : `up <epoch> <origine>` ou `down <epoch> <origine>`, une
+  demande par feature, la dernière écrase la précédente. L'origine dit qui :
+  `deliver:#<carte>` (la boucle, à la livraison d'une carte UI), `eva:<login>`
+  (EVA, sur le mot d'un utilisateur autorisé — skill `factory-preview`),
+  `reap` (l'hôte). Une demande traitée est effacée — **si elle est encore
+  celle qu'on a lue** : réécrite pendant un crochet (une carte livrée
+  entre-temps), elle reste et repart au passage suivant. Ce que `reconcile`
+  ne reconnaît pas — un nom qui n'est pas un numéro de feature (`08`, un
+  brouillon, un `README`), un verbe ni `up` ni `down` — est dit et laissé,
+  jamais effacé. Le numéro de feature est un entier **sans zéro de tête** ;
+  `request up 08` est un 3 ;
+- `.tmp/` : les brouillons des écritures, renommés en place — hors de
+  `requests/`, que systemd surveille ;
+- `state/<F>.json`, **écrit par l'hôte seul** : `port`, `conteneur`, `base`,
+  `url`, `head` (la tête du worktree montée), `started`, `expires`,
+  `origine` — ou `etat: erreur` avec la sortie du crochet.
+
+**Qui demande.** `deliver.sh`, après le push et les captures, **si la carte
+est UI** — des captures dans `captures/`, ou un artefact `designer-<k>.json`
+prouvé (la même preuve que la porte lit) — dépose `up` et écrit dans le
+commentaire de livraison « Preview : http://<host>:<port> (sera montée sur la
+machine en quelques minutes, LAN seulement) » : l'adresse où elle *sera*,
+au futur. Une carte sans UI ne demande rien. **L'hôte de l'URL** est
+`FACTORY_PREVIEW_HOST` ; à défaut le nom de la machine (`hostname`, ou
+`/proc/sys/kernel/hostname` quand la commande n'est pas sur le PATH d'une
+unité, sinon `localhost` — jamais une adresse 127) ; **dans un conteneur sans
+la clé, la demande est refusée en 3** : le nom y est l'identifiant du
+conteneur, et il finirait dans une PR. EVA dépose `up` ou `down` sur
+demande (`preview.sh request`), relit `preview.sh status` au plus deux
+minutes, et rend l'adresse sans jamais promettre qu'elle y est déjà ;
+`eva-watch.sh --etat` liste les previews en dernière section (h) — elles ne
+pingent pas, une preview n'attend personne.
+
+**Qui exécute** (`nix/preview.nix`, sous l'utilisateur d'usine, docker, curl
+et `ip` sur le PATH) : `factory-preview.path` surveille `requests/` et lance
+`preview.sh reconcile` à chaque changement — pour un `up` : s'il n'y a pas
+d'état, si la **tête du worktree a changé** depuis l'état (une carte de plus
+livrée), ou si le conteneur n'est plus là, il appelle le crochet
+`preview-up <F> <worktree> <port>` — qui ne rend 0 que quand l'application
+**répond** — et écrit l'état ; sinon il ne fait que repousser l'échéance ;
+pour un `down` : `preview-down <F>`, l'état effacé. Un seul passage à la fois
+(`flock`, dix minutes au plus, sinon dit et 4). `factory-preview-reap.timer`,
+toutes les dix minutes, lance `preview.sh reap` **puis `reconcile`** — ce que
+le path a raté (une demande d'avant le démarrage, une demande arrivée pendant
+qu'une unité tournait) est rattrapé sous dix minutes. Le reap : `down` pour
+tout état **expiré** — `FACTORY_PREVIEW_TTL` secondes, 8 h par défaut, depuis
+la dernière demande `up` (l'inactivité HTTP n'est pas mesurée, il n'y a pas
+de proxy pour la voir) —, dont le **worktree n'existe plus** (`wt-cleanup.sh`
+l'a retiré parce que la PR est mergée ou fermée, et il n'a rien à savoir des
+previews : le reap suit les worktrees), ou **en erreur** — rejoué à chaque
+reap, dans les deux cas : un `down` est idempotent et bon marché, il retire
+ce qu'un crochet a laissé à moitié, et l'état disparaît quand le nettoyage
+passe (la cause reste dans le journal).
+
+**Ce qui n'arrête jamais l'usine.** Sans crochet `preview-up`/`preview-down`
+chez le consommateur : dit une fois, rien fait, 0. Un crochet en échec : état
+`erreur` avec sa sortie (ce qu'EVA rapporte), demande effacée (on ne rejoue
+pas un échec toutes les dix minutes), code 1 — **jamais 3** : une preview est
+un confort de relecture, pas une garantie, et `deliver.sh` livre avec ou sans.
+
 ## Les remarques
 
 Pony ne réagit jamais à un commentaire brut : il exécute une carte.
@@ -532,7 +626,9 @@ machine :
   précédent est purgé au démarrage. (Le marqueur `/etc/factory-loop.paused`
   que la spec nomme pour la migration de Paris Showroom n'est lu par aucune
   unité de `nix/` : arrêter la boucle sur la machine, c'est `systemctl stop
-  factory-loop`, ou `loop.halt`.)
+  factory-loop`, ou `loop.halt`. Un hôte peut le porter lui-même — un
+  `ConditionPathExists = "!/etc/factory-loop.paused"` sur `factory-loop` dans
+  sa configuration, ce que celui de Paris Showroom fait.)
 
 **Le tourniquet** (`LOOP_MAX_RETRY`, 3) : `.omc/loop.retry` porte « sujet
 compte depuis », **sur disque** — sous `Restart=always`, un compteur en
@@ -570,8 +666,19 @@ servie. EVA le voit (f) ; la boucle dort `LOOP_SLEEP` et resonde.
 - **Les crochets** `tools/factory-hooks/` : `worktree-up <nom> <base>` (la
   base d'une feature, ses seeders, sa route ; doit laisser le worktree sur
   `feature/<F>`), `worktree-down`, `housekeeping`, `run-loop-args`,
-  `env-overrides`. `preview-up` / `preview-down` (la preview par PR sur la
-  machine, § 2 de la spec) **n'existent pas encore** — `EVOL.md`.
+  `env-overrides`, et, pour les previews (« Les previews » plus haut, appelés
+  par l'**hôte** sous l'utilisateur d'usine) : `preview-up <F> <worktree>
+  <port>` — crée la base de la PR si elle manque, la migre et la seede, lance
+  le serveur du worktree sur `<port>`, remplace un conteneur du même nom,
+  imprime le nom du conteneur (ligne 1) et celui de la base (ligne 2,
+  facultative), et **ne rend 0 que quand l'application répond** (sinon ses
+  journaux sur stderr, le conteneur retiré, 1) ; publie sur l'**adresse LAN
+  explicite**, jamais `0.0.0.0` ; monte le worktree en lecture seule — et
+  `preview-down <F>` — retire le conteneur et la base, idempotent. Absents,
+  l'usine tourne sans preview.
+- **`FACTORY_PREVIEW_HOST`** dans `factory.conf` : le nom par lequel l'humain
+  joint la machine sur le LAN — le défaut, le nom de la machine, est faux
+  depuis un conteneur, et une demande y est refusée sans la clé.
 - **`.claude/skills/orchestrator`** : un lien vers
   `tools/factory/skill/orchestrator` — c'est ce que Claude charge quand le
   prompt dit « suis le skill ». Les skills de rôle (`skill/roles/*.md`) sont
@@ -639,4 +746,9 @@ trois scripts refusent `FACTORY_IN_LOOP` avant le premier appel ; une remarque
 n'est carvée qu'une fois (`gh-pr-attention.test.sh`) ; le triage rattache ses
 cartes à la feature permanente, pose `needs-human` sur un rattachement refusé,
 refuse une feature fermée avant toute carte, et laisse les cartes d'une surface
-muette (`gh-security-triage.test.sh`, par le faux curl comme tout le reste).
+muette (`gh-security-triage.test.sh`, par le faux curl comme tout le reste) ;
+une carte UI demande sa preview et l'adresse est dans la livraison, une carte
+sans UI ne demande rien (`deliver.test.sh`) ; l'hôte ne rappelle le crochet
+que sur une tête changée ou un conteneur disparu, éteint l'expiré et
+l'orphelin, écrit l'erreur d'un crochet sans jamais rendre 3
+(`preview.test.sh`, par un faux crochet et le faux docker).

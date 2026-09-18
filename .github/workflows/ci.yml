@@ -24,3 +24,4 @@ jobs:
           [ ! -f nix/flake.nix ] || nix eval \
             ./nix#nixosConfigurations.template.config.system.build.toplevel.drvPath
           nix eval --impure --expr 'import ./tests/eva-nix.nix { nixpkgs = (builtins.getFlake (toString ./nix)).inputs.nixpkgs; }'
+          nix eval --impure --expr 'import ./tests/preview-nix.nix { nixpkgs = (builtins.getFlake (toString ./nix)).inputs.nixpkgs; }'

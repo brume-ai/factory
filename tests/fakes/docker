@@ -2,6 +2,9 @@
 # Faux docker pour les tests : journalise "docker run" dans $FAKE_DOCKER_LOG,
 # ne lance rien de reel. "ps" repond vide (aucun conteneur factory-loop en
 # cours), pour ne pas declencher le "docker rm -f" de run-loop.sh.
+# "inspect --format '{{.State.Running}}' <nom>" (preview.sh reconcile) rend
+# `true` si le nom figure dans $FAKE_DOCKER_RUNNING (noms separes par des
+# blancs), sinon echoue comme le vrai sur un conteneur inconnu.
 set -euo pipefail
 sub="${1:-}"
 case "$sub" in
@@ -10,6 +13,15 @@ case "$sub" in
     shift
     printf 'run %s\n' "$*" >> "${FAKE_DOCKER_LOG:?}"
     exit 0
+    ;;
+  inspect)
+    nom="${*: -1}"
+    [ -z "${FAKE_DOCKER_LOG:-}" ] || printf 'inspect %s\n' "$nom" >> "$FAKE_DOCKER_LOG"
+    for r in ${FAKE_DOCKER_RUNNING:-}; do
+      [ "$r" = "$nom" ] && { echo true; exit 0; }
+    done
+    echo "Error: No such object: $nom" >&2
+    exit 1
     ;;
   *) exit 0 ;;
 esac

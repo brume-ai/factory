@@ -28,6 +28,17 @@ let
     # que son clone (/workspace), où la boucle n'écrit jamais ; eva-watch.sh
     # lit /factory-repo/.omc en repli (docs/configuration.md).
     "${factory.repoDir}:/factory-repo:ro"
+    # LES PREVIEWS : EVA DEMANDE, L'HÔTE EXÉCUTE (nix/preview.nix). Depuis son
+    # conteneur, elle ne peut lancer ni docker ni systemctl ; elle dépose une
+    # demande dans requests (écriture — c'est le seul montage où EVA écrit
+    # hors de son propre état) et relit ce que l'hôte a monté dans state.
+    # LE RÉPERTOIRE ENTIER EN ÉCRITURE, state/ EN LECTURE SEULE PAR-DESSUS :
+    # une demande s'écrit par renommage depuis previews/.tmp, et un renommage
+    # entre deux montages distincts n'est pas un renommage (EXDEV : mv copie,
+    # et l'hôte lirait un fichier à moitié écrit). Un seul montage, donc ;
+    # l'état, lui, reste à l'hôte seul — le montage imbriqué le masque.
+    "${factory.stateDir}/previews:/previews"
+    "${factory.stateDir}/previews/state:/previews/state:ro"
   ];
   runArgs = lib.concatMapStringsSep " " (v: "--volume ${lib.escapeShellArg v}") mounts;
   # TZ DANS LE CONTENEUR, PAS SEULEMENT SUR L'HOTE : le cron d'Hermes lit son
@@ -39,7 +50,7 @@ let
   # ~/.hermes/skills/factory/ (~/.hermes = /opt/data = ${state}/home). La liste
   # est celle de skill/eva/ dans ce depot ; un skill absent d'ici n'est pas
   # provisionne, donc pas lu.
-  skills = [ "factory-decision" "factory-merge" "factory-release" "factory-etat" ];
+  skills = [ "factory-decision" "factory-merge" "factory-release" "factory-etat" "factory-preview" ];
   # LE SCRIPT DU CRON EST UN SHIM. Hermes lance `--script <nom>` depuis
   # ~/.hermes/scripts/ ; la relance elle-meme vit dans le depot (bin/eva-relance.sh,
   # qui a besoin de lib.sh a cote de lui) et se lance depuis le clone d'EVA :

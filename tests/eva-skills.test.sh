@@ -25,9 +25,12 @@
 #      TÊTE que l'humain a vue (`--tete`), et la release le numéro confirmé.
 . "$(dirname "$0")/helpers.sh"
 fail() { echo "$*" >&2; exit 1; }
-lignes_de_code() { awk '/^```/ { f = 1 - f; next } f == 1 { printf "%d\t%s\n", NR, $0 }' "$1"; }
+# LES BLOCS INDENTÉS AUSSI : dans une liste numérotée, la clôture est « ```
+# » précédée de trois espaces, et `/^```/` ne la voyait pas — les blocs des
+# skills n'étaient pas examinés du tout.
+lignes_de_code() { awk '/^[[:space:]]*```/ { f = 1 - f; next } f == 1 { printf "%d\t%s\n", NR, $0 }' "$1"; }
 
-attendus="factory-decision factory-etat factory-merge factory-release"
+attendus="factory-decision factory-etat factory-merge factory-preview factory-release"
 vus="$(ls "$REPO/skill/eva" | sort | tr '\n' ' ' | sed 's/ $//')"
 [ "$vus" = "$attendus" ] || fail "skill/eva : la liste des skills a changé (vus : $vus) — mettez nix/eva.nix (skills) et ce test d'accord"
 
@@ -91,6 +94,18 @@ grep -q 'headRefOid' "$M" || fail "factory-merge : ne lit pas la tête courante 
 R="$REPO/skill/eva/factory-release/SKILL.md"
 grep -q -- '--apply --ordre "slack:<ts du message>" --version X.Y.Z --tete <sha montré>' "$R" || fail "factory-release : --apply sans --version et --tete"
 grep -q 'tete: <sha>' "$R" || fail "factory-release : ne montre pas la tête à l'utilisateur"
+# factory-preview : EVA DEMANDE, l'hôte exécute — elle ne lance rien depuis
+# son conteneur, relit l'état, et ne promet jamais une preview avant `status`.
+P="$REPO/skill/eva/factory-preview/SKILL.md"
+grep -q 'preview.sh request up <F> eva:<login>' "$P" || fail "factory-preview : ne dépose pas la demande par preview.sh request up, avec l'origine eva:<login>"
+grep -q 'preview.sh request down <F> eva:<login>' "$P" || fail "factory-preview : pas de demande down"
+grep -q 'preview.sh status' "$P" || fail "factory-preview : ne relit pas l'état par preview.sh status"
+grep -qi 'deux minutes' "$P" || fail "factory-preview : ne borne pas l'attente de l'état"
+grep -qiE 'promet' "$P" || fail "factory-preview : ne dit pas qu'elle ne promet pas une preview avant l'état"
+h="$(lignes_de_code "$P" | grep -E '\b(docker|systemctl)\b' || true)"
+[ -z "$h" ] || fail "factory-preview : docker ou systemctl dans un bloc de code — EVA ne lance rien :
+$h"
+grep -q "\"factory-preview\"" "$REPO/nix/eva.nix" || fail "nix/eva.nix : factory-preview n'est pas provisionné"
 
 # 5 bis. AUCUN NOM DE LABEL EN DUR dans les skills d'EVA : les noms viennent de
 # factory.conf par label_get (card-state.sh) ; un skill qui en tape un
@@ -106,7 +121,7 @@ grep -q 'card-state.sh <n> decided' "$REPO/skill/eva/factory-decision/SKILL.md" 
 # 6. Le SOUL.
 SOUL="$REPO/nix/eva-soul.md"
 [ "$(wc -l < "$SOUL")" -le 40 ] || fail "SOUL : plus de 40 lignes ($(wc -l < "$SOUL"))"
-for m in factory-merge factory-release factory-decision factory-etat eva-merge.sh eva-release.sh; do
+for m in factory-merge factory-release factory-decision factory-etat factory-preview eva-merge.sh eva-release.sh; do
   grep -qF "$m" "$SOUL" || fail "SOUL : ne nomme pas $m"
 done
 grep -qi 'autorisés' "$SOUL" || fail "SOUL : ne dit pas qui commande (utilisateurs autorisés)"
