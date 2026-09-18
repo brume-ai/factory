@@ -259,8 +259,17 @@ done
 # pas en caractères : le français en accents pèse plus lourd que `${#PROMPT}`.
 # Les relecteurs ne sont pas concernés : le diff n'est pas inliné, ils le
 # lisent eux-mêmes par `git diff`.
+# LE PROMPT DE CLAUDE PASSE PAR STDIN, JAMAIS EN ARGUMENT. Au premier tour réel
+# de la v2 (psr-factory, 18 septembre 2026, carte #247), le prompt passé en
+# dernier argument après `--allowedTools <liste>` — une option VARIADIQUE —
+# était avalé comme un nom d'outil, et claude répondait « Input must be
+# provided either through stdin or as a prompt argument when using --print » :
+# code 4 deux fois, analyste jamais joué, carte en needs-human. Ni les faux CLI
+# ni la relecture ne pouvaient le voir. `--print` lit stdin ; c'est aussi ce qui
+# lève, pour ce CLI, la limite de 128 Kio d'un argument. Codex garde son
+# argument positionnel (aucune option variadique devant lui), et sa limite.
 taille="$(printf '%s' "$PROMPT" | wc -c)"
-if [ "$taille" -gt 120000 ]; then
+if [ "$CLI" = codex ] && [ "$taille" -gt 120000 ]; then
   echo "role: prompt de $taille octets, au-delà de ce qu'un argument de commande accepte (128 Kio) : réduisez les entrées" >&2
   exit 3
 fi
@@ -278,7 +287,7 @@ else
   else CMD+=(--dangerously-bypass-approvals-and-sandbox)
   fi
 fi
-CMD+=("$PROMPT")
+[ "$CLI" = claude ] || CMD+=("$PROMPT")
 
 if [ "$DRY" = 1 ]; then
   {
@@ -290,8 +299,13 @@ if [ "$DRY" = 1 ]; then
     echo "commande  :"
     # Un argument par ligne, cité : le prompt fait plusieurs lignes et une
     # commande imprimée sur une ligne serait illisible.
-    for a in "${CMD[@]:0:${#CMD[@]}-1}"; do printf '  %q\n' "$a"; done
-    echo "  <prompt ci-dessous>"
+    if [ "$CLI" = claude ]; then
+      for a in "${CMD[@]}"; do printf '  %q\n' "$a"; done
+      echo "  <prompt sur stdin, ci-dessous>"
+    else
+      for a in "${CMD[@]:0:${#CMD[@]}-1}"; do printf '  %q\n' "$a"; done
+      echo "  <prompt ci-dessous>"
+    fi
     echo "--- prompt ---"
     printf '%s\n' "$PROMPT"
   }
@@ -334,7 +348,11 @@ PY
 DEBUT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "role: $ROLE (itération $K) sous $MODELE via $CLI, dans $WT" >&2
 rc=0
-(cd "$WT" && "${CMD[@]}" >"$BRUT" 2>"$ERR" </dev/null) || rc=$?
+if [ "$CLI" = claude ]; then
+  (cd "$WT" && "${CMD[@]}" >"$BRUT" 2>"$ERR" <"$PROMPT_F") || rc=$?
+else
+  (cd "$WT" && "${CMD[@]}" >"$BRUT" 2>"$ERR" </dev/null) || rc=$?
+fi
 if [ "$rc" -ne 0 ]; then
   # LE CLI A ÉCHOUÉ, ET L'ARTEFACT LE DIT QUAND MÊME : un tour mort sans trace
   # ressemble à un tour jamais lancé, et turn-verify ne verrait qu'un artefact

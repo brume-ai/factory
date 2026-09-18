@@ -86,6 +86,13 @@ assert_contains "$C/calls.log" "--output-format json" "en JSON, sinon pas de pre
 # toute vérification et rendrait le premier décoratif. Vérifié dans le journal
 # du faux, pas dans une variable du script.
 assert_contains "$C/calls.log" "--allowedTools Read,Grep,Glob,Bash(git diff*),Bash(git log*)" "l'analyste est en lecture seule"
+# LE PROMPT N'EST JAMAIS UN ARGUMENT APRÈS --allowedTools : l'option est
+# variadique et avalerait le prompt (premier tour réel de la v2, #247, 18
+# septembre 2026 : « Input must be provided either through stdin… »). Le
+# journal du faux montre TOUS les arguments ; le dernier doit être la liste
+# d'outils, suivie de <stdin>.
+assert_contains "$C/calls.log" "--allowedTools Read,Grep,Glob,Bash(git diff*),Bash(git log*) <stdin>" "le prompt arrive sur stdin, rien après la liste d'outils"
+assert_not_contains "$(cat "$C/calls.log")" "Corps de la carte" "le prompt n'est pas dans les arguments"
 assert_file_lacks "$C/calls.log" "--dangerously-skip-permissions" "un rôle en lecture ne saute pas les permissions"
 # Le document-specialist lit aussi le web, et rien d'autre.
 log_reset
