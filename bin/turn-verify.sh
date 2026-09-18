@@ -46,7 +46,11 @@
 #
 # Usage : bash bin/turn-verify.sh <issue> <worktree> <base-ref>
 #   lit .omc/turn/<issue>/ (racine de l'arbre principal, là où role.sh écrit)
-#   et l'historique <base-ref>..HEAD dans le worktree.
+#   et l'historique <base-ref>..HEAD dans le worktree. `head-admission` dans
+#   le répertoire de tour (HEAD à l'admission, écrit par la boucle à chaque
+#   tour) sépare les commits d'un tour précédent de la carte — prouvés par
+#   les artefacts archivés sous .omc/turns-done/<issue>-*/ — de ceux de ce
+#   tour ; sans le fichier, tout est de ce tour.
 #
 # Codes de sortie : 0 = push permis · 1 = push refusé (les motifs sont listés) ·
 # 3 = paramètre manquant, worktree introuvable, base ou diff incalculables.
@@ -85,6 +89,26 @@ if ! diff_files="$(git -C "$WT" diff --name-only "$BASE_SHA..HEAD" 2>&1)"; then
   exit 3
 fi
 [ -n "$diff_files" ] || refus "rien à pousser : le diff $BASE..HEAD est vide"
+
+# LA TÊTE D'ADMISSION : HEAD du worktree au début de CE tour, écrite par la
+# boucle dans .omc/turn/<carte>/head-admission à chaque admission (la base,
+# elle, n'est écrite qu'une fois). Elle sépare deux sortes de commits dans
+# base..HEAD : ceux d'un tour PRÉCÉDENT de la carte (base..head-admission —
+# un tour arrêté en needs-human après un commit et avant le push, réadmis une
+# fois l'humain passé), et ceux de ce tour (head-admission..HEAD). Sans elle,
+# le commit du tour précédent était « hors de toute fenêtre » et l'analyste
+# « n'avait pas vu la base » : la carte réadmise était refusée à jamais.
+# Sans le fichier (un appel à la main), la tête d'admission est la base.
+if [ -f "$TURN/head-admission" ]; then
+  HEAD_ADM="$(git -C "$WT" rev-parse --verify --quiet "$(cat "$TURN/head-admission")^{commit}" 2>/dev/null)" \
+    || { echo "turn-verify: head-admission « $(cat "$TURN/head-admission")» introuvable dans $WT" >&2; exit 3; }
+  git -C "$WT" merge-base --is-ancestor "$BASE_SHA" "$HEAD_ADM" 2>/dev/null \
+    || { echo "turn-verify: la tête d'admission ${HEAD_ADM:0:12} ne descend pas de la base $BASE" >&2; exit 3; }
+else
+  HEAD_ADM="$BASE_SHA"
+fi
+git -C "$WT" merge-base --is-ancestor "$HEAD_ADM" HEAD 2>/dev/null \
+  || refus "la tête d'admission ${HEAD_ADM:0:12} n'est plus un ancêtre de HEAD ($HEAD_SHA) : la branche a été réécrite pendant le tour"
 
 # LISTE BLANCHE DE CE QUI N'EXÉCUTE RIEN, ET C'EST UNE LISTE BLANCHE DE FORMATS,
 # PAS DE RÉPERTOIRES. Tout ce qui n'y est pas est du code : un fichier sans
@@ -125,9 +149,8 @@ done <<<"$diff_files"
 # l'artefact nomme dans `preuve` doit porter ce thread dans son nom, et son
 # premier `turn_context` dit le modèle. Un brut absent, illisible, ou qui ne
 # dit pas ce que l'artefact prétend rend « - » et une raison.
-artefacts=""
-if [ -d "$TURN" ]; then
-  artefacts="$(python3 - "$TURN" <<'PY'
+lire_artefacts() {  # <répertoire> : une ligne tabulée par artefact
+  python3 - "$1" <<'PY'
 import json, os, re, sys, time, calendar
 d = sys.argv[1]
 def champ(v):
@@ -229,7 +252,10 @@ for nom in noms:
                      champ(rec), champ(raison), champ(a.get("head_avant")), champ(a.get("head_apres")),
                      epoch(a.get("debut")), epoch(a.get("fin")), nom]))
 PY
-)" || { echo "turn-verify: lecture des artefacts de $TURN impossible" >&2; exit 3; }
+}
+artefacts=""
+if [ -d "$TURN" ]; then
+  artefacts="$(lire_artefacts "$TURN")" || { echo "turn-verify: lecture des artefacts de $TURN impossible" >&2; exit 3; }
 fi
 
 # Ce que le bash retient de la lecture, en DEUX passes. La première établit,
@@ -292,12 +318,13 @@ for l in "${lignes[@]}"; do
     refus "preuve non recalculable : $fichier prétend « $prouve », mais $raison"
   fi
   case "$role" in
-    # L'ÉTAT DES LIEUX EST LA PREMIÈRE ITÉRATION VALIDE QUI A VU LA BASE : un
-    # analyste-1 illisible n'est pas un tour mort si analyste-2 est valide —
-    # à condition d'avoir regardé l'arbre AVANT toute ligne, c'est-à-dire avec
-    # HEAD à la base. Un analyste lancé après le codeur décrit un état des
-    # lieux qui n'en est plus un.
-    analyste) [ "$analyste_ok" = 1 ] || { [ "$valide" = 1 ] && [ "$head_avant" = "$BASE_SHA" ] && analyste_ok=1; } ;;
+    # L'ÉTAT DES LIEUX EST LA PREMIÈRE ITÉRATION VALIDE QUI A VU LA TÊTE
+    # D'ADMISSION : un analyste-1 illisible n'est pas un tour mort si
+    # analyste-2 est valide — à condition d'avoir regardé l'arbre AVANT toute
+    # ligne de CE tour, c'est-à-dire avec HEAD tel que la boucle l'a admis (la
+    # base, ou le commit d'un tour précédent de la carte). Un analyste lancé
+    # après le codeur décrit un état des lieux qui n'en est plus un.
+    analyste) [ "$analyste_ok" = 1 ] || { [ "$valide" = 1 ] && [ "$head_avant" = "$HEAD_ADM" ] && analyste_ok=1; } ;;
     codeur)   [ "$valide" = 1 ] && codeur_ok=1 ;;
     writer)   [ "$valide" = 1 ] && writer_ok=1 ;;
     relecteur-maint)
@@ -345,7 +372,9 @@ if [ -z "$diff_files" ]; then
   :
 elif [ "$touche_code" = 1 ]; then
   echo "turn-verify: le diff touche du code (${fichiers_code[*]}) : le socle est exigé"
-  [ "$analyste_ok" = 1 ] || refus "aucun analyste-<k>.json valide (verdict ok, modèle prouvé) qui ait vu la base $BASE avant toute ligne : pas d'état des lieux, pas de push"
+  if [ "$HEAD_ADM" = "$BASE_SHA" ]; then vu="la base $BASE"
+  else vu="la tête d'admission ${HEAD_ADM:0:12} (la carte reprend son travail d'un tour précédent, pas la base $BASE)"; fi
+  [ "$analyste_ok" = 1 ] || refus "aucun analyste-<k>.json valide (verdict ok, modèle prouvé) qui ait vu $vu avant toute ligne : pas d'état des lieux, pas de push"
   [ "$codeur_ok" = 1 ]   || refus "aucun codeur-<k>.json valide : le code du diff n'a pas été produit par le rôle codeur"
   if [ "$maint_k" = 0 ]; then
     refus "aucun relecteur-maint-<k>.json : le diff n'a pas été relu pour sa maintenabilité"
@@ -379,17 +408,55 @@ fi
 # writer, designer ou test-engineer a été fait par quelqu'un d'autre — un
 # orchestrateur qui a « juste corrigé une ligne » lui-même, sans artefact, sans
 # preuve, sans relecture. Vaut pour toute carte, doc comprise : la doc aussi
-# est écrite par un rôle. Les fenêtres sont inclusives, à la seconde.
+# est écrite par un rôle. Les fenêtres sont inclusives, à la seconde. Les
+# commits de CE tour sont ceux de head-admission..HEAD ; ceux d'avant ont
+# leur propre règle, plus bas.
+dans_fenetre() {  # <epoch> <fenêtre…> : 0 si l'instant tombe dans l'une d'elles
+  local ct="$1" fen d0 d1; shift
+  for fen in "$@"; do
+    read -r d0 d1 <<<"$fen"
+    if [ "$ct" -ge "$d0" ] && [ "$ct" -le "$d1" ]; then return 0; fi
+  done
+  return 1
+}
 if [ -n "$diff_files" ]; then
   while read -r sha ct; do
     [ -n "${sha:-}" ] || continue
-    dedans=0
-    for fen in "${fenetres[@]}"; do
-      read -r d0 d1 <<<"$fen"
-      if [ "$ct" -ge "$d0" ] && [ "$ct" -le "$d1" ]; then dedans=1; break; fi
-    done
-    [ "$dedans" = 1 ] || refus "le commit ${sha:0:12} ($(date -u -d "@$ct" +%Y-%m-%dT%H:%M:%SZ)) n'est tombé dans la fenêtre d'aucun rôle qui écrit (codeur, writer, designer, test-engineer) : qui l'a fait ?"
-  done <<<"$(git -C "$WT" log --format='%H %ct' "$BASE_SHA..HEAD")"
+    dans_fenetre "$ct" "${fenetres[@]}" \
+      || refus "le commit ${sha:0:12} ($(date -u -d "@$ct" +%Y-%m-%dT%H:%M:%SZ)) n'est tombé dans la fenêtre d'aucun rôle qui écrit (codeur, writer, designer, test-engineer) : qui l'a fait ?"
+  done <<<"$(git -C "$WT" log --format='%H %ct' "$HEAD_ADM..HEAD")"
+fi
+
+# --- Les commits d'un tour précédent de la carte (base..head-admission) -----------
+# UNE CARTE RÉADMISE REPREND SON TRAVAIL, ET LE PROUVE. Un commit qui était là
+# à l'admission n'est pas de ce tour : sa preuve est dans un tour ARCHIVÉ de
+# la même carte (.omc/turns-done/<carte>-*/, où la remise à zéro déplace les
+# artefacts sans les effacer) — ou dans ce répertoire de tour, quand le tour
+# précédent n'a pas été remis à zéro (un refus de la porte, un tour mort). La
+# règle est la même que pour un artefact courant : un rôle qui écrit, valide,
+# modèle du catalogue, preuve recalculée depuis son .brut — et le commit
+# porte « Refs #<carte> », sinon c'est le travail d'une autre carte qui est
+# passé par ce worktree. Les relecteurs, eux, relisent `git diff base..HEAD`
+# et donc ce commit-là aussi : « relu jusqu'à HEAD » couvre tout.
+if [ -n "$diff_files" ] && [ "$HEAD_ADM" != "$BASE_SHA" ]; then
+  fenetres_avant=()
+  for d in "$(factory_root)/.omc/turns-done/$ISSUE"-*/; do
+    [ -d "$d" ] || continue
+    archive="$(lire_artefacts "${d%/}")" || { echo "turn-verify: lecture des artefacts archivés de $d impossible" >&2; exit 3; }
+    while IFS=$'\t' read -r role k verdict attendu prouve recalcule _ _ _ debut fin _; do
+      case "${role:-}" in codeur|writer|designer|test-engineer) ;; *) continue ;; esac
+      catalogue="$(role_get "$role" 2>/dev/null)" || continue
+      [ "$verdict" = ok ] && [ "$prouve" = "$catalogue" ] && [ "$attendu" = "$catalogue" ] && [ "$recalcule" = "$prouve" ] || continue
+      [ "$debut" != "-" ] && [ "$fin" != "-" ] && fenetres_avant+=("$debut $fin")
+    done <<<"$archive"
+  done
+  while read -r sha ct; do
+    [ -n "${sha:-}" ] || continue
+    git -C "$WT" log -1 --format=%B "$sha" | grep -qiE "\brefs?[[:space:]:]*#$ISSUE\b" \
+      || refus "le commit ${sha:0:12} d'un tour précédent ne porte pas « Refs #$ISSUE » : le travail d'une autre carte, resté dans le worktree ?"
+    dans_fenetre "$ct" "${fenetres_avant[@]}" "${fenetres[@]}" \
+      || refus "le commit ${sha:0:12} ($(date -u -d "@$ct" +%Y-%m-%dT%H:%M:%SZ)) d'un tour précédent de #$ISSUE sans preuve : aucun codeur, writer, designer ou test-engineer valide d'un tour archivé (.omc/turns-done/$ISSUE-*/) ne l'a écrit dans sa fenêtre"
+  done <<<"$(git -C "$WT" log --format='%H %ct' "$BASE_SHA..$HEAD_ADM")"
 fi
 
 # --- Le writer, si l'analyste a marqué un comportement documenté ---------------

@@ -326,4 +326,51 @@ assert_eq "50" "$n" "la carte est servie"
 assert_contains "$C" "GET repos/o/r/issues/50 " "relue par issues/<n> faute des cles dans la liste"
 assert_contains "$TESTTMP/err" "feature #10" "et sa feature est trouvee"
 
+# m) UNE FEATURE DONT LE WORKTREE PORTE LE TRAVAIL NON POUSSE D'UNE AUTRE CARTE
+#    N'ADMET PAS DE CARTE (wt-pending.sh). Le 18 septembre : #247 arretee en
+#    needs-human apres un commit et avant le push, la boucle a servi #255 sur le
+#    meme worktree. Ici : feature 10, cartes 12 (position 0) et 13 ; le
+#    worktree .worktrees/feature-10 (FACTORY_ROOT = TESTTMP) porte un commit
+#    « Refs #13 » que origin/feature/10 n'a pas.
+W="$TESTTMP/.worktrees/feature-10"
+git init -q "$W"
+gw() { git -C "$W" -c user.email=t@t -c user.name=t "$@"; }
+gw commit -q --allow-empty -m "ouvre feature/10"
+gw update-ref refs/remotes/origin/feature/10 HEAD
+gw commit -q --allow-empty -m "feat: la carte 13" -m "Refs #13"
+liste "$(iss 10 '[]' null Feature null 2)" "$(iss 12 '[]' 10 Task)" "$(iss 13 '[]' 10 Task)"
+subs 10 12 13
+run
+assert_rc 0 "$rc" "la carte attendue est servie ($(cat "$TESTTMP/err"))"
+assert_eq "13" "$n" "la carte dont le travail attend passe devant la position"
+assert_contains "$TESTTMP/err" "#12 : feature/10 porte le travail non poussé de #13 — la feature attend cette carte" "et l'autre est ecartee, dite"
+# La carte attendue n'est pas admissible (needs-human) : la feature attend, rien
+# n'est servi — plutot qu'un tour dont le diff embarquerait le travail de #13.
+liste "$(iss 10 '[]' null Feature null 2)" "$(iss 12 '[]' 10 Task)" "$(iss 13 '[{"name":"factory:needs-human"}]' 10 Task)"
+run
+assert_rc 1 "$rc" "la feature attend sa carte : rien a faire"
+assert_contains "$TESTTMP/err" "la feature attend cette carte" "et c'est dit"
+# Les commits de la carte elle-meme : servie, c'est la reprise de son travail.
+liste "$(iss 10 '[]' null Feature null 1)" "$(iss 13 '[]' 10 Task)"
+subs 10 13
+run
+assert_eq "13" "$n" "une carte dont le worktree porte SON travail est servie"
+assert_not_contains "$(cat "$TESTTMP/err")" "travail non poussé" "sans rien ecarter"
+# Une autre feature n'est pas concernee : #40 (mini-feature, pas de worktree) passe.
+liste "$(iss 10 '[]' null Feature null 1)" "$(iss 12 '[]' 10 Task)" "$(iss 40 '[]' null Task)"
+subs 10 12
+run
+assert_eq "40" "$n" "la carte d'une autre feature est servie a la place"
+# Un arbre sale sans commit n'attribue rien a personne : la carte est servie.
+gw reset -q --hard refs/remotes/origin/feature/10
+echo brouillon > "$W/en-cours"
+liste "$(iss 10 '[]' null Feature null 1)" "$(iss 12 '[]' 10 Task)"
+run
+assert_eq "12" "$n" "des fichiers non commites ne sont le travail d'aucune carte : servie"
+# Un worktree illisible est un 3, pas « rien a faire ».
+rm -rf "$W/.git"
+run
+assert_rc 3 "$rc" "un worktree illisible = 3"
+rm -rf "$W"
+
 echo ok

@@ -59,8 +59,10 @@
 #
 # UN REFUS DE CARTE N'EST PAS UN ARRÊT DE L'USINE. Une carte ajoutée sous une
 # Feature FERMÉE (la feature est sortie), un worktree de feature sur une autre
-# branche, une branche locale qui porte des commits jamais poussés sans
-# worktree, une PR que GitHub refuse (422 « No commits between ») : aucun de ces
+# branche, un worktree qui porte le travail non poussé d'une AUTRE carte
+# (wt-pending.sh : la feature attend cette carte-là), une branche locale qui
+# porte des commits jamais poussés sans worktree, une PR que GitHub refuse
+# (422 « No commits between ») : aucun de ces
 # cas n'est une configuration cassée, et aucun ne doit arrêter la boucle sur
 # les autres cartes. C'est la CARTE qui est refusée : code 1, `needs-human`
 # posé avec la raison (card-state.sh), et la sélection ne la reprend plus.
@@ -226,6 +228,14 @@ if git -C "$ROOT" worktree list --porcelain 2>/dev/null | grep -qx "worktree $(r
   [ "$(git -C "$WT" branch --show-current 2>/dev/null)" = "$BRANCHE" ] \
     || refus_carte "le worktree $WT est sur « $(git -C "$WT" branch --show-current 2>/dev/null || echo '<détaché>') », pas sur $BRANCHE : à réconcilier à la main"
   echo "feature-up: worktree existant $WT — repris tel quel" >&2
+  # DU TRAVAIL NON POUSSÉ D'UNE AUTRE CARTE REFUSE CELLE-CI (wt-pending.sh) :
+  # son diff l'embarquerait, et la porte le refuserait — un tour pour rien.
+  # La sélection l'écarte déjà ; ici c'est la défense en profondeur (un
+  # sondage périmé, un appel à la main). Un refus de carte (1), jamais un 3 :
+  # la feature attend sa carte, l'usine continue sur les autres.
+  attente="$(bash "$HERE/wt-pending.sh" "$F")" || exit 3
+  autres="$(printf '%s' "$attente" | grep -xE '[0-9]+' | grep -vx "$CARTE" | sed 's/^/#/' | paste -sd, - || true)"
+  [ -z "$autres" ] || refus_carte "la feature #$F porte le travail non poussé de ${autres//,/, } (worktree $WT) — la feature attend cette carte, pas #$CARTE"
   # Propre et en retard sur origin → il avance. Sale ou divergent → on le dit,
   # on ne touche pas : du travail non poussé y attend peut-être.
   if [ -n "$heads" ]; then
