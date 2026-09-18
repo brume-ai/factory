@@ -83,7 +83,15 @@ LOOP_MAIN_BIN    := claude
 # réel de la v2 (18 septembre 2026) : un skill corrigé et déployé à la racine,
 # un tour qui lisait encore l'ancien. `--append-system-prompt-file` porte celui
 # du sous-module de l'arbre principal, que cette boucle met à jour à chaque tour.
-LOOP_SKILL        = --append-system-prompt-file "$(FACTORY_DIR)/skill/orchestrator/SKILL.md"
+# ET LE SKILL DU WORKTREE N'EST PAS CHARGÉ. Injecter la bonne version ne suffit
+# pas : « suis le skill » fait aussi charger `.claude/skills/orchestrator` du
+# worktree, et c'est l'ancien que l'orchestrateur a suivi (tour de #247, le
+# même soir). `--setting-sources user` écarte les skills et réglages du PROJET
+# pour ce lancement ; mesuré sur la machine : `orchestrator` et les skills
+# Laravel disparaissent de la liste, ceux de l'utilisateur restent. Les rôles
+# (role.sh) gardent les skills du projet : le codeur et les relecteurs en ont
+# l'usage, l'orchestrateur non.
+LOOP_SKILL        = --setting-sources user --append-system-prompt-file "$(FACTORY_DIR)/skill/orchestrator/SKILL.md"
 LOOP_RUN_VERBOSE  = $(CLAUDE_LAUNCH) $(LOOP_SKILL) --output-format stream-json --verbose -p "$$prompt" | "$(FACTORY_BIN)/claude-stream.sh"
 LOOP_RUN_QUIET    = $(CLAUDE_LAUNCH) $(LOOP_SKILL) -p "$$prompt"
 
