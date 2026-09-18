@@ -3,10 +3,13 @@
 # Configuration : factory.conf a la racine du depot (lignes KEY = VALUE, lues
 # aussi par les scripts bash), surchargable par l'environnement et la ligne de
 # commande make. Extrait de Brume (Makefile, section github-loop) au SHA
-# 12ac9e92 ; les commentaires dates sont les lecons payees la-bas.
+# 12ac9e92 ; les commentaires dates sont les lecons payees la-bas. La v2
+# (docs/v2-feature.md) a remplace le tour : une feature = une branche = une PR,
+# la boucle cree la branche et la PR, lance un ORCHESTRATEUR, verifie ses
+# artefacts et pousse elle-meme.
 
 # La recette de `loop` utilise des substitutions bash (`${var//motif/remplacement}`)
-# pour injecter @ISSUE@/@WHY@/@PR@ dans les prompts. `/bin/sh` pointe vers `dash`
+# pour injecter @ISSUE@/@FEATURE@/@WORKTREE@/@BASE@/@PR@ dans le prompt. `/bin/sh` pointe vers `dash`
 # sur Debian/Ubuntu (donc sur les runners `ubuntu-latest`) : sans cette ligne, la
 # recette y echoue en « Bad substitution » alors qu'elle marche partout ou `/bin/sh`
 # se trouve deja etre bash (Fedora, par exemple). GNU Make resout un SHELL sans
@@ -41,47 +44,42 @@ LOOP_SLEEP     ?= $(call factory_conf,LOOP_SLEEP,60)
 # 2 août : quatre tours sur la même carte, quatre suites e2e complètes payées
 # pour rien. Au-delà de ce compte, la boucle s'arrête et le DIT.
 LOOP_MAX_RETRY ?= $(call factory_conf,LOOP_MAX_RETRY,3)
-# `make loop` lance en YOLO (--dangerously-skip-permissions, sans surveillance) sur
-# Opus 5 à effort LOW, via CLAUDE_LAUNCH (surchargeable). Les prompts restent
-# COURTS À DESSEIN : toute la procédure vit dans le skill `github-loop` — un fait,
-# un endroit. La redire ici donnerait à l'agent deux copies concurrentes des mêmes
-# ordres, ce qui est ce qui le fait argumenter et s'arrêter trop tôt. Modifiez le
-# skill, pas ce prompt.
+# `make loop` lance l'ORCHESTRATEUR en YOLO (--dangerously-skip-permissions, sans
+# surveillance) sur Opus 5 à effort LOW, via CLAUDE_LAUNCH (surchargeable).
+# L'ORCHESTRATEUR EST TOUJOURS CLAUDE : il n'écrit pas de code, il compose
+# l'équipe et fait poper chaque rôle par bin/role.sh — Codex est un RÔLE (le
+# codeur), pas un agent principal. `MAIN=codex` et son prompt « tu fais la carte
+# de bout en bout toi-même » ont disparu avec la v2 : c'est exactement ce que
+# docs/v2-feature.md § 4 interdit, et ce que turn-verify.sh refuse.
+# Le prompt reste COURT À DESSEIN : toute la procédure vit dans le skill
+# `orchestrator` — un fait, un endroit. La redire ici donnerait à l'agent deux
+# copies concurrentes des mêmes ordres, ce qui le fait argumenter et s'arrêter
+# trop tôt. Modifiez le skill, pas ce prompt.
 # PAS FABLE 5 : voir la lecon du 7 aout dans l'historique Brume (pot de credits
 # distinct, tours qui meurent en 4 s en ressemblant a une usine occupee).
 CLAUDE_LAUNCH  ?= $(call factory_conf,CLAUDE_LAUNCH,claude --dangerously-skip-permissions --model claude-opus-5 --effort low)
-CODEX_LAUNCH   ?= $(call factory_conf,CODEX_LAUNCH,codex exec --dangerously-bypass-approvals-and-sandbox)
-MAIN           ?= $(call factory_conf,MAIN,claude)
 
 FACTORY_BOLD := $(shell tput bold 2>/dev/null)
 FACTORY_CYAN := $(shell tput setaf 6 2>/dev/null)
 FACTORY_RST  := $(shell tput sgr0 2>/dev/null)
 
-# `@ISSUE@` est substitué au lancement. UN SEUL JEU DE PROMPTS, parce qu'il n'y a
-# plus qu'un seul modèle : la carte devient une pull request, l'intégration la
-# merge dans la branche de travail, et c'est la RELEASE qui ferme la carte. Ils
-# restent COURTS À DESSEIN : toute la procédure vit dans le skill `github-loop` —
-# un fait, un endroit. La redire ici donnerait à l'agent deux copies concurrentes
-# des mêmes ordres, ce qui est précisément ce qui le fait argumenter et s'arrêter
-# trop tôt.
-LOOP_PROMPT_RESUME ?= github-loop : suis le skill. Un ENVIRONNEMENT existe déjà pour la carte \#@ISSUE@ dans .worktrees/card-@ISSUE@, avec du travail inachevé (@WHY@). Tu le REPRENDS — tu ne repars pas de zéro et tu ne recrées rien : lis ce qui y est fait, réconcilie, et mène la carte au bout. Tu ne rends JAMAIS la main en attendant un résultat. Puis stop.
-LOOP_PROMPT_PR ?= github-loop : suis le skill, section <Tend_A_Pull_Request>. La pull request \#@PR@ du dépôt @REPO@ a un grief PRÉCIS : @WHY@. C'est CELUI-LÀ que tu traites, pas un autre. Remets-la en état, ou ferme-la en justifiant. Tu ne rends JAMAIS la main en attendant un résultat : tu bloques au premier plan jusqu'au verdict. Puis stop.
-LOOP_PROMPT   ?= github-loop : suis le skill. Travaille l'issue \#@ISSUE@ du dépôt @REPO@. Une seule carte, menée jusqu'à une pull request vérifiée — ou son prérequis carvé, ou marquée bloquée, ou fermée si tu prouves qu'elle n'a plus d'objet. Tu ne rends JAMAIS la main en attendant un résultat : tu bloques au premier plan jusqu'au verdict. Tu ne fermes PAS une carte que tu as travaillée — l'intégration la merge, et c'est la release qui la ferme. Tu fermes en revanche une carte dont tu PROUVES qu'il n'y a rien à faire. Puis stop.
-LOOP_PROMPT_CODEX ?= github-loop : suis le skill. Travaille l'issue \#@ISSUE@ du dépôt @REPO@. Tu es l'agent principal et tu fais la carte de bout en bout toi-même. Une seule carte, menée jusqu'à une pull request vérifiée. Tu ne fermes PAS une carte que tu as travaillée — l'intégration la merge, et c'est la release qui la ferme. Tu fermes en revanche une carte dont tu PROUVES qu'il n'y a rien a faire. Puis stop.
+# Six marqueurs, substitués au lancement : la carte, sa feature (branche
+# `feature/<F>` et PR déjà créées par feature-up.sh), le worktree (déjà sur la
+# branche, outillage initialisé — l'orchestrateur y est lancé), la RACINE de
+# l'arbre principal (les artefacts du tour vivent sous <racine>/.omc/turn/ — un
+# chemin relatif depuis le worktree atterrirait dans le worktree, où la boucle
+# ne regarde jamais), la base (le SHA de origin/feature/<F> à l'admission, ce
+# contre quoi le diff se lit) et la PR.
+# UN SEUL PROMPT : plus de reprise ni d'entretien. Un tour interrompu se
+# reprend par la sélection normale (la carte porte `busy`, son répertoire de
+# tour persiste), et les remarques sur une PR deviennent des cartes (D6).
+LOOP_PROMPT ?= orchestrator : suis le skill. Carte \#@ISSUE@ du dépôt @REPO@, feature \#@FEATURE@ (branche feature/@FEATURE@, PR \#@PR@ — la boucle les a créées, tu ne les recrées pas). Worktree : @WORKTREE@ (tu y es lancé). Racine : @ROOT@ (les artefacts du tour vivent sous @ROOT@/.omc/turn/@ISSUE@/, jamais dans le worktree). Base : @BASE@. Un seul tour : compose l'équipe, fais poper chaque rôle par role.sh, n'écris aucun code toi-même, ne pousse JAMAIS. Pose @ROOT@/.omc/turn/@ISSUE@/pret quand turn-verify.sh rend 0, ou arrête-toi sur needs-human, refacto carvée, ou prémisse fausse prouvée. Tu ne rends JAMAIS la main en attendant un résultat. Puis stop.
 
-ifeq ($(MAIN),codex)
-LOOP_MAIN_BIN    := codex
-LOOP_PROMPT_TPL   = $(LOOP_PROMPT_CODEX)
-LOOP_RUN_VERBOSE  = $(CODEX_LAUNCH) --json "$$prompt"
-LOOP_RUN_QUIET    = $(CODEX_LAUNCH) "$$prompt"
-else
 LOOP_MAIN_BIN    := claude
-LOOP_PROMPT_TPL   = $(LOOP_PROMPT)
 LOOP_RUN_VERBOSE  = $(CLAUDE_LAUNCH) --output-format stream-json --verbose -p "$$prompt" | "$(FACTORY_BIN)/claude-stream.sh"
 LOOP_RUN_QUIET    = $(CLAUDE_LAUNCH) -p "$$prompt"
-endif
 
-## loop: boucle ralph sur les issues GitHub — agent NEUF par carte (MAIN=claude|codex ; VERBOSE=1 pour suivre)
+## loop: la boucle v2 sur les issues GitHub — orchestrateur NEUF par carte, la boucle pousse (VERBOSE=1 pour suivre)
 .PHONY: loop
 loop:
 	@command -v $(LOOP_MAIN_BIN) >/dev/null 2>&1 || { echo "$(LOOP_MAIN_BIN) CLI introuvable dans le PATH"; exit 1; }
@@ -147,7 +145,7 @@ loop:
 		exit 5 ; \
 	fi
 	@. "$(FACTORY_DIR)/bin/lib.sh" ; FACTORY_ROOT="$(CURDIR)" ; \
-	echo "$(FACTORY_BOLD)github-loop$(FACTORY_RST) — $$(conf_get GH_REPO) · agent : $(LOOP_MAIN_BIN) (MAIN=$(MAIN)).$(if $(VERBOSE), streaming ON.,) 'make loop-stop' pour finir la carte puis s'arrêter · Ctrl-C pour couper net."
+	echo "$(FACTORY_BOLD)factory v2$(FACTORY_RST) — $$(conf_get GH_REPO) · orchestrateur : $(LOOP_MAIN_BIN).$(if $(VERBOSE), streaming ON.,) 'make loop-stop' pour finir la carte puis s'arrêter · Ctrl-C pour couper net."
 	@# Sentinelle laissé par un run précédent : sans cette purge, la boucle
 	@# s'arrêterait après une seule carte sans que personne ne l'ait demandé.
 	@mkdir -p "$(CURDIR)/.omc" && rm -f "$(CURDIR)/.omc/loop.stop"
@@ -161,34 +159,26 @@ loop:
 	@# plus dangereuse : `x="$$(cmd)" && rc=0` seul laisse `rc` à la valeur du tour
 	@# PRÉCÉDENT quand la substitution échoue, donc « file vide » serait lue comme
 	@# « carte servie » et un agent partirait sur un numéro vide.
-	@# ORDRE DES PRIORITÉS, et il compte : ménage, puis ENTRETIEN DES PR, puis
-	@# reprise d'un environnement inachevé, puis carte neuve.
-	@# Les PR passent devant la reprise parce qu'une PR bloquée bloque TOUTE la
-	@# pile : chaque carte suivante se construit sur le sommet, donc empiler sur
-	@# une base en conflit produit du travail invérifiable. Le travail non commité
-	@# d'un worktree, lui, ne risque rien à attendre — wt-cleanup ne touche pas un
-	@# worktree sans PR, et l'agent d'entretien travaille dans le sien.
-	@# AVANT TOUT SONDAGE, LE MÉNAGE — ET IL COMMENCE PAR L'INTÉGRATION.
-	@# `gh-stage-pr` merge dans la branche de travail les pull requests de carte
-	@# qui ont tout prouvé, et pose `factory:staged`. Il passe EN PREMIER parce que
-	@# TOUT ce qui suit lit ce qu'il produit : `wt-cleanup` ne détruit un
-	@# environnement que si sa PR est mergée, `gh-unblock` rend à la file les cartes
-	@# dont le bloqueur est intégré, et `gh-pr-attention` ne carve une carte neuve
-	@# que sur une PR mergée. Placé en dernier, chacune de ces trois choses
-	@# attendrait le tour suivant — donc un LOOP_SLEEP entier, et une voie de
-	@# parallélisme tenue pour rien.
-	@# Puis détruire les environnements dont le travail a atterri : une pile
-	@# abandonnée coûte 3 Go, une base, une route, et surtout UNE VOIE — le hook
-	@# worktree-up du projet refuse d'en fabriquer une de trop, donc un worktree
-	@# oublié empêche la carte suivante de démarrer. Le skill demande à l'agent de
-	@# nettoyer en partant, mais un agent tué en route ne nettoie pas : c'est
-	@# justement le cas qui laisse des restes.
-	@# Puis : rendre à la file les cartes dont le bloqueur est FERMÉ.
-	@# Une carte déclare sa dépendance en tête de corps (« Bloquée par #N ») — bon
-	@# endroit, lisible et durable — mais personne ne la résolvait quand #N tombait.
-	@# Le 2 août, retirer les LABELS sans retirer le TEXTE a produit pire que
-	@# l'immobilisme : cinq tours d'affilée à relire « Bloquée par », vérifier que
-	@# c'était vrai, et re-bloquer. Zéro ligne de code, et aucun agent en tort.
+	@# L'ORDRE D'UN TOUR (docs/v2-feature.md, D4) : (a) le ménage, (b) la
+	@# sélection d'une carte, (c) sa feature — branche, worktree, PR —, (d) la
+	@# préparation du tour, (e) l'orchestrateur, (f) au retour : la porte, puis
+	@# la livraison. Plus d'ENTRETIEN de PR ni de REPRISE : une remarque sur une
+	@# PR devient une carte (gh-pr-attention), un tour interrompu se reprend par
+	@# la sélection normale (la carte porte `busy`, son répertoire de tour
+	@# persiste). Et PLUS D'INTÉGRATION : `gh-stage-pr` a disparu avec la PR de
+	@# carte — une carte est un commit sur la branche de sa feature, et Pony ne
+	@# merge plus jamais rien, nulle part (§ 3).
+	@# AVANT TOUT SONDAGE, LE MÉNAGE. D'abord détruire les environnements dont le
+	@# travail a atterri (`wt-cleanup`, v2 : un worktree `feature-<F>` seulement si
+	@# la PR de F est mergée ou fermée) : une pile abandonnée coûte 3 Go, une
+	@# base, une route, et surtout UNE VOIE — le hook worktree-up du projet
+	@# refuse d'en fabriquer une de trop. Un agent tué en route ne nettoie pas :
+	@# c'est justement le cas qui laisse des restes.
+	@# Puis : rendre à la file les cartes dont le bloqueur est tombé (`gh-unblock`).
+	@# Une carte déclare sa dépendance nativement (ou en tête de corps, « Bloquée
+	@# par #N ») — mais personne ne la résolvait quand #N tombait. Le 2 août,
+	@# retirer les LABELS sans retirer le TEXTE a produit pire que l'immobilisme :
+	@# cinq tours d'affilée à relire « Bloquée par », vérifier, et re-bloquer.
 	@# LA SÉCURITÉ EST DU MÉNAGE, PAS UN SÉLECTEUR DE TRAVAIL. `gh-security-triage`
 	@# ne rend aucun numéro et ne lance aucun agent : il transpose les alertes des
 	@# onglets Security en ISSUES, puis se tait. C'est `gh-next-issue` qui les
@@ -212,14 +202,12 @@ loop:
 	@# l'explication (laissée filer vers le terminal). Sonder deux fois pour
 	@# récupérer les deux flux exposerait à une carte qui change d'état entre les
 	@# deux appels — et paierait deux requêtes pour une réponse.
-	@# ET SUR UNE PR DÉJÀ INTÉGRÉE, `gh-pr-attention` CARVE AU LIEU DE RÉVEILLER.
-	@# On ne rouvre JAMAIS une PR mergée : ses commits sont dans la branche de
-	@# travail, et la rouvrir serait un nœud de rebase pour rien. Il carve donc une
-	@# carte NEUVE, liée à l'originale, et accuse réception sur la PR — sans cet
-	@# accusé il en carverait une de plus à chaque tour, et la garde anti-tourniquet
-	@# ci-dessous, qui compte les répétitions d'un MÊME sujet, ne verrait rien
-	@# puisque le sujet changerait à chaque fois. Ce carve ne rend AUCUN numéro : la
-	@# carte neuve entre dans la file, et c'est le sondage qui la prendra.
+	@# gh-pr-attention EST DU MÉNAGE AUSSI (D6) : chaque remarque humaine sur une
+	@# PR de feature ouverte devient une CARTE sous la feature, et l'usine répond
+	@# dans le fil ; une CI rouge devient une carte « Réparer la CI ». Il ne rend
+	@# AUCUN numéro : les cartes neuves entrent dans la file, prioritaires, et
+	@# c'est le sondage qui les prendra. Pony ne réagit jamais à un commentaire
+	@# brut, il exécute une carte qu'on a rédigée (§ 5).
 	@# UN JETON PAR TOUR, frappé en tête de tour et exporté (GH_TOKEN pour `gh`
 	@# et l'agent, FACTORY_TOKEN pour les scripts de bin/). Chaque appel Bash
 	@# d'un agent est un shell NEUF : un `export` posé par l'agent ne survit pas à
@@ -235,7 +223,7 @@ loop:
 	@# de travail, résolue par bin/lib.sh dans la recette ; elle ne dit rien de sa
 	@# FRAÎCHEUR. Une PR est intégrée, l'arbre local reste au commit d'avant, et la
 	@# boucle continue à exécuter l'outillage d'AVANT le correctif — scripts de
-	@# `tools/factory/` et skill `github-loop` — sans que rien ne le signale. C'est
+	@# `tools/factory/` et skill `orchestrator` — sans que rien ne le signale. C'est
 	@# le défaut du 2 août (l'arbre laissé sur `card/7`) par une autre porte : bonne
 	@# branche, contenu périmé. Les CARTES, elles, n'ont jamais souffert de ça — le
 	@# skill fabrique chaque worktree depuis `origin/<base>` fraîchement fetché.
@@ -253,12 +241,13 @@ loop:
 	@# le 3 serait avalé et l'export n'atteindrait personne. Après lui,
 	@# $$FACTORY_STAGING est la seule valeur lue par le fetch, le ff-only, les
 	@# scripts de ménage et l'agent.
-	@# FACTORY_IN_LOOP REND EXÉCUTABLE « LA RELEASE EST UN GESTE HUMAIN ». Ce n'est
-	@# pas une clé de configuration — personne ne la pose dans factory.conf, un
-	@# seul script la lit, `gh-release.sh`, et il refuse de partir quand elle est
-	@# là. Sans elle la phrase n'est qu'une ligne de doc : l'agent hérite de
-	@# GH_TOKEN, frappé plus bas, tourne en --dangerously-skip-permissions, et
-	@# rien ne l'empêcherait de fermer des dizaines de cartes non relues.
+	@# FACTORY_IN_LOOP REND EXÉCUTABLE « LES GESTES D'EVA NE SE FONT JAMAIS DEPUIS
+	@# UN TOUR ». Ce n'est pas une clé de configuration — personne ne la pose dans
+	@# factory.conf ; trois scripts la lisent, `gh-release.sh`, `eva-merge.sh` et
+	@# `eva-release.sh`, et refusent de partir quand elle est là. Sans elle la
+	@# phrase n'est qu'une ligne de doc : l'agent hérite d'un jeton, tourne en
+	@# --dangerously-skip-permissions, et rien ne l'empêcherait de fermer des
+	@# features que personne n'a sorties.
 	@. "$(FACTORY_DIR)/bin/lib.sh" || { echo "factory.mk: $(FACTORY_DIR)/bin/lib.sh illisible" >&2 ; exit 3 ; } ; \
 	export FACTORY_ROOT="$(CURDIR)" ; \
 	branches_require ; \
@@ -324,13 +313,35 @@ loop:
 			echo "$(FACTORY_CYAN)— jeton d'App impossible à frapper : configuration cassée. Arrêt. —$(FACTORY_RST)" ; exit 3 ; \
 		fi ; \
 		export GH_TOKEN ; export FACTORY_TOKEN="$$GH_TOKEN" ; \
-		# GIT POUSSE AVEC LE JETON DE gh, ET C'EST LA BOUCLE QUI LE DIT A GIT. Le \
-		# conteneur n'a aucun credential helper et son ~/.gitconfig ne survit pas : \
-		# `git push -u origin card/N` demandait un mot de passe que personne ne \
-		# tape, et chaque agent improvisait (`gh auth setup-git`, un jeton dans \
-		# l'URL du remote…). GIT_CONFIG_* est lu par git a chaque commande, herite \
-		# par tous les shells du tour, et ne touche aucun fichier. \
-		export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.https://github.com.helper GIT_CONFIG_VALUE_0='!gh auth git-credential' ; \
+		# UN SECOND JETON, RÉDUIT, POUR L'AGENT (docs/v2-feature.md § 4). Le jeton \
+		# complet a `contents: write` : c'est lui qui pousse sur feature/*. \
+		# L'orchestrateur et ses rôles n'ont besoin que de lire l'arbre et d'écrire \
+		# des issues, des labels, des commentaires, des sous-issues — jamais de \
+		# pousser. `gh-app-token.sh --agent` demande à GitHub un jeton qui ne \
+		# PEUT pas pousser (contents: read) : le refus vient de GitHub, pas d'une \
+		# consigne dans un skill. C'est la moitié BON MARCHÉ de la fermeture \
+		# adversariale de la porte — un orchestrateur qui voudrait pousser \
+		# lui-même trouve un 403 ; l'autre moitié (role.sh sous un uid distinct, \
+		# artefacts signés) reste reportée (EVOL). Sa limite, dite : l'agent \
+		# tourne sous le même uid et lit le .env ; il PEUT refrapper un jeton \
+		# complet avec gh-app-token.sh — la porte ferme la négligence, pas la \
+		# triche. Un raté à la frappe est traité comme pour le premier jeton. \
+		tok=0 ; AGENT_TOKEN="$$(bash "$(FACTORY_BIN)/gh-app-token.sh" --agent)" || tok=$$? ; \
+		if [ "$$tok" = 4 ]; then \
+			echo "$(FACTORY_CYAN)— jeton d'App (agent) : raté passager · nouvel essai dans $(LOOP_SLEEP)s —$(FACTORY_RST)" ; \
+			sleep $(LOOP_SLEEP) ; continue ; \
+		elif [ "$$tok" != 0 ]; then \
+			echo "$(FACTORY_CYAN)— jeton d'App (agent) impossible à frapper : configuration cassée. Arrêt. —$(FACTORY_RST)" ; exit 3 ; \
+		fi ; \
+		# GIT POUSSE AVEC LE JETON DE gh, ET C'EST LA BOUCLE QUI LE DIT A GIT — AUX \
+		# SEULS GESTES QUI POUSSENT. Le conteneur n'a aucun credential helper et \
+		# son ~/.gitconfig ne survit pas : sans GIT_CONFIG_*, `git push` demande un \
+		# mot de passe que personne ne tape. Ces trois variables ne sont PLUS \
+		# exportées au tour entier : elles sont données nommément à feature-up.sh \
+		# et deliver.sh (les deux seuls scripts qui poussent), et le fetch de \
+		# fraîcheur porte son en-tête lui-même. L'agent est lancé avec `env -u` : \
+		# il n'a ni le credential helper, ni FACTORY_TOKEN, ni le jeton complet. \
+		avec_git_cred() { GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.https://github.com.helper GIT_CONFIG_VALUE_0='!gh auth git-credential' "$$@" ; } ; \
 		auth="Authorization: Basic $$(printf 'x-access-token:%s' "$$GH_TOKEN" | base64 -w0)" ; \
 		if ! GIT_TERMINAL_PROMPT=0 git -c "http.https://github.com/.extraheader=$$auth" -C "$(CURDIR)" fetch -q origin "$$FACTORY_STAGING" 2>/dev/null ; then \
 			echo "$(FACTORY_CYAN)— fetch de origin/$$FACTORY_STAGING impossible : la boucle tourne avec l'outillage qu'elle a. —$(FACTORY_RST)" ; \
@@ -357,16 +368,19 @@ loop:
 		# `conf_require` et `branches_require` rendent. Avalé par un `|| true`, \
 		# un FACTORY_STAGING mal écrit ferait tourner la boucle en silence, sans \
 		# jamais intégrer, débloquer ni nettoyer, avec l'air de marcher. \
-		hk=0 ; bash "$(FACTORY_BIN)/gh-stage-pr.sh" || hk=$$? ; \
-		[ "$$hk" != 3 ] || { echo "$(FACTORY_CYAN)— gh-stage-pr : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ; } ; \
 		hk=0 ; bash "$(FACTORY_BIN)/wt-cleanup.sh" || hk=$$? ; \
 		[ "$$hk" != 3 ] || { echo "$(FACTORY_CYAN)— wt-cleanup : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ; } ; \
 		hk=0 ; bash "$(FACTORY_BIN)/gh-unblock.sh" || hk=$$? ; \
 		[ "$$hk" != 3 ] || { echo "$(FACTORY_CYAN)— gh-unblock : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ; } ; \
+		# FACTORY_SECURITY_FEATURE (la feature permanente des cartes d'alerte) \
+		# est résolue ICI, par conf_get, comme les labels : le Python ne lit \
+		# pas factory.conf. Vide = chaque alerte devient sa propre mini-feature, \
+		# et le triage le dit à chaque tour. \
 		command -v python3 >/dev/null && \
 		  PRIO="$$(label_get priority)" BUSY="$$(label_get busy)" \
 		  DONE="$$(label_get done)" STAGED="$$(label_get staged)" \
 		  BLOCKED="$$(label_get blocked)" HUMAN="$$(label_get human)" \
+		  FACTORY_SECURITY_FEATURE="$$(conf_get FACTORY_SECURITY_FEATURE)" \
 		  python3 "$(FACTORY_BIN)/gh-security-triage.py" || true ; \
 		# LE MÉNAGE DU CONSOMMATEUR, s'il en a. Un projet a des alertes que \
 		# l'usine ne connaît pas — les erreurs de production de SON schéma \
@@ -377,37 +391,22 @@ loop:
 		# le tour : `|| true`. \
 		[ -x "$(CURDIR)/tools/factory-hooks/housekeeping" ] \
 		  && "$(CURDIR)/tools/factory-hooks/housekeeping" || true ; \
-		prompt="" ; \
-		pr="$$(bash "$(FACTORY_BIN)/gh-pr-attention.sh")" && prc=0 || prc=$$? ; \
-		if [ "$$prc" = 4 ]; then \
+		# gh-pr-attention ferme le ménage : il lit les PR de feature et écrit des \
+		# cartes ; un 4 (GitHub injoignable) fait dormir le tour, un 3 l'arrête. \
+		hk=0 ; bash "$(FACTORY_BIN)/gh-pr-attention.sh" || hk=$$? ; \
+		if [ "$$hk" = 4 ]; then \
 			echo "$(FACTORY_CYAN)— GitHub injoignable (raté passager) · nouveau sondage dans $(LOOP_SLEEP)s —$(FACTORY_RST)" ; \
 			sleep $(LOOP_SLEEP) ; continue ; \
 		fi ; \
-		if [ "$$prc" != 0 ] && [ "$$prc" != 3 ]; then \
-			rz="$$(bash "$(FACTORY_BIN)/wt-resume.sh")" && rzc=0 || rzc=$$? ; \
-			if [ "$$rzc" = 0 ]; then \
-				why="$${rz#*$$(printf '\t')}" ; issue="$${rz%%$$(printf '\t')*}" ; \
-				prompt="$(LOOP_PROMPT_RESUME)" ; \
-				prompt="$${prompt//@ISSUE@/"$$issue"}" ; prompt="$${prompt//@WHY@/"$$why"}" ; prompt="$${prompt//@REPO@/"$$GH_REPO"}" ; \
-				echo "$(FACTORY_CYAN)— reprise : carte #$$issue ($$why) —$(FACTORY_RST)" ; \
-				prc=9 ; \
-			fi ; \
-		fi ; \
-		if [ "$$prc" = 3 ]; then echo "$(FACTORY_CYAN)— sondage des PR impossible : configuration cassée. Arrêt. —$(FACTORY_RST)" ; exit 3 ; fi ; \
-		if [ "$$prc" = 0 ]; then \
-			why="$${pr#*$$(printf '\t')}" ; pr="$${pr%%$$(printf '\t')*}" ; \
-			issue="pr$$pr" ; \
-			prompt="$(LOOP_PROMPT_PR)" ; prompt="$${prompt//@PR@/"$$pr"}" ; prompt="$${prompt//@WHY@/"$$why"}" ; prompt="$${prompt//@REPO@/"$$GH_REPO"}" ; \
-			echo "$(FACTORY_CYAN)— entretien : PR #$$pr ($$why) —$(FACTORY_RST)" ; \
-		elif [ "$$prc" != 9 ]; then \
-		# prc=9 (reprise) saute CE bloc ET le sondage de carte neuve ci-dessous : \
-		# le prc=9 etait avale par le else, la boucle annoncait une reprise puis \
-		# envoyait un prompt de zero — defaut herite de Brume, corrige ici. \
+		[ "$$hk" != 3 ] || { echo "$(FACTORY_CYAN)— gh-pr-attention : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ; } ; \
+		# (b) LA SÉLECTION : UN seul appel. stdout porte le numéro (capturé), \
+		# stderr l'explication (laissée filer vers le terminal). \
 		issue="$$(bash "$(FACTORY_BIN)/gh-next-issue.sh")" && rc=0 || rc=$$? ; \
 		case "$$rc" in \
-			0) ;; \
+			0) rm -f "$(CURDIR)/.omc/loop.file-vide" ;; \
 			3) echo "$(FACTORY_CYAN)— sondage impossible : configuration cassée (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ;; \
 			1) echo "$(FACTORY_CYAN)— file vide · nouveau sondage dans $(LOOP_SLEEP)s —$(FACTORY_RST)" ; \
+			   printf "%s\n" "aucune carte admissible : toute carte ouverte est livrée, bloquée, hors jalon ou en attente d'un humain (le journal du sondage dit laquelle)" > "$(CURDIR)/.omc/loop.file-vide" ; \
 			   sleep $(LOOP_SLEEP) ; continue ;; \
 			4) echo "$(FACTORY_CYAN)— GitHub injoignable (raté passager) · nouveau sondage dans $(LOOP_SLEEP)s —$(FACTORY_RST)" ; \
 			   sleep $(LOOP_SLEEP) ; continue ;; \
@@ -417,19 +416,54 @@ loop:
 		# TOUT CODE IMPREVU DORT. Un 127, un python absent, un `set -e` inattendu \
 		# ne tombaient dans aucune branche, et la boucle lancait un agent YOLO \
 		# sur « l'issue # » — vide — LOOP_MAX_RETRY fois. \
-		prompt="$(LOOP_PROMPT_TPL)" ; \
-		prompt="$${prompt//@ISSUE@/"$$issue"}" ; prompt="$${prompt//@REPO@/"$$GH_REPO"}" ; \
-		echo "$(FACTORY_CYAN)— issue #$$issue —$(FACTORY_RST)" ; \
+		case "$$issue" in ''|*[!0-9]*) echo "$(FACTORY_CYAN)— sondage : numéro illisible (« $$issue »), traité comme un raté passager —$(FACTORY_RST)" ; sleep $(LOOP_SLEEP) ; continue ;; esac ; \
+		# (d, première moitié) LE RÉPERTOIRE DE TOUR (D8) : .omc/turn/<carte>/ \
+		# persiste entre les tours d'une même carte — N est PAR CARTE — et il \
+		# est REMIS À ZÉRO quand une carte réadmise avait été mise en \
+		# needs-human : l'humain a tranché, une faille levée repart d'un tour \
+		# propre. Le marqueur est posé par le skill quand il pose le label. Ce \
+		# geste vient AVANT feature-up, qui dépose card.json dans le répertoire. \
+		turn="$(CURDIR)/.omc/turn/$$issue" ; \
+		if [ -f "$$turn/needs-human" ]; then \
+			mkdir -p "$(CURDIR)/.omc/turns-done" ; \
+			mv "$$turn" "$(CURDIR)/.omc/turns-done/$$issue-$$(date +%s)-needs-human" ; \
+			echo "$(FACTORY_CYAN)— carte #$$issue réadmise après needs-human : tour remis à zéro, l'ancien est archivé —$(FACTORY_RST)" ; \
 		fi ; \
-		# LA GARDE ANTI-TOURNIQUET COUVRE LES TROIS CHEMINS, et pas seulement la \
-		# carte neuve. Elle vivait à l'intérieur du bloc `elif` ci-dessus, donc \
-		# une REPRISE qui échoue en boucle — le chemin prc=9 — n'était comptée \
-		# par personne : la même carte repartait indéfiniment, et le compteur qui \
-		# existe pour arrêter ça ne la voyait pas. L'entretien d'une PR (prc=0) \
-		# n'était pas compté non plus. Ici, `$$issue` porte le sujet du tour dans \
-		# les trois cas — « 12 », « 12 » en reprise, « pr34 » en entretien — donc \
-		# une même chose reprise LOOP_MAX_RETRY fois sans avancer arrête la \
-		# boucle, quelle que soit la porte par laquelle elle est entrée. \
+		# (c) LA FEATURE : branche, worktree, PR — créés s'ils manquent, repris \
+		# sinon. Une ligne tabulée : F, branche, worktree, base (le SHA de \
+		# origin/feature/<F> maintenant), PR. Un 3 arrête (configuration, ou \
+		# carte de type Feature) ; tout le reste est un raté passager qui dort. \
+		fu="$$(avec_git_cred bash "$(FACTORY_BIN)/feature-up.sh" "$$issue")" && fuc=0 || fuc=$$? ; \
+		case "$$fuc" in \
+			0) ;; \
+			1) echo "$(FACTORY_CYAN)— carte #$$issue refusée par feature-up (needs-human posé, voir la carte) · retour au sondage —$(FACTORY_RST)" ; continue ;; \
+			3) echo "$(FACTORY_CYAN)— feature-up : configuration cassée ou carte #$$issue inadmissible (voir ci-dessus). Arrêt. —$(FACTORY_RST)" ; exit 3 ;; \
+			*) echo "$(FACTORY_CYAN)— feature-up : raté passager (code $$fuc) · nouveau sondage dans $(LOOP_SLEEP)s —$(FACTORY_RST)" ; \
+			   sleep $(LOOP_SLEEP) ; continue ;; \
+		esac ; \
+		IFS="$$(printf '\t')" read -r feat branche wt base pr <<<"$$fu" ; \
+		if [ -z "$$feat" ] || [ -z "$$wt" ] || [ -z "$$base" ] || [ -z "$$pr" ] || [ ! -d "$$wt" ]; then \
+			echo "$(FACTORY_CYAN)— feature-up a rendu une ligne incomplète (« $$fu ») : traité comme un raté passager —$(FACTORY_RST)" ; \
+			sleep $(LOOP_SLEEP) ; continue ; \
+		fi ; \
+		# (d, seconde moitié) LA BASE EST ÉCRITE UNE FOIS, PUIS RELUE. Sur un \
+		# nouveau tour de la même carte, la branche a peut-être avancé (un \
+		# tour précédent a livré une autre carte de la feature) : réécrire la \
+		# base ferait relire à l'analyste de la reprise un diff qui ne \
+		# contient plus ses propres commits, et turn-verify ne verrait plus la \
+		# fenêtre du premier codeur. La base d'une carte est celle de son \
+		# premier tour, jusqu'à la livraison ou la remise à zéro. \
+		mkdir -p "$$turn" ; \
+		if [ -f "$$turn/base" ]; then base="$$(cat "$$turn/base")" ; else printf '%s' "$$base" > "$$turn/base" ; fi ; \
+		prompt="$(LOOP_PROMPT)" ; \
+		prompt="$${prompt//@ISSUE@/"$$issue"}" ; prompt="$${prompt//@REPO@/"$$GH_REPO"}" ; \
+		prompt="$${prompt//@FEATURE@/"$$feat"}" ; prompt="$${prompt//@WORKTREE@/"$$wt"}" ; \
+		prompt="$${prompt//@BASE@/"$$base"}" ; prompt="$${prompt//@PR@/"$$pr"}" ; prompt="$${prompt//@ROOT@/"$(CURDIR)"}" ; \
+		echo "$(FACTORY_CYAN)— issue #$$issue · feature #$$feat (feature/$$feat, PR #$$pr, base $$base) —$(FACTORY_RST)" ; \
+		# LA GARDE ANTI-TOURNIQUET : une même carte reprise LOOP_MAX_RETRY fois \
+		# sans avancer arrête la boucle. `$$issue` est le sujet du tour ; une \
+		# carte livrée est fermée et ne revient pas, une carte refusée par la \
+		# porte revient, et c'est ce compteur qui borne ses retours. \
 		if [ "$$issue" = "$$last" ]; then \
 			same=$$((same+1)) ; \
 		else \
@@ -442,10 +476,60 @@ loop:
 			echo "$(FACTORY_CYAN)— « $$issue » reprise $(LOOP_MAX_RETRY) fois sans avancer : arrêt. Regardez ce qui la bloque, puis effacez $$halt et $$retry avant de relancer. —$(FACTORY_RST)" ; \
 			exit 4 ; \
 		fi ; \
-		if [ -n "$(VERBOSE)" ]; then \
-			$(LOOP_RUN_VERBOSE) || true ; \
+		# (e) L'ORCHESTRATEUR, DANS LE WORKTREE. Il y lit VERIFY.md et y lance \
+		# les rôles ; les artefacts, eux, vont sous .omc/turn/<carte>/ de \
+		# l'arbre principal (factory_root), jamais dans le worktree. \
+		# SANS LES IDENTIFIANTS DE LA BOUCLE : `env -u` retire le credential \
+		# helper et FACTORY_TOKEN, et GH_TOKEN devient le jeton RÉDUIT — l'agent \
+		# et ses rôles parlent à l'API (labels, commentaires, sous-issues) et ne \
+		# peuvent pas pousser. \
+		# UN `pret` DÉJÀ POSÉ SAUTE L'ORCHESTRATEUR : le tour précédent a fini, \
+		# c'est la livraison qui a raté (un 5xx de deliver.sh) — relancer un \
+		# orchestrateur complet coûterait une équipe entière pour rejouer un \
+		# push. On va droit à la porte et à la livraison. \
+		if [ -f "$$turn/pret" ]; then \
+			echo "$(FACTORY_CYAN)— #$$issue : pret déjà posé, l'orchestrateur n'est pas relancé ; porte puis livraison —$(FACTORY_RST)" ; \
+		elif [ -n "$(VERBOSE)" ]; then \
+			( cd "$$wt" && env -u FACTORY_TOKEN -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 GH_TOKEN="$$AGENT_TOKEN" $(LOOP_RUN_VERBOSE) ) || true ; \
 		else \
-			$(LOOP_RUN_QUIET) || true ; \
+			( cd "$$wt" && env -u FACTORY_TOKEN -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 GH_TOKEN="$$AGENT_TOKEN" $(LOOP_RUN_QUIET) ) || true ; \
+		fi ; \
+		# (f) AU RETOUR : LA PORTE, PUIS LA LIVRAISON — DANS L'ENVIRONNEMENT DE \
+		# LA BOUCLE, JAMAIS DANS CELUI DE L'AGENT. L'orchestrateur a déjà joué \
+		# turn-verify.sh avant de poser `pret` ; la boucle le REJOUE ici, avec \
+		# SA configuration (le catalogue des rôles, FACTORY_REVIEW_MAX, \
+		# CLAUDE_BIN…), parce qu'un orchestrateur qui aurait posé \
+		# FACTORY_ROLE_RELECTEUR_SECU=haiku dans son shell verrait sa porte \
+		# s'ouvrir sur un artefact que la nôtre refuse. C'est LA MOITIÉ de la \
+		# garantie — la porte protège contre un orchestrateur qui NÉGLIGE ; \
+		# l'autre moitié, uid distinct et artefacts signés, qui fermerait la \
+		# classe adversariale à uid égal, est REPORTÉE (docs/v2-feature.md § 4, \
+		# EVOL). Sans `pret`, l'orchestrateur s'est arrêté ailleurs (needs-human \
+		# posé, carte de refacto carvée, prémisse fausse, ou mort) : rien de plus. \
+		if [ -f "$$turn/pret" ]; then \
+			vrc=0 ; bash "$(FACTORY_BIN)/turn-verify.sh" "$$issue" "$$wt" "$$base" > "$$turn/turn-verify.out" 2>&1 || vrc=$$? ; \
+			cat "$$turn/turn-verify.out" ; \
+			if [ "$$vrc" = 0 ]; then \
+				drc=0 ; avec_git_cred bash "$(FACTORY_BIN)/deliver.sh" "$$issue" "$$wt" "$$base" || drc=$$? ; \
+				case "$$drc" in \
+					0) echo "$(FACTORY_CYAN)— carte #$$issue livrée sur feature/$$feat (PR #$$pr) —$(FACTORY_RST)" ;; \
+					1) rm -f "$$turn/pret" ; echo "$(FACTORY_CYAN)— carte #$$issue refusée à la livraison (needs-human posé, voir la carte) —$(FACTORY_RST)" ;; \
+					3) printf 'deliver.sh a rendu 3 sur #%s (configuration cassée, ou livraison impossible : voir le journal) ; pret est conservé' "$$issue" > "$$halt" ; \
+					   echo "$(FACTORY_CYAN)— deliver : configuration cassée (voir ci-dessus). Arrêt ; $$halt posé — sous Restart=always, la relance s'arrêterait sinon toutes les trente secondes sur le même 3, pret étant conservé. —$(FACTORY_RST)" ; exit 3 ;; \
+					*) echo "$(FACTORY_CYAN)— deliver : raté (code $$drc) · la carte #$$issue sera reprise, pret est conservé —$(FACTORY_RST)" ;; \
+				esac ; \
+			else \
+				# LES MOTIFS SONT POSTÉS SUR LA CARTE, TELS QUELS, et `pret` est \
+				# CONSOMMÉ : le tour suivant doit le regagner. La carte reste \
+				# ouverte et `busy`, la sélection la reprend ; LOOP_MAX_RETRY borne. \
+				rm -f "$$turn/pret" ; \
+				{ printf 'La boucle a refusé le push de #%s (turn-verify.sh, code %s) :\n\n```\n' "$$issue" "$$vrc" ; cat "$$turn/turn-verify.out" ; printf '```\n' ; } > "$$turn/refus.md" ; \
+				bash "$(FACTORY_BIN)/gh-comment.sh" "$$issue" "$$turn/refus.md" \
+				  || echo "$(FACTORY_CYAN)— les motifs du refus n'ont pas pu être postés sur #$$issue (ils sont dans $$turn/turn-verify.out) —$(FACTORY_RST)" ; \
+				echo "$(FACTORY_CYAN)— push de #$$issue refusé par turn-verify (code $$vrc) : motifs postés sur la carte, elle sera reprise —$(FACTORY_RST)" ; \
+			fi ; \
+		else \
+			echo "$(FACTORY_CYAN)— tour de #$$issue terminé sans pret : arbitrage humain, refacto carvée, prémisse fausse, ou tour mort (voir la carte) —$(FACTORY_RST)" ; \
 		fi ; \
 		if stop_asked ; then break ; fi ; \
 	done

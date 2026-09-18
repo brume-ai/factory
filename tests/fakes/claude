@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Faux `claude` pour les tests : journalise l'appel, rend EXACTEMENT le format
+# de `claude -p --output-format json` vérifié le 18 septembre 2026 — UN objet
+# JSON, `result` pour le texte, `modelUsage` pour la preuve (un objet dont les
+# clés sont les modèles réellement appelés). Piloté par des fichiers dans
+# $FAKE_CLI_DIR :
+#   claude.response  le texte de `result` (défaut : une phrase)
+#   claude.models    un modèle par ligne pour `modelUsage` (défaut : celui de
+#                    `--model`) — sans le modèle attendu, on simule un CLI qui
+#                    a répondu sous un autre modèle
+#   claude.rc        code de sortie à rendre (défaut 0) — un CLI en échec
+#   claude.raw       présent = son contenu est rendu TEL QUEL sur stdout, à la
+#                    place de l'objet JSON (un CLI qui ne parle pas JSON)
+# Le prompt (dernier argument) est remplacé par <prompt> dans calls.log et
+# gardé dans claude.last-prompt : il fait des dizaines de lignes.
+set -euo pipefail
+: "${FAKE_CLI_DIR:?}"
+model=""
+args=("$@")
+n=${#args[@]}
+i=0
+while [ "$i" -lt "$n" ]; do
+  case "${args[$i]}" in --model) i=$((i+1)); model="${args[$i]}" ;; esac
+  i=$((i+1))
+done
+printf '%s' "${args[$((n-1))]}" > "$FAKE_CLI_DIR/claude.last-prompt"
+printf 'claude %s <prompt>\n' "${args[*]:0:$((n-1))}" >> "$FAKE_CLI_DIR/calls.log"
+if [ -f "$FAKE_CLI_DIR/claude.rc" ]; then
+  echo "fake-claude: échec simulé" >&2
+  exit "$(cat "$FAKE_CLI_DIR/claude.rc")"
+fi
+if [ -f "$FAKE_CLI_DIR/claude.raw" ]; then cat "$FAKE_CLI_DIR/claude.raw"; exit 0; fi
+reponse="réponse factice de claude"
+[ -f "$FAKE_CLI_DIR/claude.response" ] && reponse="$(cat "$FAKE_CLI_DIR/claude.response")"
+models="$model"
+[ -f "$FAKE_CLI_DIR/claude.models" ] && models="$(cat "$FAKE_CLI_DIR/claude.models")"
+REPONSE="$reponse" MODELS="$models" python3 - <<'PY'
+import json, os
+mu = {}
+for m in os.environ["MODELS"].splitlines():
+    m = m.strip()
+    if m:
+        mu[m] = {"inputTokens": 10, "outputTokens": 5, "costUSD": 0.001}
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                  "result": os.environ["REPONSE"], "session_id": "faux",
+                  "modelUsage": mu}))
+PY

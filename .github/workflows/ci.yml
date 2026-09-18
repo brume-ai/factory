@@ -6,13 +6,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y shellcheck jq
-      # -S error : les scripts portes de Brume gardent leur style ; seuls les
-      # vrais defauts bloquent.
-      - run: |
-          files="$(ls bin/*.sh bin/factory 2>/dev/null || true)"
-          [ -z "$files" ] || shellcheck -S error $files
-      - run: |
-          [ ! -f bin/gh-security-triage.py ] || python3 -m py_compile bin/gh-security-triage.py
+      # -S warning : la barre du dépôt (docs/release.md, « Vérification » :
+      # `shellcheck -S warning bin/*.sh` avant chaque tranche) ; un
+      # avertissement est une variable morte ou un mot-clé pris pour un nom,
+      # pas du style — et un `-S error` laissait passer les deux.
+      - run: shellcheck -S warning bin/*.sh bin/factory
+      # Tout le python du dépôt, pas un fichier nommé à la main : un script
+      # neuf qui ne compile pas doit tomber ici, pas sur la machine.
+      - run: python3 -m py_compile bin/*.py nix/*.py
       - run: bash tests/run.sh
   nix:
     runs-on: ubuntu-latest
@@ -23,3 +24,4 @@ jobs:
           [ ! -f nix/flake.nix ] || nix eval \
             ./nix#nixosConfigurations.template.config.system.build.toplevel.drvPath
           nix eval --impure --expr 'import ./tests/eva-nix.nix { nixpkgs = (builtins.getFlake (toString ./nix)).inputs.nixpkgs; }'
+          nix eval --impure --expr 'import ./tests/preview-nix.nix { nixpkgs = (builtins.getFlake (toString ./nix)).inputs.nixpkgs; }'

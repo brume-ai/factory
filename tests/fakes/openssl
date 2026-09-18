@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Faux `openssl` pour les tests : gh-app-token.sh signe son JWT avec
+# `openssl dgst -sha256 -sign <clé> -binary` et encode avec `openssl base64 -A`.
+# Le vrai openssl n'est pas un prérequis de la MACHINE DE TEST (la suite tourne
+# sous `nix shell python3 gnumake`), et un JWT réel ne prouverait rien de plus au
+# faux curl, qui ne le vérifie pas. Ce faux rend une « signature » déterministe
+# (le sha256 de l'entrée) et refuse une clé illisible, comme le vrai.
+set -euo pipefail
+case "${1:-}" in
+  base64) base64 -w0 ;;
+  dgst)
+    key=""; args=("$@"); i=0
+    while [ "$i" -lt "${#args[@]}" ]; do
+      [ "${args[$i]}" = "-sign" ] && key="${args[$((i+1))]}"
+      i=$((i+1))
+    done
+    [ -n "$key" ] && [ -r "$key" ] || { echo "fake-openssl: clé illisible" >&2; exit 1; }
+    sha256sum | cut -c1-64 | xxd -r -p 2>/dev/null || sha256sum | cut -c1-64 ;;
+  version) echo "fake-openssl 0" ;;
+  *) echo "fake-openssl: commande inconnue : $*" >&2; exit 2 ;;
+esac

@@ -10,8 +10,8 @@
 #
 # A SOURCER depuis les scripts de bin/ :  . "$HERE/lib.sh"
 
-# DEPUIS UN WORKTREE, LA RACINE EST L'ARBRE PRINCIPAL. Une carte travaille dans
-# `.worktrees/card-<n>`, où ni `.env` (gitignoré) ni les secrets n'existent :
+# DEPUIS UN WORKTREE, LA RACINE EST L'ARBRE PRINCIPAL. Un tour travaille dans
+# `.worktrees/feature-<F>`, où ni `.env` (gitignoré) ni les secrets n'existent :
 # `git rev-parse --show-toplevel` y rendait le worktree, `conf_get` n'y trouvait
 # rien, et l'agent lisait « configuration cassée » depuis son propre
 # environnement. Le skill lui faisait exporter FACTORY_ROOT à la main — mais
@@ -179,6 +179,42 @@ label_get() {  # <rôle> : imprime le nom du label ; 3 sur un rôle inconnu
   esac
 }
 
+# LE CATALOGUE DES RÔLES DU TOUR, FERMÉ, ET SON UNIQUE LECTEUR (docs/v2-feature.md
+# § 4). Un rôle est un NOM et un MODÈLE ; le CLI qui le fait poper se déduit du
+# modèle (préfixe `claude-` → claude, sinon codex), donc il n'y a rien d'autre à
+# écrire ici. Même esprit que `label_get` : le défaut de chaque modèle vit à UN
+# endroit, la clé de factory.conf le surcharge, et on appelle par RÔLE — jamais
+# `conf_get FACTORY_ROLE_CODEUR gpt-6-astra` ailleurs, sinon le défaut retrouve
+# un second domicile et deux lecteurs finissent par lancer deux modèles
+# différents sous le même nom de rôle.
+#
+# POURQUOI LE CATALOGUE EST FERMÉ. Un rôle hors catalogue est un coût et une
+# identité que personne n'a validés ; la boucle REFUSE le push d'un tour qui en
+# porte un (turn-verify.sh). C'est la leçon du 17 septembre : « composez l'équipe
+# adaptée » sans liste a laissé un agent seul faire quinze cartes. Le catalogue
+# est donc à la fois ce que role.sh accepte de lancer et ce que turn-verify.sh
+# accepte de lire — une seule liste, ici.
+#
+# UN RÔLE INCONNU REND 3 ET N'IMPRIME RIEN, comme `label_get`, et pour la même
+# raison : un modèle VIDE lancerait le CLI sur son modèle par défaut, c'est-à-dire
+# un modèle que personne n'a choisi pour ce rôle — précisément ce que la preuve
+# de modèle existe pour empêcher. Ne jamais écrire `local X="$(role_get …)"`.
+role_get() {  # <rôle> : imprime le modèle du rôle ; 3 sur un rôle inconnu
+  case "${1:-}" in
+    analyste)            conf_get FACTORY_ROLE_ANALYSTE            claude-opus-5 ;;
+    codeur)              conf_get FACTORY_ROLE_CODEUR              gpt-6-astra ;;
+    relecteur-maint)     conf_get FACTORY_ROLE_RELECTEUR_MAINT     claude-opus-5 ;;
+    relecteur-secu)      conf_get FACTORY_ROLE_RELECTEUR_SECU      claude-fable-5-1 ;;
+    writer)              conf_get FACTORY_ROLE_WRITER              claude-haiku-4-5-20251001 ;;
+    test-engineer)       conf_get FACTORY_ROLE_TEST_ENGINEER       claude-fable-5-1 ;;
+    designer)            conf_get FACTORY_ROLE_DESIGNER            gpt-6-astra ;;
+    document-specialist) conf_get FACTORY_ROLE_DOCUMENT_SPECIALIST claude-haiku-4-5-20251001 ;;
+    *)
+      echo "factory: role_get « ${1:-} » : rôle hors catalogue. Les huit rôles sont analyste codeur relecteur-maint relecteur-secu writer test-engineer designer document-specialist." >&2
+      return 3 ;;
+  esac
+}
+
 # LE VERDICT DE CI, ÉCRIT UNE FOIS, LU PAR L'INTÉGRATION ET PAR L'ENTRETIEN.
 # Lit sur stdin la réponse de `commits/<sha>/check-runs?per_page=100` et
 # imprime UN mot : ok · failure · pending · none · truncated.
@@ -222,6 +258,89 @@ else:
     print("ok")
 PY
 )"
+
+# LE LOT D'UNE RELEASE, MIS À PLAT UNE FOIS, LU PAR gh-release.sh ET
+# eva-release.sh. Lit sur stdin le JSON de `gh-feature.py lot` — la remontée
+# carte → feature, le SEUL lecteur de la chaîne des parents — et STAGED (le nom
+# du label de feature) dans l'environnement ; imprime une ligne tabulée par
+# feature puis par carte du lot, dans l'ordre des numéros, pour que deux
+# passages rendent la même liste :
+#   F <n> <mini> <state> <staged> <total> <completed> <ouvertes> <titre>
+#   C <feature> <n> <state> <titre>
+# `ouvertes` : les cartes du lot encore ouvertes (« #12 #13 », ou « - ») — le
+# compte de GitHub ne voit que les enfants DIRECTS, un lot fermé au-dessus
+# d'une carte ouverte passerait ; c'est ce champ qui rend la feature
+# incomplète. Titre en dernier, tabulations et sauts de ligne aplatis : `read`
+# lui laisse le reste de la ligne. Le JSON est le contrat ; ceci n'est que la
+# forme que bash sait lire.
+# shellcheck disable=SC2034  # lu par gh-release.sh et eva-release.sh, qui sourcent ce fichier
+LOT_LINES_PY="$(cat <<'PY'
+import json, os, sys
+d = json.load(sys.stdin)
+staged = os.environ["STAGED"]
+def t(s): return (s or "-").replace("\t", " ").replace("\n", " ")
+for f in d["features"]:
+    s = f.get("sub_issues_summary") or {}
+    ouvertes = " ".join("#%d" % c["number"] for c in f["cards"] if c.get("state") == "open") or "-"
+    print("F\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s" % (f["number"], f["mini"], f.get("state") or "-",
+          staged in f["labels"], s.get("total", 0), s.get("completed", 0), ouvertes, t(f["title"])))
+    for c in f["cards"]:
+        print("C\t%d\t%d\t%s\t%s" % (f["number"], c["number"], c.get("state") or "-", t(c["title"])))
+PY
+)"
+
+# LE LECTEUR PAGINÉ DES CONTRÔLES, ÉCRIT UNE FOIS. `checks_verdict <sha>` lit
+# `commits/<sha>/check-runs` PAGE À PAGE jusqu'à `total_count`, fusionne, et
+# rend le verdict de CI_VERDICT_PY sur la liste ENTIÈRE, suivi d'une ligne par
+# contrôle rouge (`nom<TAB>conclusion<TAB>url`). Avec CI_VERDICT_PY seul, un
+# dépôt à plus de cent contrôles rendait « truncated » — que l'appelant lisait
+# comme « pas rouge », en silence : le job e2e qui finit le dernier, en page
+# deux, n'existait pour personne. Ici « truncated » ne peut plus sortir : soit
+# la liste est entière, soit c'est un raté (4).
+# Il lit GH_REPO et FACTORY_TOKEN dans l'environnement — celui du script qui
+# l'appelle, qui les a déjà résolus — et curl avec la même doctrine que les
+# sondages : 4 = passager, 3 = refus. Le fichier de réponse est validé en JSON
+# avant d'être lu. La première page garde l'URL sans `&page=` : c'est celle que
+# les autres lecteurs (et leurs fixtures) connaissent.
+checks_verdict() {  # <sha> : verdict\n[rouge…] · 3 = refus · 4 = passager
+  local sha="$1" page=1 acc="[]" total=-1 body code n_vus=0 path
+  while :; do
+    path="repos/$GH_REPO/commits/$sha/check-runs?per_page=100"
+    [ "$page" -eq 1 ] || path="$path&page=$page"
+    body="$(mktemp)"
+    code="$(curl -sS --retry 3 --retry-delay 2 --retry-connrefused --connect-timeout 10 --max-time 60 \
+      -o "$body" -w '%{http_code}' -H "Authorization: Bearer ${FACTORY_TOKEN:?}" \
+      -H "Accept: application/vnd.github+json" "https://api.github.com/$path")" \
+      || { echo "checks: transport KO sur /$path (curl $?) — raté passager" >&2; rm -f "$body"; return 4; }
+    if [[ "$code" == 000 || "$code" == 5* || "$code" == 429 ]] || { [[ "$code" == 403 ]] && grep -qi 'rate limit' "$body"; }; then
+      echo "checks: HTTP $code sur /$path — raté passager" >&2; rm -f "$body"; return 4
+    fi
+    [[ "$code" == 2* ]] || { echo "checks: HTTP $code sur /$path — $(head -c 200 "$body" | tr '\n' ' ')" >&2; rm -f "$body"; return 3; }
+    if ! acc="$(printf '%s\n' "$acc" | python3 -c '
+import json, sys
+acc = json.loads(sys.stdin.readline())
+d = json.load(open(sys.argv[1]))
+runs = d.get("check_runs")
+if not isinstance(runs, list) or type(d.get("total_count")) is not int: sys.exit(1)
+print(json.dumps({"total": d["total_count"], "runs": acc + runs}))' "$body")"; then
+      echo "checks: réponse illisible sur /$path — raté passager" >&2; rm -f "$body"; return 4
+    fi
+    rm -f "$body"
+    read -r total n_vus <<<"$(printf '%s' "$acc" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["total"], len(d["runs"]))')"
+    acc="$(printf '%s' "$acc" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["runs"]))')"
+    [ "$n_vus" -lt "$total" ] || break
+    page=$((page+1))
+    # Une page vide avant le total, ou plus de vingt pages : la liste ment.
+    [ "$page" -le 20 ] || { echo "checks: plus de 2000 contrôles sur $sha — liste illisible" >&2; return 4; }
+  done
+  printf '{"total_count":%s,"check_runs":%s}' "$total" "$acc" | python3 -c "$CI_VERDICT_PY" || return 4
+  printf '%s' "$acc" | python3 -c '
+import json, sys
+green = {"success", "neutral", "skipped"}
+for r in json.load(sys.stdin):
+    if r.get("status") == "completed" and r.get("conclusion") not in green:
+        print("%s\t%s\t%s" % (r.get("name") or "?", r.get("conclusion"), r.get("html_url") or r.get("details_url") or ""))'
+}
 
 # Un shell sur l'usine, en direct. FACTORY_SSH_BIN permet aux tests (et a un
 # transport exotique) de remplacer ssh sans toucher aux appelants.

@@ -105,7 +105,7 @@ assert_eq "3" "$(r="$(FACTORY_TRUNK='main ' FACTORY_STAGING=' main' try_branches
   "l'egalite se juge apres rognage"
 
 # RIEN SUR LA SORTIE STANDARD QUAND ELLE REFUSE. Des appelants capturent la
-# sortie d'un script qui appelle cette garde (« base="$(gh-stack.sh base 12)" ») :
+# sortie d'un script qui appelle cette garde (« fu="$(feature-up.sh 12)" ») :
 # une seule ligne de bruit sur stdout deviendrait un nom de branche.
 make_conf 'FACTORY_TRUNK = main' 'FACTORY_STAGING = main'
 set +e
@@ -201,5 +201,37 @@ out="$( (cd "$TESTTMP" && bash "$TESTTMP/roles.sh") 2>&1 )"; rc=$?
 set -e
 assert_rc 3 "$rc" "une affectation nue propage le 3 sous set -e"
 assert_not_contains "$out" "continue:" "et le script ne continue pas avec un label vide"
+
+# =============================================================================
+# role_get : LE CATALOGUE FERMÉ DES RÔLES DU TOUR, ET SON UNIQUE LECTEUR.
+# Même contrat que label_get : un défaut écrit UNE fois, la clé de factory.conf
+# le surcharge, l'environnement gagne, et un rôle inconnu rend 3 sans rien
+# imprimer — un modèle VIDE lancerait le CLI sur un modèle que personne n'a
+# choisi, ce que la preuve de modèle existe pour empêcher.
+# =============================================================================
+rm -f "$TESTTMP/factory.conf" "$TESTTMP/.env"
+assert_eq "claude-opus-5"             "$(run role_get analyste)"            "defaut : analyste"
+assert_eq "gpt-6-astra"               "$(run role_get codeur)"              "defaut : codeur"
+assert_eq "claude-opus-5"             "$(run role_get relecteur-maint)"     "defaut : relecteur-maint"
+assert_eq "claude-fable-5-1"          "$(run role_get relecteur-secu)"      "defaut : relecteur-secu"
+assert_eq "claude-haiku-4-5-20251001" "$(run role_get writer)"              "defaut : writer"
+assert_eq "claude-fable-5-1"          "$(run role_get test-engineer)"       "defaut : test-engineer"
+assert_eq "gpt-6-astra"               "$(run role_get designer)"            "defaut : designer"
+assert_eq "claude-haiku-4-5-20251001" "$(run role_get document-specialist)" "defaut : document-specialist"
+make_conf 'FACTORY_ROLE_CODEUR = claude-sonnet-5'
+assert_eq "claude-sonnet-5" "$(run role_get codeur)"   "un modele change dans factory.conf est honore"
+assert_eq "claude-opus-5"   "$(run role_get analyste)" "les autres gardent leur defaut"
+assert_eq "gpt-5-mini" "$(FACTORY_ROLE_CODEUR=gpt-5-mini run role_get codeur)" "l'environnement gagne"
+rm -f "$TESTTMP/factory.conf"
+set +e
+out="$( (cd "$TESTTMP" && . "$REPO/bin/lib.sh" && role_get inventeur) 2>/dev/null )"; rc=$?
+msg="$( (cd "$TESTTMP" && . "$REPO/bin/lib.sh" && role_get inventeur) 2>&1 >/dev/null )"
+( cd "$TESTTMP" && . "$REPO/bin/lib.sh" && role_get ) >/dev/null 2>&1; rc0=$?
+set -e
+assert_rc 3 "$rc" "role hors catalogue : code 3"
+assert_eq "" "$out" "et RIEN sur la sortie standard"
+assert_contains "$msg" "inventeur" "le message nomme le role fautif"
+assert_contains "$msg" "document-specialist" "et enumere le catalogue"
+assert_rc 3 "$rc0" "sans argument : code 3, jamais le 1 d'un set -u"
 
 echo ok

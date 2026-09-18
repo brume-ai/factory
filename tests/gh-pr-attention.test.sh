@@ -1,294 +1,261 @@
 #!/usr/bin/env bash
+# gh-pr-attention.sh (D6) : du MÉNAGE, rien sur stdout. Sur une PR de feature
+# ouverte, chaque remarque humaine — review, conversation, ligne — devient une
+# carte sous la feature, et l'usine répond dans le fil ; une CI rouge devient une
+# carte « Réparer la CI ». Idempotent par des marques, jamais par un cache.
 . "$(dirname "$0")/helpers.sh"
 t_setup
 export GH_REPO="o/r" FACTORY_HUMAN_LOGIN="le-chef" FACTORY_BOT_LOGIN="usine[bot]"
 S="$REPO/bin/gh-pr-attention.sh"
 H="$FAKE_HTTP_DIR"
 
-# LE JOURNAL SE VIDE ENTRE LES CAS QUI COMPTENT LES APPELS, ET RIEN NE SE PERD.
-# Plusieurs cas affirment « aucun appel de ce genre » et doivent donc partir d'un
-# journal propre ; mais le cas (j), lui, affirme sur TOUTE la session que la
-# pointe de branche n'est plus lue nulle part. Sans le cumul, il ne parlerait que
-# du dernier cas, et une lecture de la pointe reapparue au milieu du fichier
-# passerait au vert.
-TOUS="$TESTTMP/tous-les-appels.log"
-: > "$TOUS"
-vide_journal() {
-  if [ -f "$H/calls.log" ]; then cat "$H/calls.log" >> "$TOUS"; fi
-  : > "$H/calls.log"
+PRS="$H/repos_o_r_pulls_state_open_per_page_100.json"
+pr() {  # <numero> <tete> <depot> [sha]
+  printf '{"number":%s,"head":{"ref":"%s","sha":"%s","repo":{"full_name":"%s"}},"base":{"ref":"staging"}}' "$1" "$2" "${4:-abc}" "$3"
 }
+# La PR 5 = feature/10 ; la feature 10 et ses sous-issues.
+ci_verte() { printf '{"check_runs":[{"name":"ci","conclusion":"success","status":"completed","html_url":"https://ci/ok"}],"total_count":1}' > "$H/repos_o_r_commits_$1_check-runs_per_page_100.json"; }
+ci_rouge() { printf '{"check_runs":[{"name":"e2e","conclusion":"failure","status":"completed","html_url":"https://ci/rouge/42"}],"total_count":1}' > "$H/repos_o_r_commits_$1_check-runs_per_page_100.json"; }
+fils() {  # <pr> <reviews JSON> <conversation JSON> <lignes JSON>
+  printf '%s' "$2" > "$H/repos_o_r_pulls_$1_reviews_per_page_100.json"
+  printf '%s' "$3" > "$H/repos_o_r_issues_$1_comments_per_page_100.json"
+  printf '%s' "$4" > "$H/repos_o_r_pulls_$1_comments_per_page_100.json"
+}
+sous_issues() { printf '%s' "$2" > "$H/repos_o_r_issues_$1_sub_issues_per_page_100.json"; }
+printf '{"number":10,"node_id":"N10","title":"Ma feature"}' > "$H/repos_o_r_issues_10.json"
+printf '{"number":42,"node_id":"N42"}' > "$H/repos_o_r_issues.json"
+printf '{"data":{"addSubIssue":{"issue":{"number":10}}}}' > "$H/graphql.json"
+printf '{"id":900}' > "$H/repos_o_r_issues_5_comments.json"
+printf '{"id":901}' > "$H/repos_o_r_pulls_5_comments_77_replies.json"
+printf '{"id":902}' > "$H/repos_o_r_pulls_5_comments_70_replies.json"
+printf '{"id":3}' > "$H/repos_o_r_issues_42_labels.json"
+printf '{"id":4}' > "$H/repos_o_r_issues_42_comments.json"
+run() { set +e; out="$(bash "$S" 2>"$TESTTMP/err")"; rc=$?; set -e; }
 
-# LE BALAYAGE DES RETOURS TOURNE À CHAQUE APPEL, DONC SON FIXTURE EXISTE DÈS LE
-# DÉBUT. Sans lui le tout premier appel rendrait 404, donc 3, et chaque cas de ce
-# fichier mourrait sur la mauvaise cause en ayant l'air de tester autre chose.
-# Vide = aucun retour en attente.
-RETOURS="$H/repos_o_r_issues_comments_sort_updated_direction_desc_per_page_100.json"
-printf '[]' > "$RETOURS"
-# ET LES COMMENTAIRES DE LIGNE, dépôt-entier eux aussi : un mot de ligne
-# post-merge est la forme la plus fréquente d'un grief précis.
-LIGNES="$H/repos_o_r_pulls_comments_sort_updated_direction_desc_per_page_100.json"
-printf '[]' > "$LIGNES"
-# La liste des PR est interrogee sur la branche de TRAVAIL : le nom du fixture
-# porte le filtre, donc un script qui oublierait `base=` ne trouverait rien.
-PRS="$H/repos_o_r_pulls_state_open_base_staging_per_page_100.json"
-# La tete d'une PR de carte, telle que le perimetre l'exige : `card/<n>` ET le
-# depot lui-meme.
-tete() { printf '"head":{"ref":"card/%s","sha":"abc","repo":{"full_name":"o/r"}}' "$1"; }
-
-# a) FACTORY_BOT_LOGIN absent -> 3 : sans lui on ne sait pas ce qui REPOND
+# a) configuration : les deux logins sont requis, sans défaut
 set +e; (unset FACTORY_BOT_LOGIN; bash "$S" >/dev/null 2>&1); rc=$?; set -e
 assert_rc 3 "$rc" "login de l'usine requis"
-
-# a) FACTORY_HUMAN_LOGIN absent -> 3
 set +e; (unset FACTORY_HUMAN_LOGIN; bash "$S" >/dev/null 2>&1); rc=$?; set -e
 assert_rc 3 "$rc" "login humain requis"
 
-# a2) LES DEUX BRANCHES EGALES -> 3, AVANT LE PREMIER APPEL. Le journal est
-# PRE-CREE : `t_setup` ne le cree pas, c'est le faux curl qui le cree a son
-# premier appel, donc un `cat` sur un fichier absent rendrait la chaine vide et
-# l'assertion passerait meme si le script etait mort d'une faute de frappe.
-vide_journal
-set +e; ( FACTORY_TRUNK=main FACTORY_STAGING=main bash "$S" >/dev/null 2>&1 ); rc=$?; set -e
-assert_rc 3 "$rc" "deux branches egales = configuration cassee"
-assert_eq "" "$(cat "$H/calls.log")" "et pas une requete a GitHub"
-
-# b) aucune PR -> 1
+# b) aucune PR -> 0, rien sur stdout (c'est du ménage, plus un sondage)
 printf '[]' > "$PRS"
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 1 "$rc" "aucune PR = 1"
+run
+assert_rc 0 "$rc" "aucune PR = 0 : le ménage n'a pas de « rien à faire »"
+assert_eq "" "$out" "rien sur stdout, jamais"
 
-# c) PR en conflit -> "5<TAB>conflit"
-printf '[{"number":5,%s}]' "$(tete 5)" > "$PRS"
-printf '{"number":5,"labels":[],"head":{"sha":"abc"},"mergeable":false}' > "$H/repos_o_r_pulls_5.json"
-printf '{"check_runs":[]}' > "$H/repos_o_r_commits_abc_check-runs_per_page_100.json"
-printf '[]' > "$H/repos_o_r_pulls_5_reviews_per_page_100.json"
-printf '[]' > "$H/repos_o_r_issues_5_comments_per_page_100.json"
-printf '[]' > "$H/repos_o_r_pulls_5_comments_per_page_100.json"
-printf '{"commit":{"committer":{"date":"2026-01-01T00:00:00Z"}}}' > "$H/repos_o_r_commits_abc.json"
-out="$(bash "$S" 2>/dev/null)"
-assert_eq "$(printf '5\tconflit')" "$out" "conflit detecte et motive"
-assert_contains "$H/calls.log" 'repos/o/r/pulls?state=open&base=staging&per_page=100' \
-  "la liste est demandee sur la branche de travail, pas sur tout le depot"
+# c) LE PÉRIMÈTRE : seule une tête feature/<F> DU DÉPÔT compte. La PR de release
+#    (tête staging), une PR de fork, une PR de fork supprimé, une card/ v1 : ignorées.
+printf '[%s,%s,{"number":73,"head":{"ref":"feature/73","sha":"s3","repo":null}},%s]' \
+  "$(pr 71 staging o/r s1)" "$(pr 72 feature/72 attaquant/r s2)" "$(pr 74 card/74 o/r s4)" > "$PRS"
+: > "$H/calls.log"
+run
+assert_rc 0 "$rc" "hors périmètre = rien"
+for n in 71 72 73 74; do
+  assert_file_lacks "$H/calls.log" "repos/o/r/pulls/$n/" "la PR #$n hors périmètre n'est pas lue"
+done
 
-# --- le perimetre ------------------------------------------------------------
-# CE QUI N'EST PAS UNE CARTE DE CE DEPOT N'EST PAS ENTRETENU, MEME SI LE SERVEUR
-# LE SERT. #71 est la PR de release (tete `staging`) : un commentaire humain
-# dessus lancerait un agent « remets-la en etat, ou ferme-la » sur la seule
-# proposition qui touche la production. #72 vient d'un fork — n'importe qui y
-# pousse `card/72` sans aucun droit ici — et #73 d'un fork supprime.
-printf '[{"number":71,"head":{"ref":"staging","sha":"s1","repo":{"full_name":"o/r"}}},
-         {"number":72,"head":{"ref":"card/72","sha":"s2","repo":{"full_name":"attaquant/r"}}},
-         {"number":73,"head":{"ref":"card/73","sha":"s3","repo":null}}]' > "$PRS"
-vide_journal
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 1 "$rc" "hors perimetre = rien a faire"
-assert_file_lacks "$H/calls.log" 'repos/o/r/pulls/71' "la PR de release n'est meme pas ouverte"
-assert_file_lacks "$H/calls.log" 'repos/o/r/pulls/72' "une tete de fork ne prouve rien sur ce depot"
-assert_file_lacks "$H/calls.log" 'repos/o/r/pulls/73' "un fork supprime non plus"
+# d) UNE PR DE FEATURE SANS REMARQUE ET CI VERTE : rien n'est créé
+printf '[%s]' "$(pr 5 feature/10 o/r)" > "$PRS"
+fils 5 '[]' '[]' '[]'
+ci_verte abc
+sous_issues 10 '[]'
+: > "$H/calls.log"
+run
+assert_rc 0 "$rc" "rien à transformer = 0"
+assert_file_lacks "$H/calls.log" 'POST' "aucune carte, aucune réponse"
+assert_contains "$TESTTMP/err" "aucune remarque ni CI rouge" "et c'est dit"
 
-printf '[{"number":5,%s}]' "$(tete 5)" > "$PRS"
+# --- LES REMARQUES ------------------------------------------------------------------------
+REV_CHEF='{"id":700,"user":{"login":"le-chef"},"state":"COMMENTED","body":"Le libellé du bouton\nest resté « Valider »","submitted_at":"2026-09-10T10:00:00Z","html_url":"https://github.com/o/r/pull/5#pullrequestreview-700"}'
+CON_CHEF='{"id":701,"user":{"login":"le-chef"},"body":"Il manque le titre de la page","created_at":"2026-09-10T10:05:00Z","html_url":"https://github.com/o/r/pull/5#issuecomment-701"}'
+LIG_CHEF='{"id":77,"user":{"login":"le-chef"},"body":"cette variable est mal nommée","created_at":"2026-09-10T10:10:00Z","html_url":"https://github.com/o/r/pull/5#discussion_r77","path":"src/app.ts","line":12}'
 
-# d) PR marquee needs-human -> passee, donc 1
-printf '{"number":5,"labels":[{"name":"factory:needs-human"}],"head":{"sha":"abc"},"mergeable":false}' \
-  > "$H/repos_o_r_pulls_5.json"
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 1 "$rc" "needs-human est passee"
+# e) LES TROIS FORMES DEVIENNENT TROIS CARTES, sous-issues de la feature, prioritaires
+fils 5 "[$REV_CHEF]" "[$CON_CHEF]" "[$LIG_CHEF]"
+: > "$H/calls.log"
+run
+assert_rc 0 "$rc" "trois remarques : 0 ($(cat "$TESTTMP/err"))"
+assert_eq "3" "$(grep -c 'POST repos/o/r/issues {' "$H/calls.log")" "trois cartes créées"
+assert_eq "3" "$(grep -c 'POST graphql' "$H/calls.log")" "trois rattachements addSubIssue"
+assert_contains "$(grep 'POST graphql' "$H/calls.log" | head -1)" 'addSubIssue' "la mutation est addSubIssue"
+assert_contains "$(grep 'POST graphql' "$H/calls.log" | head -1)" '"p": "N10"' "sous la feature 10"
+assert_contains "$(grep 'POST graphql' "$H/calls.log" | head -1)" '"e": "N42"' "la carte neuve"
+# LE PARENT EST LU AVANT LA CARTE (I6) : une lecture qui rate ne laisse pas
+# d'orpheline derrière elle.
+[ "$(grep -n 'GET repos/o/r/issues/10 ' "$H/calls.log" | head -1 | cut -d: -f1)" -lt "$(grep -n 'POST repos/o/r/issues {' "$H/calls.log" | head -1 | cut -d: -f1)" ] \
+  || { echo "le node_id du parent doit être lu AVANT de créer la carte" >&2; exit 1; }
+cartes="$(grep 'POST repos/o/r/issues {' "$H/calls.log")"
+# La review : titre tronqué à la première ligne, corps cité en entier, lien, marques.
+assert_contains "$cartes" '"title": "Remarque de le-chef sur PR #5 : Le libellé du bouton"' "titre = login, PR, première ligne"
+assert_contains "$cartes" '> Le libellé du bouton\n> est resté « Valider »' "le commentaire intégral, cité"
+assert_contains "$cartes" 'https://github.com/o/r/pull/5#pullrequestreview-700' "le lien permanent"
+assert_contains "$cartes" '<!-- factory:remarque 700 -->' "la marque de la review"
+assert_contains "$cartes" '<!-- factory:fil 5 conversation -->' "où deliver.sh répondra : la conversation"
+# La conversation.
+assert_contains "$cartes" '<!-- factory:remarque 701 -->' "la marque du commentaire de conversation"
+# La ligne : fichier:ligne, et le fil de ligne.
+assert_contains "$cartes" 'Fichier : `src/app.ts:12`' "fichier:ligne pour un commentaire de ligne"
+assert_contains "$cartes" '<!-- factory:remarque 77 -->' "la marque du commentaire de ligne"
+assert_contains "$cartes" '<!-- factory:fil 5 ligne 77 -->' "et le fil de ligne, avec sa racine"
+assert_contains "$cartes" '"labels": ["factory:priority"]' "prioritaire"
+# LES RÉPONSES : dans le fil de ligne pour la ligne, en conversation pour les deux autres.
+rep_ligne="$(grep 'POST repos/o/r/pulls/5/comments/77/replies ' "$H/calls.log")"
+assert_contains "$rep_ligne" '→ #42' "réponse dans le fil de ligne"
+assert_contains "$rep_ligne" '<!-- factory:remarque 77 -->' "marquée"
+assert_eq "2" "$(grep -c 'POST repos/o/r/issues/5/comments ' "$H/calls.log")" "deux réponses en conversation (review + conversation)"
+rep_con="$(grep 'POST repos/o/r/issues/5/comments ' "$H/calls.log" | head -1)"
+assert_contains "$rep_con" '@le-chef' "citant l'auteur"
+assert_contains "$rep_con" '→ #42' "et la carte"
+assert_contains "$rep_con" '<!-- factory:remarque 700 -->' "marquée"
+assert_eq "" "$out" "rien sur stdout"
 
-# d2) LE LABEL RENOMME DANS factory.conf EST HONORE. C'est l'assertion qui
-# attrape un retour a l'expansion directe de l'environnement : avec
-# « ${FACTORY_HUMAN_LABEL:-…} », poser la cle dans factory.conf ne suffisait pas,
-# et le renommage etait silencieusement a moitie applique.
-make_conf 'FACTORY_HUMAN_LABEL = maison:humain'
-printf '{"number":5,"labels":[{"name":"maison:humain"}],"head":{"sha":"abc"},"mergeable":false}' \
-  > "$H/repos_o_r_pulls_5.json"
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 1 "$rc" "le label renomme est lu depuis factory.conf"
-# ET LA RECIPROQUE : la cle etant renommee, l'ANCIEN defaut ne met plus rien de
-# cote. Sans ce second cas, un script qui ignorerait la cle et garderait le
-# defaut passerait le premier.
-printf '{"number":5,"labels":[{"name":"factory:needs-human"}],"head":{"sha":"abc"},"mergeable":false}' \
-  > "$H/repos_o_r_pulls_5.json"
-out="$(bash "$S" 2>/dev/null)"
-assert_eq "$(printf '5\tconflit')" "$out" "le defaut ne vaut plus rien quand la cle est renommee"
-rm -f "$TESTTMP/factory.conf"
+# f) LE TITRE EST TRONQUÉ À 70 CARACTÈRES
+longue="$(printf 'x%.0s' {1..90})"
+fils 5 '[]' "[{\"id\":702,\"user\":{\"login\":\"le-chef\"},\"body\":\"$longue\",\"created_at\":\"2026-09-10T10:05:00Z\",\"html_url\":\"u\"}]" '[]'
+: > "$H/calls.log"
+run
+titre="$(grep 'POST repos/o/r/issues {' "$H/calls.log" | sed 's/.*"title": "\([^"]*\)".*/\1/')"
+assert_eq "Remarque de le-chef sur PR #5 : $(printf 'x%.0s' {1..70})…" "$titre" "70 caractères puis une ellipse"
 
-# --- le reveil sur la parole de l'humain -------------------------------------
-# La PR n'est plus en conflit et sa CI est verte : seul le mot du chef peut la
-# reveiller. La pointe de branche porte une date POSTERIEURE a ce mot, comme
-# apres un rebase : c'est precisement le cas qui l'enterrait avant le correctif.
-printf '{"number":5,"labels":[],"head":{"sha":"abc"},"mergeable":true}' > "$H/repos_o_r_pulls_5.json"
-printf '{"check_runs":[{"conclusion":"success","status":"completed"}],"total_count":1}' > "$H/repos_o_r_commits_abc_check-runs_per_page_100.json"
-printf '{"commit":{"committer":{"date":"2026-09-08T08:17:29Z"}}}' > "$H/repos_o_r_commits_abc.json"
+# g) IDEMPOTENCE PAR LA MARQUE : la réponse de l'usine porte la marque -> rien
+BOT_REP='{"id":900,"user":{"login":"usine[bot]"},"body":"> Il manque\n\n@le-chef → #42\n<!-- factory:remarque 701 -->","created_at":"2026-09-10T10:06:00Z"}'
+BOT_REP_LIGNE='{"id":901,"in_reply_to_id":77,"user":{"login":"usine[bot]"},"body":"→ #43\n<!-- factory:remarque 77 -->","created_at":"2026-09-10T10:11:00Z"}'
+fils 5 '[]' "[$CON_CHEF,$BOT_REP]" "[$LIG_CHEF,$BOT_REP_LIGNE]"
+: > "$H/calls.log"
+run
+assert_rc 0 "$rc" "déjà répondues : 0"
+assert_file_lacks "$H/calls.log" 'POST' "une remarque déjà transformée n'est pas retransformée"
 
-# Les corps se composent SANS `tr -d '[]'` : le login de l'usine contient des
-# crochets (« usine[bot] »), et les retirer en faisait un login qui ne
-# correspondait plus a rien — le test echouait en accusant le code.
-H_SAID='{"user":{"login":"le-chef"},"created_at":"TS","body":"pas clair"}'
-H_ANSW='{"user":{"login":"usine[bot]"},"created_at":"TS","body":"corrige"}'
-at() { printf '%s' "${1//TS/$2}"; }   # <gabarit> <horodate>
+# g2) LA CARTE EXISTE MAIS LA RÉPONSE MANQUE (un 5xx entre les deux) : on cherche la
+#     marque dans les sous-issues de la feature, OUVERTES ET FERMÉES, et on ne
+#     répond QUE la réponse.
+fils 5 '[]' "[$CON_CHEF]" '[]'
+sous_issues 10 '[{"number":42,"state":"closed","body":"…\n<!-- factory:remarque 701 -->\n"}]'
+: > "$H/calls.log"
+run
+assert_file_lacks "$H/calls.log" 'POST repos/o/r/issues {' "pas de seconde carte : la marque est dans une sous-issue fermée"
+assert_contains "$(grep 'POST repos/o/r/issues/5/comments ' "$H/calls.log")" '→ #42' "la réponse manquante est postée, vers la carte existante"
+sous_issues 10 '[]'
 
-# e) le chef a parle, l'usine n'a jamais repondu -> reveil
-printf '[%s]' "$(at "$H_SAID" 2026-09-08T08:10:42Z)" \
-  > "$H/repos_o_r_issues_5_comments_per_page_100.json"
-out="$(bash "$S" 2>/dev/null)"
-assert_eq "$(printf '5\tretour de le-chef à traiter')" "$out" "parole jamais repondue = reveil"
+# h) UNE APPROBATION N'EST JAMAIS UNE REMARQUE (M5), avec ou sans corps ; une
+#    review sans corps non plus.
+fils 5 '[{"id":703,"user":{"login":"le-chef"},"state":"APPROVED","body":"","submitted_at":"2026-09-10T11:00:00Z"},{"id":704,"user":{"login":"le-chef"},"state":"APPROVED","body":"LGTM, bravo","submitted_at":"2026-09-10T11:01:00Z","html_url":"u"},{"id":705,"user":{"login":"le-chef"},"state":"COMMENTED","body":"","submitted_at":"2026-09-10T11:02:00Z"}]' '[]' '[]'
+: > "$H/calls.log"
+run
+assert_file_lacks "$H/calls.log" 'POST' "ni une approbation muette, ni une approbation commentée, ni une review vide ne font une carte"
 
-# f) l'usine a repondu APRES -> silence, meme si la pointe n'a pas bouge
-printf '[%s,%s]' "$(at "$H_SAID" 2026-09-08T08:10:42Z)" "$(at "$H_ANSW" 2026-09-08T09:00:00Z)" \
-  > "$H/repos_o_r_issues_5_comments_per_page_100.json"
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 1 "$rc" "parole repondue = silence"
+# i) LA MARQUE EST LA SEULE PREUVE (B2) : un mot du bot SANS marque, même
+#    postérieur — le commentaire de livraison que deliver.sh poste à 10:40 —
+#    ne répond pas à la remarque de 10:05. Sans cette règle, toute remarque
+#    suivie d'une livraison était perdue pour toujours.
+fils 5 '[]' "[$CON_CHEF,{\"id\":904,\"user\":{\"login\":\"usine[bot]\"},\"body\":\"<!-- factory:livraison #12 -->\\nCe qui a été fait\",\"created_at\":\"2026-09-10T10:40:00Z\"}]" '[]'
+: > "$H/calls.log"
+run
+assert_contains "$H/calls.log" 'POST repos/o/r/issues {' "une remarque suivie d'une livraison du bot est transformée quand même"
+assert_contains "$(grep 'POST repos/o/r/issues {' "$H/calls.log")" '<!-- factory:remarque 701 -->' "c'est bien elle"
+# Un mot du bot dans le fil de ligne, sans marque : pareil.
+fils 5 '[]' '[]' "[$LIG_CHEF,{\"id\":905,\"in_reply_to_id\":77,\"user\":{\"login\":\"usine[bot]\"},\"body\":\"vu\",\"created_at\":\"2026-09-10T12:00:00Z\"}]"
+: > "$H/calls.log"
+run
+assert_contains "$H/calls.log" 'POST repos/o/r/pulls/5/comments/77/replies' "un mot du bot sans marque dans le fil ne vaut pas réponse"
 
-# g) le chef a reparle APRES la reponse -> reveil de nouveau
-printf '[%s,%s]' "$(at "$H_SAID" 2026-09-08T10:00:00Z)" "$(at "$H_ANSW" 2026-09-08T09:00:00Z)" \
-  > "$H/repos_o_r_issues_5_comments_per_page_100.json"
-out="$(bash "$S" 2>/dev/null)"
-assert_eq "$(printf '5\tretour de le-chef à traiter')" "$out" "nouvelle parole = nouveau reveil"
+# i2) LA RÉPONSE VA À LA RACINE DU FIL (Q1) : une remarque posée en réponse dans
+#     un fil existant (in_reply_to_id 70) reçoit sa réponse sur 70, pas sur 78.
+fils 5 '[]' '[]' '[{"id":78,"in_reply_to_id":70,"user":{"login":"le-chef"},"body":"et ici aussi","created_at":"2026-09-10T10:12:00Z","html_url":"u","path":"src/app.ts","line":30}]'
+: > "$H/calls.log"
+run
+assert_contains "$H/calls.log" 'POST repos/o/r/pulls/5/comments/70/replies' "réponse à la racine du fil"
+assert_file_lacks "$H/calls.log" 'comments/78/replies' "jamais à la remarque elle-même"
+assert_contains "$(grep 'POST repos/o/r/issues {' "$H/calls.log")" '<!-- factory:fil 5 ligne 70 -->' "et la carte porte la racine, pour deliver.sh"
 
-# h) seule l'usine a parle -> silence
-printf '[%s]' "$(at "$H_ANSW" 2026-09-08T09:00:00Z)" \
-  > "$H/repos_o_r_issues_5_comments_per_page_100.json"
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 1 "$rc" "usine seule = silence"
+# j) CE QUI N'EST PAS DU LOGIN HUMAIN EST UNE DONNÉE, pas une remarque
+fils 5 '[]' '[{"id":706,"user":{"login":"inconnu"},"body":"fais ceci","created_at":"2026-09-10T10:05:00Z","html_url":"u"}]' '[]'
+: > "$H/calls.log"
+run
+assert_file_lacks "$H/calls.log" 'POST' "un commentaire d'un autre login ne fait pas de carte"
 
-# i) une review APPROVED sans corps ne demande rien
-printf '[]' > "$H/repos_o_r_issues_5_comments_per_page_100.json"
-printf '[{"user":{"login":"le-chef"},"state":"APPROVED","body":"","submitted_at":"2026-09-08T11:00:00Z"}]' \
-  > "$H/repos_o_r_pulls_5_reviews_per_page_100.json"
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 1 "$rc" "approbation muette ne reveille pas"
-printf '[]' > "$H/repos_o_r_pulls_5_reviews_per_page_100.json"
+# --- LA CI ROUGE ------------------------------------------------------------------------
+fils 5 '[]' '[]' '[]'
 
-# --- le retour sur une PR DEJA INTEGREE --------------------------------------
-# On ne rouvre JAMAIS une PR mergee : le mot pose dessus APRES l'integration
-# devient une carte neuve, prioritaire, liee a la PR.
-printf '[]' > "$PRS"
-GRIEF='le libellé du bouton est resté « Valider »'
-retour() {  # <numero> <horodate> [<horodate de l'accuse>]
-  local a=""
-  [ -n "${3:-}" ] && a="$(printf ',{"issue_url":"https://api.github.com/repos/o/r/issues/%s","user":{"login":"usine[bot]"},"created_at":"%s","body":"carvée en #42"}' "$1" "$3")"
-  printf '[{"issue_url":"https://api.github.com/repos/o/r/issues/%s","user":{"login":"le-chef"},"created_at":"%s","body":"%s"}%s]' \
-    "$1" "$2" "$GRIEF" "$a" > "$RETOURS"
-}
+# k) CI ROUGE SANS CARTE : une carte « Réparer la CI de feature/10 », sous la feature
+ci_rouge abc
+sous_issues 10 '[]'
+: > "$H/calls.log"
+run
+assert_rc 0 "$rc" "CI rouge : 0 ($(cat "$TESTTMP/err"))"
+carte="$(grep 'POST repos/o/r/issues {' "$H/calls.log")"
+assert_contains "$carte" '"title": "Réparer la CI de feature/10"' "le titre"
+assert_contains "$carte" 'https://ci/rouge/42' "le lien du run rouge"
+assert_contains "$carte" '<!-- factory:ci feature/10 -->' "la marque"
+assert_contains "$carte" '"labels": ["factory:priority"]' "prioritaire"
+assert_contains "$(grep 'POST graphql' "$H/calls.log")" '"p": "N10"' "sous-issue de la feature"
+assert_contains "$TESTTMP/err" "carte #42 créée sous #10" "et c'est dit"
 
-# LE CARVE A LE MEME PERIMETRE QUE LE REVEIL : une PR de carte du depot, sur la
-# branche de travail. Le fixture `pulls/<n>` le dit.
-carte_pr() {  # <numero> <tete> <depot> <base>
-  printf '{"number":%s,"head":{"ref":"%s","sha":"abc","repo":{"full_name":"%s"}},"base":{"ref":"%s"}}' "$@" > "$H/repos_o_r_pulls_$1.json"
-}
+# k2) LE PARENT ILLISIBLE (5xx sur issues/10) NE LAISSE PAS D'ORPHELINE (I6) :
+#     rien n'est créé, 4 ; rejoué, une seule carte.
+sous_issues 10 '[]'
+printf '500' > "$H/repos_o_r_issues_10.code"
+: > "$H/calls.log"
+run
+assert_rc 4 "$rc" "parent injoignable = 4"
+assert_file_lacks "$H/calls.log" 'POST repos/o/r/issues {' "aucune carte créée sans parent lisible"
+rm -f "$H"/*.code
+: > "$H/calls.log"
+run
+assert_eq "1" "$(grep -c 'POST repos/o/r/issues {' "$H/calls.log")" "rejoué : une seule carte"
+# Un addSubIssue REFUSÉ pose needs-human sur la carte neuve : sans parent, elle
+# deviendrait une mini-feature.
+printf '{"errors":[{"message":"non"}]}' > "$H/graphql.json"
+: > "$H/calls.log"
+run
+assert_contains "$H/calls.log" 'POST repos/o/r/issues/42/labels {"labels": ["factory:needs-human"]}' "carte non rattachée = needs-human"
+assert_contains "$TESTTMP/err" "non rattachée" "et c'est dit"
+printf '{"data":{"addSubIssue":{"issue":{"number":10}}}}' > "$H/graphql.json"
 
-# k) LE CARVE. La PR #9 est mergee le 09 a midi, le chef parle le 10.
-retour 9 2026-09-10T10:00:00Z
-printf '{"number":9,"pull_request":{"merged_at":"2026-09-09T12:00:00Z"}}' > "$H/repos_o_r_issues_9.json"
-carte_pr 9 card/9 o/r staging
-printf '{"number":42}' > "$H/repos_o_r_issues.json"
-printf '{"id":7}' > "$H/repos_o_r_issues_9_comments.json"
-vide_journal
-set +e; out="$(bash "$S" 2>/dev/null)"; rc=$?; set -e
-assert_rc 1 "$rc" "le carve ne rend aucun numero de PR : ce n'est pas de l'entretien"
-assert_eq "" "$out" "rien sur stdout, qui porte le contrat « numero TAB motif »"
-log="$(cat "$H/calls.log")"
-assert_contains "$log" 'POST repos/o/r/issues {' "une carte neuve est ouverte"
-assert_contains "$log" "$GRIEF" "le texte du commentaire est le grief"
-assert_contains "$log" 'Refs #9' "la carte neuve est liee a la PR integree"
-assert_contains "$log" '"labels": ["factory:priority"]' "elle passe devant la file"
-assert_contains "$log" 'POST repos/o/r/issues/9/comments {"body":"carvée en #42"}' \
-  "l'usine accuse reception sous son propre login"
-assert_not_contains "$log" 'PATCH' "on ne rouvre JAMAIS une PR mergee"
+# k3) 100+ CONTRÔLES (I7) : le rouge en page 2 est vu.
+printf '{"check_runs":[%s],"total_count":101}' "$(for i in $(seq 1 100); do printf '%s{"name":"j%s","conclusion":"success","status":"completed"}' "$([ "$i" -gt 1 ] && echo ,)" "$i"; done)" > "$H/repos_o_r_commits_abc_check-runs_per_page_100.json"
+printf '{"check_runs":[{"name":"e2e","conclusion":"failure","status":"completed","html_url":"https://ci/rouge/p2"}],"total_count":101}' > "$H/repos_o_r_commits_abc_check-runs_per_page_100_page_2.json"
+sous_issues 10 '[]'
+: > "$H/calls.log"
+run
+assert_rc 0 "$rc" "101 contrôles : 0 ($(cat "$TESTTMP/err"))"
+assert_contains "$H/calls.log" 'check-runs?per_page=100&page=2' "la seconde page est lue"
+assert_contains "$(grep 'POST repos/o/r/issues {' "$H/calls.log")" 'https://ci/rouge/p2' "le rouge de la page 2 fait la carte"
+rm -f "$H/repos_o_r_commits_abc_check-runs_per_page_100_page_2.json"
+ci_rouge abc
 
-# l) ON NE CARVE PAS DEUX FOIS LE MEME COMMENTAIRE. Meme fixture, plus l'accuse
-# de l'usine : c'est LE defaut que ce lot risque le plus, parce qu'une carte
-# neuve a chaque tour change de sujet a chaque tour, et que la garde
-# anti-tourniquet de factory.mk, qui compte les repetitions d'un MEME sujet, ne
-# verrait rien passer.
-retour 9 2026-09-10T10:00:00Z 2026-09-10T10:00:05Z
-vide_journal
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 1 "$rc" "rien a faire au second tour"
-assert_file_lacks "$H/calls.log" 'POST' "l'accuse de reception eteint le retour"
-assert_file_lacks "$H/calls.log" 'repos/o/r/issues/9 ' "et il l'eteint AVANT le moindre appel de plus"
+# l) CI ROUGE AVEC UNE CARTE OUVERTE QUI LA PORTE : rien ; une carte FERMÉE ne compte pas
+sous_issues 10 '[{"number":42,"state":"open","body":"…\n<!-- factory:ci feature/10 -->"}]'
+: > "$H/calls.log"
+run
+assert_file_lacks "$H/calls.log" 'POST' "une carte de CI ouverte suffit"
+assert_contains "$TESTTMP/err" "déjà portée par la carte ouverte #42" "et c'est dit"
+sous_issues 10 '[{"number":42,"state":"closed","body":"…\n<!-- factory:ci feature/10 -->"}]'
+: > "$H/calls.log"
+run
+assert_contains "$H/calls.log" 'POST repos/o/r/issues {' "une carte de CI fermée ne retient pas une nouvelle CI rouge"
 
-# m) UNE PR OUVERTE NE CARVE PAS : c'est la surface d'entretien qui s'en charge,
-# et carver la doublerait le travail avec une carte que personne n'a demandee.
-retour 11 2026-09-10T10:00:00Z
-printf '{"number":11,"pull_request":{"merged_at":null}}' > "$H/repos_o_r_issues_11.json"
-vide_journal
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 1 "$rc" "une PR ouverte ne carve pas"
-assert_file_lacks "$H/calls.log" 'POST' "aucune carte neuve"
+# m) LA MINI-FEATURE : la PR feature/30 est celle de la carte 30 ; la carte de CI
+#    est une sous-issue de la carte elle-même.
+printf '[%s]' "$(pr 6 feature/30 o/r s30)" > "$PRS"
+fils 6 '[]' '[]' '[]'
+ci_rouge s30
+sous_issues 30 '[]'
+printf '{"number":30,"node_id":"N30","title":"un hotfix"}' > "$H/repos_o_r_issues_30.json"
+: > "$H/calls.log"
+run
+assert_contains "$(grep 'POST graphql' "$H/calls.log")" '"p": "N30"' "sous-issue de la carte, pour une mini-feature"
 
-# n) UN COMMENTAIRE SUR UNE ISSUE N'EST PAS UNE PR — et surtout, il ne doit pas
-# faire sortir en 3. `issues/<n>` repond pour les deux ; `pulls/<n>` aurait rendu
-# 404, donc 3, donc « configuration cassee » et l'arret de la boucle sur un
-# commentaire parfaitement normal.
-retour 12 2026-09-10T10:00:00Z
-printf '{"number":12,"state":"closed"}' > "$H/repos_o_r_issues_12.json"
-vide_journal
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 1 "$rc" "un commentaire d'issue n'arrete pas l'usine"
-assert_file_lacks "$H/calls.log" 'POST' "et ne carve rien"
-
-# o) UN MOT ANTERIEUR AU MERGE A DEJA EU SON TOUR. Pendant la relecture, c'est la
-# surface d'entretien qui le portait et le skill obligeait l'agent a y repondre ;
-# le rattraper apres coup carverait une carte pour un « LGTM » du jour du merge.
-retour 13 2026-09-09T08:00:00Z
-printf '{"number":13,"pull_request":{"merged_at":"2026-09-09T12:00:00Z"}}' > "$H/repos_o_r_issues_13.json"
-vide_journal
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 1 "$rc" "un mot d'avant le merge ne carve pas"
-assert_file_lacks "$H/calls.log" 'POST' "aucune carte neuve pour une parole deja traitee"
-
-# p) LA PR DE RELEASE NE CARVE PAS : un mot du chef sur la proposition
-# branche de travail -> production est la discussion d'une release, pas un
-# grief. Sans perimetre, chaque mot y produisait une carte prioritaire.
-retour 14 2026-09-10T10:00:00Z
-printf '{"number":14,"pull_request":{"merged_at":"2026-09-09T12:00:00Z"}}' > "$H/repos_o_r_issues_14.json"
-carte_pr 14 staging o/r main
-vide_journal
-set +e; err="$(bash "$S" 2>&1 >/dev/null)"; rc=$?; set -e
-assert_rc 1 "$rc" "la PR de release ne carve pas"
-assert_file_lacks "$H/calls.log" 'POST' "aucune carte neuve sur la PR de release"
-assert_contains "$err" "n'est pas une proposition de carte" "l'ecart est dit"
-# Ni une PR de fork mergee par un humain.
-carte_pr 14 card/14 attaquant/r staging
-vide_journal
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_file_lacks "$H/calls.log" 'POST' "aucune carte neuve sur une PR de fork"
-
-# q) UN COMMENTAIRE DE LIGNE POST-MERGE CARVE AUSSI : `pulls/comments` est
-# depot-entier, et c'est la forme la plus frequente d'un grief precis.
-printf '[]' > "$RETOURS"
-printf '[{"pull_request_url":"https://api.github.com/repos/o/r/pulls/9","user":{"login":"le-chef"},"created_at":"2026-09-10T10:00:00Z","body":"cette ligne-la"}]' > "$LIGNES"
-vide_journal
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 1 "$rc" "un mot de ligne carve sans rendre de numero"
-assert_contains "$H/calls.log" 'POST repos/o/r/issues {' "un commentaire de ligne post-merge carve une carte"
-assert_contains "$H/calls.log" 'cette ligne-la' "avec son texte"
-printf '[]' > "$LIGNES"
-
-# r) LA CI ANNULEE REVEILLE, ET UN RATE SUR LES CONTROLES EST UN 4, PAS UN 1.
-printf '[{"number":5,%s,"labels":[],"mergeable":true}]' "$(tete 5)" > "$PRS"
-printf '{"number":5,%s,"labels":[],"mergeable":true}' "$(tete 5)" > "$H/repos_o_r_pulls_5.json"
-printf '[]' > "$H/repos_o_r_pulls_5_reviews_per_page_100.json"
-printf '[]' > "$H/repos_o_r_issues_5_comments_per_page_100.json"
-printf '[]' > "$H/repos_o_r_pulls_5_comments_per_page_100.json"
-printf '{"check_runs":[{"conclusion":"cancelled","status":"completed"}],"total_count":1}' > "$H/repos_o_r_commits_abc_check-runs_per_page_100.json"
-vide_journal
-set +e; out="$(bash "$S" 2>/dev/null)"; rc=$?; set -e
-assert_rc 0 "$rc" "une CI annulee demande du travail"
-assert_contains "$out" "CI rouge" "annulee = rouge, pas verte"
-printf '500' > "$H/repos_o_r_commits_abc_check-runs_per_page_100.code"
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 4 "$rc" "un 5xx sur les controles est un rate passager, pas « rien a faire »"
-printf '403' > "$H/repos_o_r_commits_abc_check-runs_per_page_100.code"
-printf '{"message":"Resource not accessible by integration"}' > "$H/repos_o_r_commits_abc_check-runs_per_page_100.json"
-set +e; bash "$S" >/dev/null 2>&1; rc=$?; set -e
-assert_rc 3 "$rc" "un 403 sur les controles est une permission, pas « rien a faire »"
-rm -f "$H/repos_o_r_commits_abc_check-runs_per_page_100.code"
-printf '[]' > "$PRS"
-
-# j) la pointe de branche n'est plus lue du tout, de toute la session
-vide_journal
-grep -qE ' repos/o/r/commits/abc( |$)' "$TOUS" && { echo "la pointe de branche est encore lue" >&2; exit 1; }
+# n) LE TRANSPORT : 500 -> 4, 404 -> 3, et rien n'est créé à moitié
+printf '500' > "$H/repos_o_r_pulls_6_reviews_per_page_100.code"
+: > "$H/calls.log"
+run
+assert_rc 4 "$rc" "5xx = raté passager"
+assert_file_lacks "$H/calls.log" 'POST' "rien n'est créé sur un raté"
+printf '404' > "$H/repos_o_r_pulls_6_reviews_per_page_100.code"
+run
+assert_rc 3 "$rc" "404 = configuration"
+rm -f "$H"/*.code
 
 echo ok

@@ -99,7 +99,7 @@ else
 fi
 
 # --- ce qu'elle fait, et ce qu'elle a fait -----------------------------------
-# Une CARTE commence à un marqueur `— issue #N —` / `— entretien : PR #N —`, et
+# Une CARTE commence à un marqueur `— issue #N · feature #F (…) —`, et
 # se termine à la première ligne de MÉCANIQUE qui suit (le ménage du tour
 # suivant). Entre les deux, tout ce qui n'est ni marqueur ni mécanique est le
 # rapport final de l'agent. Ce découpage tient parce que la boucle encadre
@@ -124,7 +124,7 @@ digest="$(section journal \
     sub(/^entretien : /, "", id); sub(/^reprise : carte /, "", id)
     next
   }
-  msg ~ /^(wt-cleanup|gh-unblock|gh-pr-attention|wt-resume|gh-next-issue|run-loop|github-loop):/ ||
+  msg ~ /^(wt-cleanup|gh-unblock|gh-pr-attention|gh-next-issue|feature-up|turn-verify|deliver|gh-comment|run-loop|orchestrator):/ ||
   msg ~ /^— / { if (id != "" && endt == "") endt = ts; next }
   { if (id != "" && endt == "" && msg ~ /[a-zA-Z]/ && length(rep) < 190) rep = rep (rep ? " " : "") msg }
   END { flush(); for (i = (n > max ? n - max + 1 : 1); i <= n; i++) print lines[i] }
@@ -151,9 +151,12 @@ else
   fi
 fi
 
-delivered="$(printf '%s\n' "$log" | sed -n 's/^gh-next-issue: déjà livrées (PR ouverte) : //p' | tail -1)"
-[[ -n "$delivered" ]] && printf '  %slivrées%s        %s %s(PR ouvertes, en attente de merge)%s\n' \
-  "$B" "$R" "$(printf '#%s' "${delivered//, / #}")" "$D" "$R"
+# LES LIVRAISONS DU JOURNAL (v2) : une carte livrée est FERMÉE, il n'y a plus de
+# « PR ouverte en attente de merge » à afficher ; ce qui se lit, c'est la ligne
+# que la boucle écrit à chaque livraison.
+livrees="$(printf '%s\n' "$log" | sed -nE 's/^— carte #([0-9]+) livrée sur (feature\/[0-9]+) \(PR #([0-9]+)\) —$/#\1→\2/p' | tail -5 | tr '\n' ' ')"
+[[ -n "$livrees" ]] && printf '  %slivrées%s        %s %s(commits sur la branche de feature, PR relue par lot)%s\n' \
+  "$B" "$R" "$livrees" "$D" "$R"
 
 if [[ -n "$digest" ]]; then
   printf '\n  %scartes récentes%s\n' "$B" "$R"

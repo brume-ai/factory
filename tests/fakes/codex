@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Faux `codex` pour les tests : journalise l'appel, rend EXACTEMENT le flux de
+# `codex exec --json` vérifié le 18 septembre 2026 — des lignes JSON
+# `thread.started`, `item.completed` (agent_message), `turn.completed` — et
+# écrit le ROLLOUT que le vrai CLI écrit sous
+# $CODEX_HOME/sessions/<YYYY>/<MM>/<DD>/rollout-*-<thread_id>.jsonl, avec un
+# `turn_context` qui porte le modèle. Le flux ne porte PAS le modèle : c'est le
+# point que role.sh doit prouver en allant lire le rollout.
+# Piloté par des fichiers dans $FAKE_CLI_DIR :
+#   codex.response   le texte de l'agent_message (défaut : une phrase)
+#   codex.model      le modèle écrit dans le rollout (défaut : celui de `-m`)
+#   codex.norollout  présent = aucun rollout écrit (la preuve manque)
+#   codex.rc         code de sortie à rendre (défaut 0)
+#   codex.thread     le thread_id à utiliser (défaut : un uuid neuf) — pour
+#                    qu'un test puisse poser un rollout à côté
+#   codex.junk       présent = une ligne `42` (du JSON valide qui n'est pas un
+#                    objet) est glissée dans le flux
+#   codex.nothread   présent = pas de ligne thread.started dans le flux
+# CODEX_HOME est EXIGÉ : un faux qui écrirait dans ~/.codex salirait la vraie
+# machine du développeur.
+set -euo pipefail
+: "${FAKE_CLI_DIR:?}" "${CODEX_HOME:?}"
+model=""
+args=("$@")
+n=${#args[@]}
+i=0
+while [ "$i" -lt "$n" ]; do
+  case "${args[$i]}" in -m) i=$((i+1)); model="${args[$i]}" ;; esac
+  i=$((i+1))
+done
+printf '%s' "${args[$((n-1))]}" > "$FAKE_CLI_DIR/codex.last-prompt"
+printf 'codex %s <prompt>\n' "${args[*]:0:$((n-1))}" >> "$FAKE_CLI_DIR/calls.log"
+if [ -f "$FAKE_CLI_DIR/codex.rc" ]; then
+  echo "fake-codex: échec simulé" >&2
+  exit "$(cat "$FAKE_CLI_DIR/codex.rc")"
+fi
+reponse="réponse factice de codex"
+[ -f "$FAKE_CLI_DIR/codex.response" ] && reponse="$(cat "$FAKE_CLI_DIR/codex.response")"
+rollout_model="$model"
+[ -f "$FAKE_CLI_DIR/codex.model" ] && rollout_model="$(cat "$FAKE_CLI_DIR/codex.model")"
+thread="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+[ -f "$FAKE_CLI_DIR/codex.thread" ] && thread="$(cat "$FAKE_CLI_DIR/codex.thread")"
+if [ ! -f "$FAKE_CLI_DIR/codex.norollout" ]; then
+  d="$CODEX_HOME/sessions/2026/09/18"
+  mkdir -p "$d"
+  ROLLOUT_MODEL="$rollout_model" THREAD="$thread" python3 - "$d/rollout-2026-09-18T10-00-00-$thread.jsonl" <<'PY'
+import json, os, sys
+with open(sys.argv[1], "w") as f:
+    f.write(json.dumps({"timestamp": "2026-09-18T10:00:00.000Z", "type": "session_meta",
+                        "payload": {"id": os.environ["THREAD"], "cwd": os.getcwd()}}) + "\n")
+    f.write(json.dumps({"timestamp": "2026-09-18T10:00:00.100Z", "type": "turn_context",
+                        "payload": {"cwd": os.getcwd(), "approval_policy": "never",
+                                    "model": os.environ["ROLLOUT_MODEL"], "effort": "medium"}}) + "\n")
+    f.write(json.dumps({"timestamp": "2026-09-18T10:00:01.000Z", "type": "response_item",
+                        "payload": {"type": "message", "role": "assistant"}}) + "\n")
+PY
+fi
+REPONSE="$reponse" THREAD="$thread" JUNK="$([ -f "$FAKE_CLI_DIR/codex.junk" ] && echo 1 || true)" \
+NOTHREAD="$([ -f "$FAKE_CLI_DIR/codex.nothread" ] && echo 1 || true)" python3 - <<'PY'
+import json, os
+if not os.environ["NOTHREAD"]:
+    print(json.dumps({"type": "thread.started", "thread_id": os.environ["THREAD"]}))
+if os.environ["JUNK"]:
+    print("42")
+print(json.dumps({"type": "turn.started"}))
+print(json.dumps({"type": "item.completed", "item": {"id": "item_0", "type": "agent_message",
+                                                     "text": os.environ["REPONSE"]}}))
+print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}}))
+PY

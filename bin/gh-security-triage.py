@@ -26,16 +26,32 @@ interroger, et prétendre les couvrir serait pire que de ne pas les couvrir. On
 lit la SURFACE code-scanning et non le nom de l'outil — le jour où ces analyses
 y publieront leurs résultats, elles entreront sans modifier une ligne.
 
-Codes : 0 = terminé (avec ou sans changement) · 3 = mal configuré.
+LA FEATURE PERMANENTE DES ALERTES (`FACTORY_SECURITY_FEATURE`, résolue par
+l'appelant comme les labels). Dans la v2 une carte sans issue Feature au-dessus
+d'elle est sa propre MINI-FEATURE : une branche, une PR, un merge d'EVA, une
+ligne de release — pour UNE alerte. Posée, la clé nomme une issue de type
+Feature, ouverte, sous laquelle chaque carte créée ici est rattachée comme
+sous-issue (GraphQL `addSubIssue`) : les alertes vivent alors sur UNE branche
+`feature/<F>`, relues par lot. Vide, le comportement d'avant, et une ligne sur
+stderr par tour qui le dit. Un rattachement refusé pose `needs-human` sur la
+carte neuve (card-state.sh, comme gh-pr-attention.sh) plutôt que de la laisser
+naître mini-feature en silence ; une feature configurée mais fermée, ou qui
+n'est pas une Feature, est une configuration cassée : 3, avant toute carte.
+
+LE TRANSPORT EST CURL, PAS URLLIB : le faux curl des tests tient lieu de
+GitHub pour tous les scripts, et ce script était le seul qu'il ne pouvait pas
+voir — « surface illisible → cartes laissées » n'était prouvé que par lecture.
+
+Codes : 0 = terminé (avec ou sans changement) · 3 = mal configuré · 4 = la
+feature permanente illisible par un raté passager (rien n'est créé, retenté).
 """
 
 import json
 import os
 import subprocess
 import sys
-import urllib.error
+import tempfile
 import urllib.parse
-import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if not os.environ.get("GH_REPO"):
@@ -113,19 +129,36 @@ def token() -> str:
 
 TOKEN = token()
 
+SECURITY_FEATURE = (os.environ.get("FACTORY_SECURITY_FEATURE") or "").strip()
+if SECURITY_FEATURE and not SECURITY_FEATURE.isdigit():
+    print(f"gh-security-triage: FACTORY_SECURITY_FEATURE doit être le numéro d'une issue "
+          f"de type Feature (« {SECURITY_FEATURE} »)", file=sys.stderr)
+    sys.exit(3)
+
 
 # `--dry-run` n'est pas un confort : ce script ÉCRIT sur le tableau, et une
 # erreur de groupement s'y voit sous la forme de dizaines de cartes à supprimer
 # une par une. On doit pouvoir lire ce qu'il ferait avant qu'il le fasse.
 DRY = "--dry-run" in sys.argv
+# Le dernier code HTTP vu par `api` (ou "000" sur un transport KO) : ce qui
+# distingue, sur la feature permanente, un raté passager (4, retenté au tour
+# suivant) d'une configuration cassée (3).
+LAST_STATUS = None
+
+
+def transient():
+    return LAST_STATUS in (None, "000", "429") or str(LAST_STATUS).startswith("5")
 
 
 def api(path, method="GET", data=None, paginate=False, absolute=False):
     """Appelle l'API. `paginate` suit les pages tant qu'elles sont pleines.
 
     `absolute` sort du prefixe /repos/<depot>/ : la recherche d'issues vit sous
-    /search/issues, pas sous le depot, et c'est le seul appel du script qui en a
-    besoin.
+    /search/issues et GraphQL sous /graphql, pas sous le depot.
+
+    Rend None sur tout ce qui n'est pas un 2xx lisible — un refus HTTP, un
+    transport qui flanche, un corps qui n'est pas du JSON — après l'avoir dit :
+    une surface qu'on n'a pas pu lire est mise de côté, jamais lue comme vide.
     """
     if DRY and method != "GET":
         print(f"  [dry-run] {method} /{path}"
@@ -138,37 +171,54 @@ def api(path, method="GET", data=None, paginate=False, absolute=False):
     # surfaces sur trois, et la troisième — celle qui porte 232 alertes — rendait
     # zéro carte en n'écrivant qu'une ligne sur stderr. Le `Link` est la seule
     # forme que les trois comprennent.
+    global LAST_STATUS
+    LAST_STATUS = None
     items = []
     url = (f"https://api.github.com/{path}" if absolute
            else f"https://api.github.com/repos/{REPO}/{path}")
-    if paginate:
+    if paginate and "per_page=" not in url:
         url += ("&" if "?" in url else "?") + "per_page=100"
     while True:
-        req = urllib.request.Request(
-            url, method=method,
-            data=json.dumps(data).encode() if data is not None else None,
-            headers={
-                "Authorization": f"Bearer {TOKEN}",
-                "Accept": "application/vnd.github+json",
-                "Content-Type": "application/json",
-            },
-        )
-        try:
-            with urllib.request.urlopen(req) as r:
-                body = json.loads(r.read() or "null")
-                link = r.headers.get("Link", "")
-        except urllib.error.HTTPError as e:
+        with tempfile.TemporaryDirectory(prefix="factory-security-") as directory:
+            body_file, headers_file = directory + "/body", directory + "/headers"
+            cmd = ["curl", "-sS", "--retry", "3", "--retry-delay", "2", "--retry-connrefused",
+                   "--connect-timeout", "10", "--max-time", "60",
+                   "-o", body_file, "-D", headers_file, "-w", "%{http_code}", "-X", method,
+                   "-H", f"Authorization: Bearer {TOKEN}",
+                   "-H", "Accept: application/vnd.github+json"]
+            if data is not None:
+                cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(data, ensure_ascii=False)]
+            result = subprocess.run(cmd + [url], capture_output=True, text=True)
+            if result.returncode:
+                LAST_STATUS = "000"
+                print(f"gh-security-triage: transport KO sur /{path} (curl {result.returncode})", file=sys.stderr)
+                return None
+            code = result.stdout.strip()
+            LAST_STATUS = code
+            with open(body_file, errors="replace") as source:
+                raw = source.read()
+            with open(headers_file, errors="replace") as source:
+                link = " ".join(l.split(":", 1)[1] for l in source.read().splitlines() if l.lower().startswith("link:"))
+        if not code.startswith("2"):
             # 403/404 sur une surface de sécurité veut presque toujours dire que
             # la fonctionnalité est désactivée sur le dépôt, ou que l'App n'a pas
             # la permission. On le NOMME et on continue sur les autres surfaces :
             # une surface muette ne doit pas emporter les deux autres.
-            print(f"gh-security-triage: HTTP {e.code} sur /{path}", file=sys.stderr)
-            if e.code in (403, 404):
+            print(f"gh-security-triage: HTTP {code} sur /{path}", file=sys.stderr)
+            if code in ("403", "404"):
                 print("  → la surface est-elle activée, et l'App a-t-elle la "
                       "permission correspondante en lecture ?", file=sys.stderr)
             return None
+        try:
+            body = json.loads(raw or "null")
+        except ValueError:
+            print(f"gh-security-triage: réponse illisible sur /{path} (corps tronqué)", file=sys.stderr)
+            return None
         if not paginate:
             return body
+        if not isinstance(body, list):
+            print(f"gh-security-triage: liste de forme inattendue sur /{path}", file=sys.stderr)
+            return None
         items += body
         nxt = [p for p in link.split(",") if 'rel="next"' in p]
         if not nxt:
@@ -274,9 +324,13 @@ def from_secret_scanning():
         # ON N'ÉCRIT JAMAIS LE SECRET DANS L'ISSUE. L'alerte le porte en clair
         # (`a["secret"]`) ; une issue est lisible par plus de monde que l'onglet
         # Security, et le dépôt deviendra public. On renvoie au lien.
+        # LA SÉVÉRITÉ EST ÉCRITE, COMME SUR LES DEUX AUTRES SURFACES : un secret
+        # exposé est un incident, et c'est ce mot que la vigie d'EVA relit pour
+        # décider d'un ping.
         body = (
             f"**{a['secret_type_display_name']}** détecté "
-            f"(validité rapportée : `{a.get('validity', 'inconnue')}`).\n\n"
+            f"(validité rapportée : `{a.get('validity', 'inconnue')}`), "
+            "sévérité **critical** — un secret exposé est un incident.\n\n"
             f"- Alerte : {a['html_url']}\n\n"
             "Le secret lui-même n'est pas reproduit ici : une issue se lit plus "
             "largement que l'onglet Security, et ce dépôt devient public.\n\n"
@@ -306,7 +360,62 @@ SURFACES = (("dependabot", from_dependabot),
             ("secret-scanning", from_secret_scanning))
 
 
+def security_feature():
+    """Le node id de la feature permanente, ou None sans clé. Lu UNE fois par
+    tour, AVANT toute écriture : une feature fermée (sortie par une release) ou
+    qui n'est pas une Feature ferait naître des cartes que gh-feature.py
+    refuserait ou rattacherait à une feature que tout le monde croit finie —
+    c'est une configuration cassée, 3."""
+    if not SECURITY_FEATURE:
+        print("gh-security-triage: FACTORY_SECURITY_FEATURE vide — chaque carte d'alerte créée "
+              "sera sa propre mini-feature (une alerte = une branche, une PR, une ligne de "
+              "release) ; posez le numéro d'une issue Feature permanente pour les rattacher",
+              file=sys.stderr)
+        return None
+    feature = api(f"issues/{SECURITY_FEATURE}")
+    if feature is None and transient():
+        print(f"gh-security-triage: FACTORY_SECURITY_FEATURE=#{SECURITY_FEATURE} illisible ce tour-ci "
+              f"(HTTP {LAST_STATUS or '?'}, raté passager) — rien n'est créé, on réessaie au prochain tour", file=sys.stderr)
+        sys.exit(4)
+    if not isinstance(feature, dict) or feature.get("number") != int(SECURITY_FEATURE):
+        print(f"gh-security-triage: FACTORY_SECURITY_FEATURE=#{SECURITY_FEATURE} illisible "
+              f"(HTTP {LAST_STATUS or '?'}) — configuration cassée, aucune carte créée", file=sys.stderr)
+        sys.exit(3)
+    kind = (feature.get("type") or {}).get("name") if isinstance(feature.get("type"), dict) else None
+    if kind != "Feature" or feature.get("state") != "open" or not feature.get("node_id"):
+        print(f"gh-security-triage: FACTORY_SECURITY_FEATURE=#{SECURITY_FEATURE} est "
+              f"« {feature.get('state')} », de type « {kind or '-'} » : il faut une issue "
+              "de type Feature OUVERTE — configuration cassée, aucune carte créée", file=sys.stderr)
+        sys.exit(3)
+    return feature["node_id"]
+
+
+def attach(issue, feature_node):
+    """Rattache la carte neuve à la feature permanente ; refusé → needs-human."""
+    number = issue.get("number") if isinstance(issue, dict) else None
+    if DRY or number is None:
+        return
+    reply = api("graphql", "POST", {
+        "query": "mutation($p:ID!,$e:ID!){ addSubIssue(input:{issueId:$p, subIssueId:$e}) { issue { number } } }",
+        "variables": {"p": feature_node, "e": issue.get("node_id")},
+    }, absolute=True)
+    if isinstance(reply, dict) and reply.get("data") and not reply.get("errors"):
+        print(f"gh-security-triage: carte #{number} rattachée à la feature #{SECURITY_FEATURE}",
+              file=sys.stderr)
+        return
+    reason = (f"carte d'alerte créée mais NON rattachée à la feature #{SECURITY_FEATURE} "
+              f"(addSubIssue refusé : {json.dumps(reply, ensure_ascii=False)[:200] if reply else 'pas de réponse'}) : "
+              "sans parent elle deviendrait sa propre mini-feature — rattachez-la à la main")
+    print(f"gh-security-triage: #{number} — {reason}", file=sys.stderr)
+    result = subprocess.run(["bash", os.path.join(HERE, "card-state.sh"), str(number), "needs-human", reason],
+                            env=dict(os.environ, FACTORY_TOKEN=TOKEN))
+    if result.returncode:
+        print(f"gh-security-triage: needs-human n'a pas pu être posé sur #{number} "
+              f"(card-state.sh {result.returncode})", file=sys.stderr)
+
+
 def main():
+    feature_node = security_feature()
     wanted = {}
     # UNE SURFACE MUETTE NE PROUVE RIEN. Un 403 (fonctionnalité désactivée, App
     # sans permission), un 404, un 5xx PASSAGER sur Dependabot rendaient « zéro
@@ -383,8 +492,10 @@ def main():
                 print(f"gh-security-triage: carte #{twin} porte déjà ce marqueur — "
                       f"création annulée ({key})", file=sys.stderr)
                 continue
-            api("issues", "POST", {"title": card["title"], "body": body,
-                                   "labels": [PRIORITY]})
+            issue = api("issues", "POST", {"title": card["title"], "body": body,
+                                           "labels": [PRIORITY]})
+            if feature_node is not None:
+                attach(issue, feature_node)
             created += 1
             print(f"gh-security-triage: carte créée — {card['title']}", file=sys.stderr)
             continue

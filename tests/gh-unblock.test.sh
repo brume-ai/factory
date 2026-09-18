@@ -7,6 +7,11 @@
 # revienne par la fenêtre — d'où les assertions négatives sur `/pulls`.
 . "$(dirname "$0")/helpers.sh"
 t_setup
+# Historical fixtures have no native relationships; each endpoint succeeds empty.
+for number in {1..30}; do
+  printf '[]' > "$FAKE_HTTP_DIR/repos_o_r_issues_${number}_dependencies_blocked_by_per_page_100.json"
+done
+
 export GH_REPO="o/r"
 S="$REPO/bin/gh-unblock.sh"
 H="$FAKE_HTTP_DIR"
@@ -39,7 +44,7 @@ assert_file_lacks "$H/calls.log" "repos/o/r/pulls" "aucune PR interrogée : l'é
 printf '{"state":"closed","labels":[]}' > "$H/repos_o_r_issues_4.json"
 : > "$H/calls.log"; bash "$S" 2>/dev/null
 assert_contains "$H/calls.log" "$D" "bloqueur fermé : le label bloqué est retiré"
-assert_contains "$H/calls.log" "branche de travail" "le motif dit où l'agent retrouvera le travail"
+assert_contains "$H/calls.log" "fermée (dépendance satisfaite)" "le motif dit la preuve sans inventer une livraison"
 assert_file_lacks "$H/calls.log" "repos/o/r/pulls" "fermée : toujours aucune PR interrogée"
 # L'usine ne nomme pas l'infra du consommateur : « preprod » est le vocabulaire
 # d'un seul, faux chez tous les autres, et l'agent lit ce motif.
