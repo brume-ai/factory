@@ -167,40 +167,83 @@ assert_rc 1 "$rc" "faille = 1 quoi qu'il arrive"
 assert_contains "$out" "rendu « faille »" "le motif nomme la faille"
 rm -f "$TURN/relecteur-secu-"*; socle
 
-# --- h) MAINT : « changements » SOUS LE PLAFOND = 1 ; AU PLAFOND = CARTE DE SUITE ; k=3 = 1
+# --- h) MAINT : « changements » SOUS LE PLAFOND = 1 ; AU PLAFOND, L'ORCHESTRATEUR JUGE
 # Sous le plafond, « changements » veut dire « relancez le codeur » : refus.
-rm -f "$TURN/relecteur-maint-"*
+rm -f "$TURN/relecteur-maint-"* "$TURN/arbitrage.md" "$TURN/suite.md"
 art relecteur-maint 1 claude-opus-5 claude-opus-5 changements
 run 42 "$WT" base
 assert_rc 1 "$rc" "maint 1 changements sous N=2 = 1"
 assert_contains "$out" "relecteur-maint-1.json (le dernier) porte « changements »" "le motif"
-# AU PLAFOND, « changements » N'EST PAS UN ARBITRAGE HUMAIN : le reste exigé vit
-# dans une carte de suite, et la porte en exige la preuve — suite.md, première
-# ligne « #n ». Sans lui, refus ; avec une première ligne qui ne nomme pas de
-# carte, refus aussi (un « touch suite.md » ne porte rien).
+# AU PLAFOND, « changements » N'EST NI UN ARBITRAGE HUMAIN NI UNE MÉCANIQUE :
+# l'orchestrateur juge, et la porte exige son jugement (arbitrage.md, dernière
+# ligne ARBITRAGE: reprise | suite | ok). Sans lui : refus, en nommant le juge.
 art relecteur-maint 2 claude-opus-5 claude-opus-5 changements
 run 42 "$WT" base
-assert_rc 1 "$rc" "maint 2 changements au plafond sans suite.md = 1"
+assert_rc 1 "$rc" "maint 2 changements au plafond sans arbitrage = 1"
 assert_contains "$out" "au plafond FACTORY_REVIEW_MAX=2" "le motif nomme le plafond"
-assert_contains "$out" "suite.md" "et ce qui manque"
+assert_contains "$out" "à JUGER par l'orchestrateur" "et le juge"
+printf '1. écarté.\n\nARBITRAGE: peut-etre\n' > "$TURN/arbitrage.md"
+run 42 "$WT" base
+assert_rc 1 "$rc" "verdict d'arbitrage inconnu = 1"
+assert_contains "$out" "ni reprise, ni suite, ni ok" "le motif"
+# « suite » : le reste vit dans une carte de suite, et suite.md la nomme
+# (première ligne « #n ») ; un suite.md sans carte ne porte rien.
+printf '1. écarté — préférence.\n\nARBITRAGE: suite\n' > "$TURN/arbitrage.md"
+run 42 "$WT" base
+assert_rc 1 "$rc" "arbitrage suite sans suite.md = 1"
+assert_contains "$out" "suite.md" "ce qui manque"
 printf 'les points restants, sans carte\n' > "$TURN/suite.md"
 run 42 "$WT" base
 assert_rc 1 "$rc" "suite.md sans « #n » en tête = 1"
 printf '#77\n\n4. DealForm::placeLabel() duplique le format.\n' > "$TURN/suite.md"
 run 42 "$WT" base
-assert_rc 0 "$rc" "maint 2 changements au plafond, suite.md « #77 » = 0"
+assert_rc 0 "$rc" "arbitrage suite + suite.md « #77 » = 0"
 assert_contains "$out" "carte de suite #77" "et la porte dit où est parti le reste"
 rm -f "$TURN/suite.md"
-# Le dernier compte : un 2 « ok » après un 1 « changements » passe, sans suite.md.
+# « ok » : tout écarté, motivé — le code part, sans carte.
+printf '1. écarté — le relecteur ne l avait pas exigé en passe 1.\n\nARBITRAGE: ok\n' > "$TURN/arbitrage.md"
+run 42 "$WT" base
+assert_rc 0 "$rc" "arbitrage ok = 0"
+assert_contains "$out" "arbitrage « ok » de l'orchestrateur" "et la porte le dit"
+# « reprise » : la passe N+1 doit avoir eu lieu ; sans elle, refus. Avec elle,
+# « ok » passe ; « changements » repart en carte de suite, sans second arbitrage.
+printf '1. retenu.\n\nARBITRAGE: reprise\n' > "$TURN/arbitrage.md"
+run 42 "$WT" base
+assert_rc 1 "$rc" "arbitrage reprise sans passe 3 = 1"
+assert_contains "$out" "la passe 3 du relecteur-maint n'a pas eu lieu" "le motif"
+art relecteur-maint 3 claude-opus-5 claude-opus-5 ok
+run 42 "$WT" base
+assert_rc 0 "$rc" "reprise + passe 3 ok = 0"
+art relecteur-maint 3 claude-opus-5 claude-opus-5 changements
+run 42 "$WT" base
+assert_rc 1 "$rc" "reprise + passe 3 changements sans suite.md = 1"
+assert_contains "$out" "suite.md" "le reste part en carte de suite"
+printf '#78\n\nle point retenu, encore ouvert\n' > "$TURN/suite.md"
+run 42 "$WT" base
+assert_rc 0 "$rc" "reprise + passe 3 changements + suite.md = 0"
+rm -f "$TURN/suite.md"
+# La passe 3 sans « reprise » : role.sh a été contourné. La passe 4, toujours.
+printf '1. écarté.\n\nARBITRAGE: ok\n' > "$TURN/arbitrage.md"
+art relecteur-maint 3 claude-opus-5 claude-opus-5 ok
+run 42 "$WT" base
+assert_rc 1 "$rc" "passe 3 sans arbitrage reprise = 1"
+assert_contains "$out" "sans arbitrage « reprise »" "le motif"
+assert_contains "$out" "contourné" "et dit que role.sh l'aurait refusé"
+rm -f "$TURN/arbitrage.md"
+run 42 "$WT" base
+assert_rc 1 "$rc" "passe 3 sans arbitrage du tout = 1"
+printf 'ARBITRAGE: reprise\n' > "$TURN/arbitrage.md"
+art relecteur-maint 4 claude-opus-5 claude-opus-5 ok
+run 42 "$WT" base
+assert_rc 1 "$rc" "passe 4 = 1, même sur reprise"
+assert_contains "$out" "plafond FACTORY_REVIEW_MAX=2 (+1 sur arbitrage)" "le motif nomme le plafond"
+rm -f "$TURN/relecteur-maint-3."* "$TURN/relecteur-maint-4."* "$TURN/arbitrage.md"
+# Le dernier compte : un 2 « ok » après un 1 « changements » passe, sans rien d'autre.
 art relecteur-maint 2 claude-opus-5 claude-opus-5 ok
 run 42 "$WT" base
 assert_rc 0 "$rc" "maint 1 changements puis 2 ok = 0"
-# k=3 dépasse N=2, même « ok » : role.sh a été contourné.
+# N est une clé : à 3, la passe 3 est sous le plafond.
 art relecteur-maint 3 claude-opus-5 claude-opus-5 ok
-run 42 "$WT" base
-assert_rc 1 "$rc" "maint k=3 avec N=2 = 1"
-assert_contains "$out" "plafond FACTORY_REVIEW_MAX=2" "le motif nomme le plafond"
-assert_contains "$out" "contourné" "et dit que role.sh l'aurait refusé"
 make_conf 'FACTORY_REVIEW_MAX = 3'
 run 42 "$WT" base
 rm -f "$TESTTMP/factory.conf"

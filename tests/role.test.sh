@@ -312,13 +312,44 @@ run relecteur-maint 42 "$WT" base
 assert_rc 5 "$rc" "un .json supprimé ne fait pas baisser le compteur"
 [ ! -e "$TURN/relecteur-maint-1.json" ] || { echo "relecteur-maint-1.json a été réécrit par-dessus la première passe" >&2; exit 1; }
 # N est une clé de factory.conf : à 3, la troisième passe — et c'est bien la 3.
+printf '1. src/tri.py:40 — docblock qui ment.\n\nVERDICT: changements\n' > "$C/claude.response"
 make_conf 'FACTORY_REVIEW_MAX = 3'
 run relecteur-maint 42 "$WT" base
-rm -f "$TESTTMP/factory.conf"
 assert_rc 0 "$rc" "FACTORY_REVIEW_MAX=3 laisse passer la troisième"
 assert_eq "3" "$(champ "$TURN/relecteur-maint-3.json" iteration)" "itération 3, pas 1"
 # La passe 2 était illisible : elle n'a rien exigé, la passe 3 relit comme une première.
 if grep -q "# Passe 3" "$TURN/relecteur-maint-3.prompt.md"; then echo "une passe précédente illisible ne cadre pas la suivante en vérification" >&2; exit 1; fi
+# --- j2) AU PLAFOND, L'ORCHESTRATEUR JUGE : « reprise » OUVRE UNE PASSE, UNE SEULE --
+# N=3, trois passes faites, la dernière « changements ». Sans arbitrage.md :
+# 5, et le message dit qui doit juger. Avec « suite » ou « ok » : 5 aussi —
+# seul « reprise » rouvre le relecteur. Avec « reprise » : la passe 4 part,
+# cadrée sur les points RETENUS, l'arbitrage joint. La passe 5, même sur
+# « reprise » : 5 — le juge ne tranche qu'une fois.
+log_reset
+printf 'VERDICT: ok\n' > "$C/claude.response"
+run relecteur-maint 42 "$WT" base
+assert_rc 5 "$rc" "N+1 sans arbitrage = 5"
+assert_contains "$out" "JUGER par l'orchestrateur" "le message dit qui juge"
+assert_contains "$out" "ARBITRAGE: reprise" "et la forme attendue"
+printf '1. écarté — préférence.\n\nARBITRAGE: suite\n' > "$TURN/arbitrage.md"
+run relecteur-maint 42 "$WT" base
+assert_rc 5 "$rc" "N+1 sur arbitrage « suite » = 5"
+assert_eq "" "$(cat "$C/calls.log")" "aucun CLI lancé"
+printf '1. retenu — le docblock ment bien ([A.3-25]).\n2. écarté — préférence de nommage.\n\nARBITRAGE: reprise\n' > "$TURN/arbitrage.md"
+run relecteur-maint 42 "$WT" base
+assert_rc 0 "$rc" "N+1 sur arbitrage « reprise » = 0 ($out)"
+assert_eq "4" "$(champ "$TURN/relecteur-maint-4.json" iteration)" "itération 4"
+assert_contains "$out" "arbitrage « reprise »" "role.sh dit pourquoi il passe"
+assert_contains "$TURN/relecteur-maint-4.prompt.md" "# Passe 4 — vérification" "cadrée comme une vérification"
+assert_contains "$TURN/relecteur-maint-4.prompt.md" "ARBITRAGE de l'orchestrateur" "et comme une passe d'arbitrage : seuls les retenus"
+assert_contains "$TURN/relecteur-maint-4.prompt.md" "# Entrée : arbitrage.md" "l'arbitrage est joint"
+assert_contains "$TURN/relecteur-maint-4.prompt.md" "le docblock ment bien" "avec son contenu"
+assert_contains "$TURN/relecteur-maint-4.prompt.md" "# Entrée : relecteur-maint-3.md" "et le rapport de la passe 3"
+run relecteur-maint 42 "$WT" base
+assert_rc 5 "$rc" "N+2, même sur « reprise » = 5 : une seule passe de plus"
+[ ! -e "$TURN/relecteur-maint-5.json" ] || { echo "une passe 5 a été écrite" >&2; exit 1; }
+rm -f "$TURN/arbitrage.md"
+rm -f "$TESTTMP/factory.conf"
 make_conf 'FACTORY_REVIEW_MAX = 0'
 run relecteur-maint 42 "$WT" base
 rm -f "$TESTTMP/factory.conf"

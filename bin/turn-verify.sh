@@ -377,28 +377,52 @@ elif [ "$touche_code" = 1 ]; then
   else vu="la tête d'admission ${HEAD_ADM:0:12} (la carte reprend son travail d'un tour précédent, pas la base $BASE)"; fi
   [ "$analyste_ok" = 1 ] || refus "aucun analyste-<k>.json valide (verdict ok, modèle prouvé) qui ait vu $vu avant toute ligne : pas d'état des lieux, pas de push"
   [ "$codeur_ok" = 1 ]   || refus "aucun codeur-<k>.json valide : le code du diff n'a pas été produit par le rôle codeur"
-  # AU PLAFOND, « CHANGEMENTS » N'EST PAS UN ARBITRAGE HUMAIN : un désaccord
-  # de maintenabilité n'est ni un choix métier ni une refonte risquée. Le
-  # code part, et ce qui reste exigé vit dans une carte de suite de la même
-  # feature — visible dans la progression, pas enfoui. La preuve qu'elle
-  # existe est `suite.md` (première ligne : `#n`), posé par l'orchestrateur
-  # après l'avoir créée ; sans lui, ce serait un push « en notant ». Le
-  # relecteur doit quand même avoir vu HEAD : son « changements » porte sur
-  # CE diff. Au-dessus du plafond, role.sh a été contourné : refus.
-  if [ "$maint_k" = 0 ]; then
-    refus "aucun relecteur-maint-<k>.json : le diff n'a pas été relu pour sa maintenabilité"
-  elif [ "$maint_k" -gt "$REVIEW_MAX" ]; then
-    refus "relecteur-maint a fait $maint_k allers-retours, plafond FACTORY_REVIEW_MAX=$REVIEW_MAX : role.sh a été contourné"
-  elif [ "$maint_verdict" = ok ]; then
-    [ "$maint_valide" != 1 ] || relu_jusqua_head "relecteur-maint-$maint_k" "$maint_head"
-  elif [ "$maint_verdict" = changements ] && [ "$maint_k" = "$REVIEW_MAX" ]; then
+  # AU PLAFOND, LE DÉSACCORD EST JUGÉ PAR L'ORCHESTRATEUR — ni par ce script,
+  # ni par un humain : un désaccord de maintenabilité n'est ni un choix métier
+  # ni une refonte risquée. Le juge écrit `arbitrage.md`, point par point,
+  # dernière ligne `ARBITRAGE: reprise | suite | ok` :
+  #   reprise  les points retenus valent une passe de plus — UNE, la N+1, que
+  #            role.sh n'ouvre que sur ce mot ; si elle rend encore
+  #            « changements », c'est `suite`, sans second arbitrage ;
+  #   suite    le reste vit dans une carte de suite de la même feature, nommée
+  #            par `suite.md` (première ligne `#n`) — visible, pas enfoui ;
+  #   ok       le juge a écarté chaque point, et dit pourquoi dans le fichier ;
+  #            la livraison le répète sur la PR, c'est là que ça se voit.
+  # Sans arbitrage.md, un « changements » au plafond ne part pas : ce serait
+  # un push « en notant ». Le relecteur doit quand même avoir vu HEAD.
+  # Au-dessus de N+1, ou N+1 sans « reprise » : role.sh a été contourné.
+  arb="$(sed -n 's/^ARBITRAGE: *\([^ ]*\) *$/\1/p' "$TURN/arbitrage.md" 2>/dev/null | tail -n1 || true)"
+  maint_suite() {  # <k> : « changements » qui part en carte de suite — suite.md la nomme
+    local suite_no
     suite_no="$(head -n1 "$TURN/suite.md" 2>/dev/null | grep -oE '^#[0-9]+' || true)"
     if [ -z "$suite_no" ]; then
-      refus "relecteur-maint-$maint_k.json porte « changements » au plafond FACTORY_REVIEW_MAX=$REVIEW_MAX : ce qui reste exigé doit vivre dans une carte de suite, et $TURN/suite.md (première ligne « #n ») ne la nomme pas"
+      refus "relecteur-maint-$1.json porte « changements » (plafond FACTORY_REVIEW_MAX=$REVIEW_MAX) : ce qui reste exigé doit vivre dans une carte de suite, et $TURN/suite.md (première ligne « #n ») ne la nomme pas"
     else
-      echo "turn-verify: relecteur-maint-$maint_k « changements » au plafond : le reste part dans la carte de suite $suite_no"
-      relu_jusqua_head "relecteur-maint-$maint_k" "$maint_head"
+      echo "turn-verify: relecteur-maint-$1 « changements » au plafond : le reste part dans la carte de suite $suite_no"
+      relu_jusqua_head "relecteur-maint-$1" "$maint_head"
     fi
+  }
+  if [ "$maint_k" = 0 ]; then
+    refus "aucun relecteur-maint-<k>.json : le diff n'a pas été relu pour sa maintenabilité"
+  elif [ "$maint_k" -gt $((REVIEW_MAX+1)) ]; then
+    refus "relecteur-maint a fait $maint_k allers-retours, plafond FACTORY_REVIEW_MAX=$REVIEW_MAX (+1 sur arbitrage) : role.sh a été contourné"
+  elif [ "$maint_k" -eq $((REVIEW_MAX+1)) ] && [ "$arb" != reprise ]; then
+    refus "relecteur-maint-$maint_k.json au-delà du plafond FACTORY_REVIEW_MAX=$REVIEW_MAX sans arbitrage « reprise » ($TURN/arbitrage.md porte « ${arb:--} ») : role.sh a été contourné"
+  elif [ "$maint_verdict" = ok ]; then
+    [ "$maint_valide" != 1 ] || relu_jusqua_head "relecteur-maint-$maint_k" "$maint_head"
+  elif [ "$maint_verdict" = changements ] && [ "$maint_k" -eq $((REVIEW_MAX+1)) ]; then
+    # La passe de reprise a encore rendu « changements » : pas de second
+    # arbitrage, le reste part en carte de suite.
+    maint_suite "$maint_k"
+  elif [ "$maint_verdict" = changements ] && [ "$maint_k" -eq "$REVIEW_MAX" ]; then
+    case "$arb" in
+      suite)   maint_suite "$maint_k" ;;
+      ok)      echo "turn-verify: relecteur-maint-$maint_k « changements » au plafond : arbitrage « ok » de l'orchestrateur, les points restants sont écartés (arbitrage.md)"
+               relu_jusqua_head "relecteur-maint-$maint_k" "$maint_head" ;;
+      reprise) refus "arbitrage « reprise » sur #$ISSUE, mais la passe $((REVIEW_MAX+1)) du relecteur-maint n'a pas eu lieu : le codeur et le relecteur doivent rejouer les points retenus" ;;
+      '')      refus "relecteur-maint-$maint_k.json porte « changements » au plafond FACTORY_REVIEW_MAX=$REVIEW_MAX et $TURN/arbitrage.md est absent : le désaccord est à JUGER par l'orchestrateur (ARBITRAGE: reprise | suite | ok), pas à pousser en notant, pas à remettre à un humain" ;;
+      *)       refus "$TURN/arbitrage.md porte « ARBITRAGE: $arb », qui n'est ni reprise, ni suite, ni ok" ;;
+    esac
   else
     refus "relecteur-maint-$maint_k.json (le dernier) porte « $maint_verdict », pas « ok »"
   fi

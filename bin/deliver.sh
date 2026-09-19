@@ -299,12 +299,19 @@ for role in ("analyste", "codeur", "relecteur-maint", "relecteur-secu", "writer"
         lignes.append("- %s — %s : %d passe(s)" % (role, modele, len(arts)))
 if os.path.isfile(os.path.join(turn, "socle-omis.md")):
     lignes.append("- socle omis (carte sans code) : justification dans les artefacts du tour")
-# Le relecteur maint a rendu « changements » au plafond : le reste vit dans une
-# carte de suite (turn-verify l'a exigée). La dette est dite ici, pas enfouie.
+# Le relecteur maint et le codeur n'étaient pas d'accord au plafond : c'est
+# l'orchestrateur qui a jugé (arbitrage.md), et son jugement se lit ICI, sur
+# la PR — c'est ce qui rend un « ok » de complaisance visible. Le reste
+# exigé, s'il y en a, vit dans une carte de suite (suite.md).
+import re
+if os.path.isfile(os.path.join(turn, "arbitrage.md")):
+    with open(os.path.join(turn, "arbitrage.md"), errors="replace") as f:
+        arb = re.findall(r"^ARBITRAGE: *(\S+) *$", f.read(), re.M)
+    lignes.append("- désaccord de maintenabilité au plafond, arbitré par l'orchestrateur : %s (arbitrage.md dans les artefacts du tour)" % (arb[-1] if arb else "verdict illisible"))
 if os.path.isfile(os.path.join(turn, "suite.md")):
     with open(os.path.join(turn, "suite.md"), errors="replace") as f:
         premiere = f.readline().strip()
-    lignes.append("- désaccord de maintenabilité au plafond : le reste exigé est porté par la carte de suite %s" % (premiere.split()[0] if premiere else "?"))
+    lignes.append("- le reste exigé par le relecteur maint est porté par la carte de suite %s" % (premiere.split()[0] if premiere else "?"))
 captures = [c for c in os.environ["CAPTURES"].splitlines() if c]
 images = []
 for c in captures:

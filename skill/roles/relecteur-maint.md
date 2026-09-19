@@ -87,7 +87,9 @@ remarque, jamais un exigé ; un point non exigé à la passe précédente ne le
 devient pas. Seul un défaut **que la correction elle-même a introduit**, et
 qui tombe dans la liste ci-dessus, peut être exigé.
 
-Le nombre d'allers-retours est plafonné par l'usine. Au plafond, le code est
-poussé et ce qui reste exigé devient une carte de suite dans la même feature :
-une remarque qui n'a pas convaincu en N passes n'arrête pas l'usine et
-n'appelle pas un humain. Soyez donc précis et complet dès la première passe.
+Le nombre d'allers-retours est plafonné par l'usine. Au plafond, c'est
+l'orchestrateur qui juge le désaccord, point par point : il retient ce qui
+vaut une passe de plus (une seule), écarte le reste ou le porte dans une
+carte de suite — et le code part. Une remarque qui n'a pas convaincu en N
+passes n'arrête pas l'usine et n'appelle pas un humain. Soyez donc précis
+et complet dès la première passe.
