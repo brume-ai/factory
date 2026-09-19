@@ -280,6 +280,14 @@ printf 'Remarques.\n\nVERDICT: changements, mais ça peut attendre\n' > "$C/clau
 run relecteur-maint 42 "$WT" base
 assert_rc 1 "$rc" "verdict suivi d'un mot = 1"
 assert_eq "illisible" "$(champ "$TURN/relecteur-maint-2.json" verdict)" "illisible"
+# LA PASSE 2 VÉRIFIE, ELLE NE RELIT PAS À FROID : la passe 1 a rendu « changements »,
+# donc role.sh joint LUI-MÊME son rapport et la dernière réponse du codeur
+# (codeur-6, la plus haute — pas la première du glob), et le dit en tête.
+assert_contains "$TURN/relecteur-maint-2.prompt.md" "# Passe 2 — vérification, pas relecture à froid" "la passe 2 est cadrée comme une vérification"
+assert_contains "$TURN/relecteur-maint-2.prompt.md" "# Entrée : relecteur-maint-1.md" "son rapport précédent est joint"
+assert_contains "$TURN/relecteur-maint-2.prompt.md" "src/tri.py:12 — nom qui ment" "avec son contenu"
+assert_contains "$TURN/relecteur-maint-2.prompt.md" "# Entrée : codeur-6.md" "et la dernière réponse du codeur"
+assert_contains "$TURN/relecteur-maint-2.prompt.md" "git diff $(git -C "$WT" rev-parse HEAD)..HEAD" "et la tête qu'il avait relue"
 printf 'Remarques.\n\nVERDICT: faille\n' > "$C/claude.response"
 run relecteur-secu 42 "$WT" base
 assert_rc 0 "$rc" "faille chez sécu est un verdict"
@@ -292,7 +300,7 @@ log_reset
 printf 'VERDICT: ok\n' > "$C/claude.response"
 run relecteur-maint 42 "$WT" base
 assert_rc 5 "$rc" "au-delà de N = 5"
-assert_contains "$out" "needs-human" "le message dit où va la carte"
+assert_contains "$out" "carte de suite" "le message dit où va le reste : une carte de suite, pas needs-human"
 assert_eq "" "$(cat "$C/calls.log")" "aucun CLI lancé"
 [ ! -e "$TURN/relecteur-maint-3.json" ] || { echo "un artefact a été écrit au-delà du plafond" >&2; exit 1; }
 # LE TROU NE SE REBOUCHE PAS : supprimer maint-1.json ne rend pas le numéro 1,
@@ -309,6 +317,8 @@ run relecteur-maint 42 "$WT" base
 rm -f "$TESTTMP/factory.conf"
 assert_rc 0 "$rc" "FACTORY_REVIEW_MAX=3 laisse passer la troisième"
 assert_eq "3" "$(champ "$TURN/relecteur-maint-3.json" iteration)" "itération 3, pas 1"
+# La passe 2 était illisible : elle n'a rien exigé, la passe 3 relit comme une première.
+if grep -q "# Passe 3" "$TURN/relecteur-maint-3.prompt.md"; then echo "une passe précédente illisible ne cadre pas la suivante en vérification" >&2; exit 1; fi
 make_conf 'FACTORY_REVIEW_MAX = 0'
 run relecteur-maint 42 "$WT" base
 rm -f "$TESTTMP/factory.conf"

@@ -124,7 +124,7 @@ Le catalogue est fermé, et c'est `role.sh` qui le tient :
 |---|---|---|
 | `analyste` | Opus 5 | oui, dès que la carte touche du code |
 | `codeur` | Codex `gpt-6-astra` | oui |
-| `relecteur-maint` | Opus 5 | oui — N = 2 allers-retours au plus |
+| `relecteur-maint` | Opus 5 | oui — N = 2 allers-retours au plus ; au plafond, carte de suite, jamais needs-human |
 | `relecteur-secu` | Fable 5.1 | oui — bloquant, sans plafond |
 | `writer` | Haiku 4.5 | si l'analyste a marqué « comportement documenté » ET que `DOCS.md` existe à la racine |
 | `test-engineer` | Fable 5.1 | optionnel |
@@ -257,10 +257,31 @@ bash "$ROOT"/tools/factory/bin/role.sh codeur "$N" "$WT" "$BASE" "$ROOT/.omc/tur
 bash "$ROOT"/tools/factory/bin/role.sh relecteur-maint "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md"
 ```
 
+  La passe 2 du relecteur **vérifie** ses exigés de la passe 1, elle ne relit
+  pas à froid : `role.sh` lui joint lui-même son rapport précédent et la
+  réponse du codeur — vous n'avez rien à passer de plus.
+
   `role.sh` **refuse (code 5) au-delà de N allers-retours**, sans rien lancer.
-  Le désaccord est alors un arbitrage : `card-state.sh "$N" needs-human
-  "<le point de désaccord — la remarque du relecteur, la réponse du codeur,
-  cités>"`. Ne poussez pas « en notant ».
+  Si le dernier verdict est encore `changements`, **ce n'est pas un
+  arbitrage humain** : un désaccord de maintenabilité n'est ni un choix
+  métier ni une refonte risquée. Le code part, et ce qui reste exigé devient
+  une **carte de suite** — sous-issue du même parent, même recette que la
+  refacto petite (étape 1), mais **sans dépendance bloquante** et sans
+  priorité : la dette est visible dans la feature, elle n'arrête rien.
+  Écrivez `$ROOT/.omc/turn/$N/suite.md` (première ligne `#M`, puis les points
+  exigés restants, cités) : `turn-verify.sh` refuse le push sans lui.
+
+```bash
+M="$(gh issue create --title "suite: <ce que le relecteur exige encore, en un titre>" \
+  --body "$(printf 'Reste de relecture maintenabilité de #%s, non tranché en %s passes.\n\n%s' "$N" "<N>" "<les exigés restants, cités depuis relecteur-maint-<k>.md>")" | grep -oE '[0-9]+$')"
+parent_url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("parent_issue_url") or "")' "$ROOT/.omc/turn/$N/card.json")"
+parent_id="$(gh api "${parent_url:-repos/$GH_REPO/issues/$N}" --jq .node_id)"
+enfant_id="$(gh api "repos/$GH_REPO/issues/$M" --jq .node_id)"
+gh api graphql -f query='mutation($p:ID!,$e:ID!){ addSubIssue(input:{issueId:$p, subIssueId:$e}) { issue { number } } }' -F p="$parent_id" -F e="$enfant_id"
+printf '#%s\n\n%s\n' "$M" "<les exigés restants, cités>" > "$ROOT/.omc/turn/$N/suite.md"
+```
+
+  Puis continuez : la sécurité, sur ce diff.
 - `illisible` (code 1) → il n'a pas conclu ; relancez-le une fois. Deux
   fois illisible, c'est un arbitrage : `needs-human`, en le disant.
 
@@ -340,6 +361,9 @@ environnement, pousse `feature/<F>`, poste la livraison, ferme la carte.
   sait plus ce qui a été relu.
 - **Corriger une faille sécurité par un aller-retour codeur.** C'est
   `needs-human`, tout de suite.
+- **Mettre une carte en `needs-human` pour un désaccord de maintenabilité.**
+  Au plafond, c'est une carte de suite et un push — un humain ne tranche que
+  le métier, une refonte risquée, une faille.
 - **Écrire `Closes #N`, `Fixes #N` ou `Resolves #N`**, dans un commit comme
   ailleurs : c'est `Refs #N`, toujours — la livraison ferme la carte, la
   release ferme la feature.
@@ -356,7 +380,8 @@ environnement, pousse `feature/<F>`, poste la livraison, ferme la carte.
 Cinq sorties, une seule est un succès : **`pret` posé** (`turn-verify.sh` a
 rendu 0, `livraison.md` écrit) ; **refacto petite carvée** (sous-issue
 bloquante, carte `blocked`) ; **`needs-human`** (refacto grande, faille,
-désaccord au-delà de N, relecteur ou CLI deux fois en échec, toute décision
+relecteur ou CLI deux fois en échec — jamais un désaccord de maintenabilité
+au plafond, qui finit en carte de suite —, toute décision
 qu'aucun rôle ne peut prendre — toujours par `card-state.sh "$N" needs-human
 "<le pourquoi, cité>"`, qui commente et pose le marqueur de remise à zéro) ; **prémisse fausse,
 prouvée** — le travail est déjà dans la branche de la feature ou de travail,

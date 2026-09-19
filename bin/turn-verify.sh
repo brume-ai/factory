@@ -377,13 +377,30 @@ elif [ "$touche_code" = 1 ]; then
   else vu="la tête d'admission ${HEAD_ADM:0:12} (la carte reprend son travail d'un tour précédent, pas la base $BASE)"; fi
   [ "$analyste_ok" = 1 ] || refus "aucun analyste-<k>.json valide (verdict ok, modèle prouvé) qui ait vu $vu avant toute ligne : pas d'état des lieux, pas de push"
   [ "$codeur_ok" = 1 ]   || refus "aucun codeur-<k>.json valide : le code du diff n'a pas été produit par le rôle codeur"
+  # AU PLAFOND, « CHANGEMENTS » N'EST PAS UN ARBITRAGE HUMAIN : un désaccord
+  # de maintenabilité n'est ni un choix métier ni une refonte risquée. Le
+  # code part, et ce qui reste exigé vit dans une carte de suite de la même
+  # feature — visible dans la progression, pas enfoui. La preuve qu'elle
+  # existe est `suite.md` (première ligne : `#n`), posé par l'orchestrateur
+  # après l'avoir créée ; sans lui, ce serait un push « en notant ». Le
+  # relecteur doit quand même avoir vu HEAD : son « changements » porte sur
+  # CE diff. Au-dessus du plafond, role.sh a été contourné : refus.
   if [ "$maint_k" = 0 ]; then
     refus "aucun relecteur-maint-<k>.json : le diff n'a pas été relu pour sa maintenabilité"
-  else
-    if [ "$maint_verdict" != ok ]; then refus "relecteur-maint-$maint_k.json (le dernier) porte « $maint_verdict », pas « ok »"
-    elif [ "$maint_valide" = 1 ]; then relu_jusqua_head "relecteur-maint-$maint_k" "$maint_head"
+  elif [ "$maint_k" -gt "$REVIEW_MAX" ]; then
+    refus "relecteur-maint a fait $maint_k allers-retours, plafond FACTORY_REVIEW_MAX=$REVIEW_MAX : role.sh a été contourné"
+  elif [ "$maint_verdict" = ok ]; then
+    [ "$maint_valide" != 1 ] || relu_jusqua_head "relecteur-maint-$maint_k" "$maint_head"
+  elif [ "$maint_verdict" = changements ] && [ "$maint_k" = "$REVIEW_MAX" ]; then
+    suite_no="$(head -n1 "$TURN/suite.md" 2>/dev/null | grep -oE '^#[0-9]+' || true)"
+    if [ -z "$suite_no" ]; then
+      refus "relecteur-maint-$maint_k.json porte « changements » au plafond FACTORY_REVIEW_MAX=$REVIEW_MAX : ce qui reste exigé doit vivre dans une carte de suite, et $TURN/suite.md (première ligne « #n ») ne la nomme pas"
+    else
+      echo "turn-verify: relecteur-maint-$maint_k « changements » au plafond : le reste part dans la carte de suite $suite_no"
+      relu_jusqua_head "relecteur-maint-$maint_k" "$maint_head"
     fi
-    [ "$maint_k" -le "$REVIEW_MAX" ] || refus "relecteur-maint a fait $maint_k allers-retours, plafond FACTORY_REVIEW_MAX=$REVIEW_MAX : le désaccord est un arbitrage (needs-human), pas un push"
+  else
+    refus "relecteur-maint-$maint_k.json (le dernier) porte « $maint_verdict », pas « ok »"
   fi
   if [ "$secu_k" = 0 ]; then
     refus "aucun relecteur-secu-<k>.json : le diff n'a pas été relu pour sa sécurité"

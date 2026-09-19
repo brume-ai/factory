@@ -49,6 +49,8 @@
 #                          head_apres — le résumé que turn-verify relit ET recalcule
 #   analyse.json           pour l'analyste seulement : son bloc JSON final
 #   socle-omis.md          la justification écrite d'une carte doc sans socle (orchestrateur)
+#   suite.md               « #n » puis les exigés restants du relecteur maint au plafond,
+#                          portés par la carte de suite #n (orchestrateur)
 #   livraison.md           le commentaire de livraison (orchestrateur ; la boucle le poste)
 #   pret                   posé par l'orchestrateur quand turn-verify a rendu 0 ; la boucle pousse
 # <k> est l'itération : 1 + le plus grand numéro déjà vu, sur TOUS les fichiers
@@ -205,16 +207,61 @@ done
 
 # LE PLAFOND N, ET IL MORD AVANT TOUT LANCEMENT. Le relecteur maintenabilité a
 # droit à FACTORY_REVIEW_MAX allers-retours (2 par défaut, spec § 4) ; au-delà,
-# le désaccord est un ARBITRAGE, pas une chose qu'on pousse « en notant ». Le
-# refus est ici et pas dans turn-verify seulement, parce qu'un relecteur lancé
-# pour rien coûte un modèle entier — et parce que l'orchestrateur ne doit pas
-# POUVOIR boucler, quoi que dise son prompt. Code 5, distinct de tout le reste :
-# la carte doit passer `needs-human` avec le point de désaccord.
+# rien n'est relancé : ce qui reste exigé part dans une carte de suite et le
+# code est poussé (turn-verify.sh exige `suite.md`). Un désaccord de
+# maintenabilité n'est ni un choix métier ni une refonte risquée — il ne
+# réveille pas un humain. Le refus est ici et pas dans turn-verify seulement,
+# parce qu'un relecteur lancé pour rien coûte un modèle entier — et parce que
+# l'orchestrateur ne doit pas POUVOIR boucler, quoi que dise son prompt. Code 5,
+# distinct de tout le reste.
 REVIEW_MAX="$(conf_get FACTORY_REVIEW_MAX 2)"
 case "$REVIEW_MAX" in ''|*[!0-9]*|0) echo "role: FACTORY_REVIEW_MAX doit être un entier ≥ 1 (« $REVIEW_MAX »)" >&2; exit 3 ;; esac
 if [ "$ROLE" = relecteur-maint ] && [ "$K" -gt "$REVIEW_MAX" ]; then
-  echo "role: relecteur-maint a déjà fait $REVIEW_MAX aller(s)-retour(s) sur #$ISSUE (plafond FACTORY_REVIEW_MAX=$REVIEW_MAX) : rien n'est lancé. Le désaccord est un arbitrage : la carte doit passer needs-human, avec le point de désaccord, sans push." >&2
+  echo "role: relecteur-maint a déjà fait $REVIEW_MAX aller(s)-retour(s) sur #$ISSUE (plafond FACTORY_REVIEW_MAX=$REVIEW_MAX) : rien n'est lancé. Ce qui reste exigé va dans une carte de suite (.omc/turn/$ISSUE/suite.md, première ligne #n), puis la sécurité et le push — pas needs-human." >&2
   exit 5
+fi
+
+# LA PASSE k ≥ 2 DU RELECTEUR MAINTENABILITÉ VÉRIFIE, ELLE NE RELIT PAS À FROID.
+# Le 19 septembre 2026, #248 : passe 1, 7 points exigés, tous traités par le
+# codeur ; passe 2, prompt IDENTIQUE à la passe 1 (ni son rapport, ni la
+# réponse du codeur, et le commit amendé ne laissait aucun delta lisible) — le
+# relecteur a relu 19 fichiers à froid et rendu 5 exigés NEUFS, dont un point
+# qu'il avait lui-même classé « non exigé » à la passe 1. Plafond, needs-human,
+# 21 cartes gelées derrière. La mémoire de la passe précédente est donc jointe
+# ICI, par le script : un orchestrateur qui l'oublierait rejouerait le 19.
+# Une passe précédente illisible n'a rien exigé : la passe courante relit
+# alors comme une première.
+PASSE=""
+if [ "$ROLE" = relecteur-maint ] && [ "$K" -gt 1 ]; then
+  prec_md="$TURN/relecteur-maint-$((K-1)).md"; prec_json="$TURN/relecteur-maint-$((K-1)).json"
+  prec_verdict=""; prec_head=""
+  if [ -s "$prec_json" ]; then
+    read -r prec_verdict prec_head < <(python3 - "$prec_json" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], errors="replace"))
+    print(d.get("verdict", ""), d.get("head_apres", ""))
+except Exception:
+    print("", "")
+PY
+)
+  fi
+  if [ "$prec_verdict" = changements ] && [ -s "$prec_md" ]; then
+    dernier_codeur=""
+    j=0
+    for f in "$TURN"/codeur-[0-9]*.md; do
+      [ -s "$f" ] || continue
+      n="${f##*/codeur-}"; n="${n%%.*}"
+      [ "$n" -gt "$j" ] && { j="$n"; dernier_codeur="$f"; }
+    done
+    PASSE="# Passe $K — vérification, pas relecture à froid"$'\n\n'
+    PASSE+="Votre passe $((K-1)) (jointe ci-dessous) a rendu « changements » ; le codeur y a répondu"
+    [ -z "$dernier_codeur" ] || PASSE+=" (sa réponse est jointe : $(basename "$dernier_codeur"))"
+    PASSE+=". HEAD était alors \`$prec_head\` ; \`git diff $prec_head..HEAD\` montre ce qui a changé depuis, si cet objet existe encore (le codeur peut avoir amendé son commit) — sinon relisez le diff de la carte sur ces points-là."$'\n\n'
+    PASSE+="Cette passe juge UNE chose : chaque point que vous aviez EXIGÉ est-il traité dans le code, pas dans la parole du codeur ? Tous traités — ou traités autrement, mais le défaut nommé a disparu — c'est \`VERDICT: ok\`, même si vous voyez autre chose. Un exigé ignoré ou traité en façade, c'est \`VERDICT: changements\`, en citant son numéro d'origine et ce qui manque. Ce que vous voyez de nouveau sur du code que vous aviez déjà sous les yeux est une remarque non exigée ; un point non exigé à la passe $((K-1)) ne le devient pas. Seul un défaut que la correction elle-même a introduit peut être exigé."$'\n\n---\n\n'
+    PASSE+="# Entrée : $(basename "$prec_md")"$'\n\n'"$(cat "$prec_md")"
+    [ -z "$dernier_codeur" ] || PASSE+=$'\n\n---\n\n'"# Entrée : $(basename "$dernier_codeur")"$'\n\n'"$(cat "$dernier_codeur")"
+  fi
 fi
 # LE SEUIL DE REFACTO EST UNE CLÉ, PAS UN CHIFFRE DANS UN PROMPT : l'analyste
 # le lit dans le prompt assemblé (ligne « Seuil : N fichiers »), et ce script
@@ -251,6 +298,9 @@ fi
 for f in "${ENTREES[@]}"; do
   PROMPT+=$'\n\n---\n\n'"# Entrée : $(basename "$f")"$'\n\n'"$(cat "$f")"
 done
+# La mémoire de la passe précédente du relecteur maint (voir plus haut) vient
+# en dernier : c'est ce qu'il doit avoir sous les yeux en commençant à lire.
+[ -z "$PASSE" ] || PROMPT+=$'\n\n---\n\n'"$PASSE"
 
 # LA LIMITE DU NOYAU EST DITE AVANT QU'IL LA DISE. Le prompt part en UN argument,
 # et Linux borne un argument à 128 Kio (MAX_ARG_STRLEN) : au-delà, `execve` rend

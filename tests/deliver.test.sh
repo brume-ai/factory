@@ -95,6 +95,9 @@ assert_eq "" "$(cat "$H/calls.log")" "et pas un appel à GitHub"
 
 # --- b) LA LIVRAISON NOMINALE ----------------------------------------------------------
 : > "$H/calls.log"
+# Un relecteur maint « changements » au plafond a laissé sa carte de suite : la
+# dette est dite dans le commentaire, depuis suite.md, jamais depuis la prose.
+printf '#77\n\n4. placeLabel() duplique le format.\n' > "$TURN/suite.md"
 run 12 "$WT" "$BASE"
 assert_rc 0 "$rc" "livraison : 0 ($(cat "$TESTTMP/err"))"
 # 1. le push
@@ -114,6 +117,7 @@ assert_contains "$liv" 'Ce qui a été fait : le bouton.' "la prose de livraison
 assert_contains "$liv" 'analyste — claude-opus-5 : refacto aucune' "la ligne refacto de l'analyste, depuis analyse.json"
 assert_contains "$liv" 'relecteur-maint — claude-opus-5 : 2 passe(s), dernier verdict ok' "la ligne du relecteur maintenabilité, depuis les artefacts"
 assert_contains "$liv" 'relecteur-secu — claude-fable-5-1 : 1 passe(s), dernier verdict ok' "la ligne du relecteur sécurité"
+assert_contains "$liv" 'le reste exigé est porté par la carte de suite #77' "la carte de suite, depuis suite.md"
 assert_contains "$liv" '![01-bouton.png](https://github.com/o/r/blob/screenshots/44/12/01-bouton.png?raw=true)' "la capture est inlinée, par blob/…?raw=true"
 assert_contains "$liv" 'test-engineer — claude-fable-5-1 : 1 passe(s)' "un rôle optionnel prouvé est résumé aussi (M6)"
 assert_contains "$liv" 'codeur — gpt-6-astra : 2 passe(s)' "le codeur aussi"

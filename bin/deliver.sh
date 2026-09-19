@@ -299,6 +299,12 @@ for role in ("analyste", "codeur", "relecteur-maint", "relecteur-secu", "writer"
         lignes.append("- %s — %s : %d passe(s)" % (role, modele, len(arts)))
 if os.path.isfile(os.path.join(turn, "socle-omis.md")):
     lignes.append("- socle omis (carte sans code) : justification dans les artefacts du tour")
+# Le relecteur maint a rendu « changements » au plafond : le reste vit dans une
+# carte de suite (turn-verify l'a exigée). La dette est dite ici, pas enfouie.
+if os.path.isfile(os.path.join(turn, "suite.md")):
+    with open(os.path.join(turn, "suite.md"), errors="replace") as f:
+        premiere = f.readline().strip()
+    lignes.append("- désaccord de maintenabilité au plafond : le reste exigé est porté par la carte de suite %s" % (premiere.split()[0] if premiere else "?"))
 captures = [c for c in os.environ["CAPTURES"].splitlines() if c]
 images = []
 for c in captures:
