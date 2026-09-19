@@ -203,9 +203,21 @@ doc/config peut s'en passer, sur justification écrite dans l'artefact :
    de la dette est *visible* dans la progression, pas enfoui dans un commit.
 2. **Le codeur** — Codex `gpt-6-astra`.
 3. **Le relecteur maintenabilité** — Opus 5, une autre famille que le codeur.
-   **N = 2** allers-retours au plus ; au-delà, la carte passe `needs-human` avec
-   le point de désaccord, **sans push**. Un désaccord persistant est un
-   arbitrage, pas une chose qu'on pousse « en notant ».
+   Il distingue l'**exigé** (ce qui coûtera plus cher après le push :
+   duplication qui divergera, docblock qui ment, spec perdue, test qui ne
+   prouve rien, hors-carte) de la **remarque** (le reste, listé sans être
+   exigé) ; un `ok` avec remarques est l'issue normale d'un bon diff. **N = 2**
+   allers-retours au plus, et la passe 2 **vérifie** les exigés de la passe 1
+   — `role.sh` lui joint son rapport et la réponse du codeur — elle ne relit
+   pas à froid : un point non exigé ne le devient pas, un point neuf sur du
+   code déjà vu est une remarque. Au plafond, le code **part**, et ce qui
+   reste exigé devient une **carte de suite** dans la feature (sous-issue,
+   non bloquante, `suite.md` dans le tour — `turn-verify.sh` l'exige). Un
+   désaccord de maintenabilité n'est ni un choix métier ni une refonte
+   risquée : il ne réveille personne. Mesuré le 19 septembre 2026 : #248,
+   passe 1 tout traité, passe 2 à prompt identique rend cinq exigés neufs
+   dont un qu'elle avait classé « non exigé » — needs-human, 21 cartes
+   gelées derrière, pour cinq lignes de style.
 4. **Le relecteur sécurité** — Fable 5.1. **Bloquant, sans plafond** : une
    faille = pas de push, `needs-human` direct. Une remarque de maintenabilité se
    discute ; une faille, non.
@@ -227,12 +239,13 @@ envoyé), `<rôle>-<k>.brut` (la sortie du CLI, telle quelle), `<rôle>-<k>.md`
 (la réponse), `<rôle>-<k>.stderr`, et `<rôle>-<k>.json` (modèle attendu et
 prouvé, verdict, fenêtre `debut`/`fin`, `head_avant`/`head_apres`) ; l'analyste
 laisse aussi `analyse.json`. L'orchestrateur y écrit `card.json`,
-`socle-omis.md` (la justification d'une carte doc sans socle), `livraison.md`
+`socle-omis.md` (la justification d'une carte doc sans socle), `suite.md` (la
+carte de suite qui porte le reste exigé d'un relecteur maint au plafond), `livraison.md`
 (le commentaire que la boucle poste) et `pret` (le signal du push). **Le
 modèle est inscrit par le CLI**, jamais déclaré par l'agent. `turn-verify.sh`
 **refuse** le push sur `feature/*` si un artefact obligatoire manque, si le
-verdict sécurité n'est pas vert, si le compteur maintenabilité dépasse N sans
-`needs-human`, si un rôle est hors catalogue, si un artefact porte un autre
+verdict sécurité n'est pas vert, si le compteur maintenabilité est au plafond sur
+`changements` sans `suite.md`, ou le dépasse, si un rôle est hors catalogue, si un artefact porte un autre
 modèle que celui du catalogue, si le dernier relecteur n'a pas vu la tête
 poussée, ou si un commit n'est tombé dans la fenêtre d'aucun rôle qui écrit.
 La liberté de composer l'équipe reste entière *au-dessus* de ce socle. C'est
@@ -300,8 +313,8 @@ il exécute une carte qu'EVA a rédigée. Une remarque devient « #281, livrée 
 le commit X », pas un fil perdu. EVA répond aux questions produit.
 
 **Gardienne des décisions.** Dès qu'une décision apparaît (une carte
-`needs-human`, une refacto au-dessus du seuil, un désaccord de relecture, une
-question de cadrage), EVA ping l'humain et **l'interviewe** en DM Slack,
+`needs-human`, une refacto au-dessus du seuil, une faille, une question de
+cadrage — jamais un désaccord de maintenabilité, qui finit en carte de suite), EVA ping l'humain et **l'interviewe** en DM Slack,
 question par question, avec sa recommandation. **Relance toutes les 4 h, jamais
 avant 8 h ni après 21 h (Europe/Paris)** — c'est la règle d'EVA, pas le *Ne pas
 déranger* de Slack, qui ne fait que taire un téléphone pendant que l'horloge

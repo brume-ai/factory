@@ -258,8 +258,12 @@ porte refuse un fichier vide.
    relancé avec le rapport) / `illisible`. **N = `FACTORY_REVIEW_MAX`** (2)
    **passes** au plus : `k` est 1 + le plus grand numéro déjà écrit pour le
    rôle, donc un CLI en échec (4) qui a laissé son `.prompt.md` consomme une
-   passe ; `role.sh` refuse en 5 la passe N+1, sans rien lancer, et le
-   désaccord devient `needs-human` — on ne pousse pas « en notant ».
+   passe ; la passe 2 vérifie les exigés de la passe 1 (`role.sh` lui joint
+   son rapport et la réponse du codeur) ; `role.sh` refuse en 5 la passe N+1,
+   sans rien lancer. Un `changements` au plafond ne réveille personne : le
+   reste exigé part dans une **carte de suite** (`suite.md`, que la porte
+   exige) et le code est poussé — un désaccord de maintenabilité n'est ni un
+   choix métier ni une refonte risquée.
 4. **`relecteur-secu`** (Fable 5.1) : `ok` / `faille` → `needs-human` direct,
    sans relance, sans correction. Plus aucun commit de code après lui.
 5. **`writer`** (Haiku 4.5) : seulement si `comportement_documente` **et**

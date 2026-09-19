@@ -167,27 +167,45 @@ assert_rc 1 "$rc" "faille = 1 quoi qu'il arrive"
 assert_contains "$out" "rendu « faille »" "le motif nomme la faille"
 rm -f "$TURN/relecteur-secu-"*; socle
 
-# --- h) MAINT : DERNIER VERDICT « changements » = 1 ; k=3 = 1 --------------------
+# --- h) MAINT : « changements » SOUS LE PLAFOND = 1 ; AU PLAFOND = CARTE DE SUITE ; k=3 = 1
+# Sous le plafond, « changements » veut dire « relancez le codeur » : refus.
+rm -f "$TURN/relecteur-maint-"*
+art relecteur-maint 1 claude-opus-5 claude-opus-5 changements
+run 42 "$WT" base
+assert_rc 1 "$rc" "maint 1 changements sous N=2 = 1"
+assert_contains "$out" "relecteur-maint-1.json (le dernier) porte « changements »" "le motif"
+# AU PLAFOND, « changements » N'EST PAS UN ARBITRAGE HUMAIN : le reste exigé vit
+# dans une carte de suite, et la porte en exige la preuve — suite.md, première
+# ligne « #n ». Sans lui, refus ; avec une première ligne qui ne nomme pas de
+# carte, refus aussi (un « touch suite.md » ne porte rien).
 art relecteur-maint 2 claude-opus-5 claude-opus-5 changements
 run 42 "$WT" base
-assert_rc 1 "$rc" "dernier maint changements = 1"
-assert_contains "$out" "relecteur-maint-2.json (le dernier) porte « changements »" "le motif"
-# Le dernier compte : un 2 « ok » après un 1 « changements » passe.
-art relecteur-maint 1 claude-opus-5 claude-opus-5 changements
+assert_rc 1 "$rc" "maint 2 changements au plafond sans suite.md = 1"
+assert_contains "$out" "au plafond FACTORY_REVIEW_MAX=2" "le motif nomme le plafond"
+assert_contains "$out" "suite.md" "et ce qui manque"
+printf 'les points restants, sans carte\n' > "$TURN/suite.md"
+run 42 "$WT" base
+assert_rc 1 "$rc" "suite.md sans « #n » en tête = 1"
+printf '#77\n\n4. DealForm::placeLabel() duplique le format.\n' > "$TURN/suite.md"
+run 42 "$WT" base
+assert_rc 0 "$rc" "maint 2 changements au plafond, suite.md « #77 » = 0"
+assert_contains "$out" "carte de suite #77" "et la porte dit où est parti le reste"
+rm -f "$TURN/suite.md"
+# Le dernier compte : un 2 « ok » après un 1 « changements » passe, sans suite.md.
 art relecteur-maint 2 claude-opus-5 claude-opus-5 ok
 run 42 "$WT" base
 assert_rc 0 "$rc" "maint 1 changements puis 2 ok = 0"
-# k=3 dépasse N=2, même « ok » : le plafond est un arbitrage, pas un compteur.
+# k=3 dépasse N=2, même « ok » : role.sh a été contourné.
 art relecteur-maint 3 claude-opus-5 claude-opus-5 ok
 run 42 "$WT" base
 assert_rc 1 "$rc" "maint k=3 avec N=2 = 1"
 assert_contains "$out" "plafond FACTORY_REVIEW_MAX=2" "le motif nomme le plafond"
+assert_contains "$out" "contourné" "et dit que role.sh l'aurait refusé"
 make_conf 'FACTORY_REVIEW_MAX = 3'
 run 42 "$WT" base
 rm -f "$TESTTMP/factory.conf"
 assert_rc 0 "$rc" "FACTORY_REVIEW_MAX=3 accepte k=3"
 rm -f "$TURN/relecteur-maint-"*; socle
-
 # --- i) LE MODÈLE : CATALOGUE, ARTEFACT, ET PREUVE RECALCULÉE ----------------------
 # Un artefact COHÉRENT AVEC LUI-MÊME mais pas avec le catalogue : c'est ce qu'un
 # `FACTORY_ROLE_CODEUR=gpt-5-mini` posé dans le shell de l'orchestrateur
@@ -350,12 +368,12 @@ art inventeur 1 x x ok
 run 42 "$WT" base
 assert_rc 1 "$rc" "plusieurs motifs = 1"
 for motif in "aucun analyste-<k>.json valide" "modèle non prouvé : codeur-1.json" \
-             "relecteur-maint-3.json (le dernier) porte « changements »" "plafond FACTORY_REVIEW_MAX=2" \
+             "plafond FACTORY_REVIEW_MAX=2" \
              "rendu « faille »" "rôle hors catalogue : inventeur-1.json" "aucun codeur-<k>.json valide" \
              "relecteur-secu-1.json (le dernier) porte « faille »"; do
   assert_contains "$out" "$motif" "motif listé : $motif"
 done
-assert_contains "$out" "8 motif(s)" "le compte final les dit tous"
+assert_contains "$out" "7 motif(s)" "le compte final les dit tous"
 
 # --- o) UNE CARTE RÉADMISE REPREND SON TRAVAIL (head-admission) ---------------------
 # Le fait du 18 septembre : #247 arrêtée en needs-human APRÈS un commit du
