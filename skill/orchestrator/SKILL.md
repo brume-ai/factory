@@ -14,7 +14,9 @@ Un agent seul qui fait la carte de bout en bout est interdit, et ce n'est pas
 vous qui le garantissez : `turn-verify.sh` refuse le push d'un tour sans socle
 prouvé, `role.sh` refuse un rôle hors catalogue ou un relecteur relancé au-delà
 de N. Vous jouez les rôles dans l'ordre, lisez les verdicts, vous arrêtez au
-bon endroit.
+bon endroit. **Et vous êtes le juge** : quand le relecteur et le codeur ne
+sont plus d'accord au plafond, la boucle ne tranche pas et n'appelle pas un
+humain — vous lisez les deux, et le code, et vous décidez (étape 3).
 
 **Vous ne poussez JAMAIS.** Le bout d'un tour réussi est un fichier,
 `$ROOT/.omc/turn/<n>/pret`, posé quand `turn-verify.sh` a rendu 0 ; la boucle
@@ -124,7 +126,7 @@ Le catalogue est fermé, et c'est `role.sh` qui le tient :
 |---|---|---|
 | `analyste` | Opus 5 | oui, dès que la carte touche du code |
 | `codeur` | Codex `gpt-6-astra` | oui |
-| `relecteur-maint` | Opus 5 | oui — N = 2 allers-retours au plus ; au plafond, carte de suite, jamais needs-human |
+| `relecteur-maint` | Opus 5 | oui — N = 2 allers-retours au plus ; au plafond, VOUS arbitrez (`arbitrage.md`), jamais needs-human |
 | `relecteur-secu` | Fable 5.1 | oui — bloquant, sans plafond |
 | `writer` | Haiku 4.5 | si l'analyste a marqué « comportement documenté » ET que `DOCS.md` existe à la racine |
 | `test-engineer` | Fable 5.1 | optionnel |
@@ -262,23 +264,56 @@ bash "$ROOT"/tools/factory/bin/role.sh relecteur-maint "$N" "$WT" "$BASE" "$ROOT
   réponse du codeur — vous n'avez rien à passer de plus.
 
   `role.sh` **refuse (code 5) au-delà de N allers-retours**, sans rien lancer.
-  Si le dernier verdict est encore `changements`, **ce n'est pas un
-  arbitrage humain** : un désaccord de maintenabilité n'est ni un choix
-  métier ni une refonte risquée. Le code part, et ce qui reste exigé devient
-  une **carte de suite** — sous-issue du même parent, même recette que la
+  Si le dernier verdict est encore `changements`, **vous êtes le juge.** Ce
+  n'est pas un arbitrage humain (un désaccord de maintenabilité n'est ni un
+  choix métier ni une refonte risquée), et ce n'est pas non plus une
+  mécanique : la boucle borne, elle ne tranche pas. Lisez les deux parties —
+  `relecteur-maint-<k>.md` et `codeur-<k>.md` — **et le code**, dans le
+  worktree, point par point. Pour chaque point encore exigé, décidez :
+
+  - **retenu** — le défaut est réel et coûtera plus cher après le push
+    (duplication qui divergera, docblock qui ment, spec perdue, test qui ne
+    prouve rien, hors-carte, ou un défaut que la correction a introduit) ;
+  - **écarté** — c'est une préférence, un point que le relecteur n'avait pas
+    exigé à la passe précédente, un point déjà traité autrement, ou une règle
+    métier qui n'est pas la sienne à réécrire. Dites pourquoi, en une phrase.
+
+  Écrivez `$ROOT/.omc/turn/$N/arbitrage.md` : les points, votre décision et
+  sa raison, puis **en dernière ligne, exactement** l'une des trois :
+
+  - `ARBITRAGE: reprise` — au moins un point retenu. Relancez le codeur avec
+    `arbitrage.md` en entrée (il ne traite que les retenus), puis le
+    relecteur : `role.sh` ouvre **une** passe de plus, la N+1, sur ce mot
+    seulement, et lui joint votre arbitrage (il ne vérifie que les retenus).
+    Si cette passe rend encore `changements`, pas de second arbitrage : les
+    points restants partent en carte de suite (ci-dessous) et le code part.
+  - `ARBITRAGE: suite` — rien de retenu pour ce tour, mais une dette réelle
+    à porter : créez la carte de suite (ci-dessous), écrivez `suite.md`.
+  - `ARBITRAGE: ok` — chaque point écarté, avec sa raison. Le code part tel
+    quel. Votre verdict est répété dans le commentaire de livraison sur la
+    PR : un « ok » de complaisance se voit.
+
+  `turn-verify.sh` refuse le push d'un `changements` au plafond sans
+  `arbitrage.md`, et d'un `suite` sans `suite.md`.
+
+```bash
+bash "$ROOT"/tools/factory/bin/role.sh codeur "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md" "$ROOT/.omc/turn/$N/arbitrage.md"
+bash "$ROOT"/tools/factory/bin/role.sh relecteur-maint "$N" "$WT" "$BASE" "$ROOT/.omc/turn/$N/analyste-1.md"
+```
+
+  **La carte de suite** — sous-issue du même parent, même recette que la
   refacto petite (étape 1), mais **sans dépendance bloquante** et sans
   priorité : la dette est visible dans la feature, elle n'arrête rien.
-  Écrivez `$ROOT/.omc/turn/$N/suite.md` (première ligne `#M`, puis les points
-  exigés restants, cités) : `turn-verify.sh` refuse le push sans lui.
+  `suite.md` : première ligne `#M`, puis les points, cités.
 
 ```bash
 M="$(gh issue create --title "suite: <ce que le relecteur exige encore, en un titre>" \
-  --body "$(printf 'Reste de relecture maintenabilité de #%s, non tranché en %s passes.\n\n%s' "$N" "<N>" "<les exigés restants, cités depuis relecteur-maint-<k>.md>")" | grep -oE '[0-9]+$')"
+  --body "$(printf 'Reste de relecture maintenabilité de #%s, arbitré par l'"'"'orchestrateur.\n\n%s' "$N" "<les points restants, cités depuis relecteur-maint-<k>.md, et l'"'"'arbitrage>")" | grep -oE '[0-9]+$')"
 parent_url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("parent_issue_url") or "")' "$ROOT/.omc/turn/$N/card.json")"
 parent_id="$(gh api "${parent_url:-repos/$GH_REPO/issues/$N}" --jq .node_id)"
 enfant_id="$(gh api "repos/$GH_REPO/issues/$M" --jq .node_id)"
 gh api graphql -f query='mutation($p:ID!,$e:ID!){ addSubIssue(input:{issueId:$p, subIssueId:$e}) { issue { number } } }' -F p="$parent_id" -F e="$enfant_id"
-printf '#%s\n\n%s\n' "$M" "<les exigés restants, cités>" > "$ROOT/.omc/turn/$N/suite.md"
+printf '#%s\n\n%s\n' "$M" "<les points restants, cités>" > "$ROOT/.omc/turn/$N/suite.md"
 ```
 
   Puis continuez : la sécurité, sur ce diff.
@@ -362,8 +397,10 @@ environnement, pousse `feature/<F>`, poste la livraison, ferme la carte.
 - **Corriger une faille sécurité par un aller-retour codeur.** C'est
   `needs-human`, tout de suite.
 - **Mettre une carte en `needs-human` pour un désaccord de maintenabilité.**
-  Au plafond, c'est une carte de suite et un push — un humain ne tranche que
-  le métier, une refonte risquée, une faille.
+  Au plafond, c'est VOUS qui jugez, point par point (`arbitrage.md`) — un
+  humain ne tranche que le métier, une refonte risquée, une faille. Et vous
+  ne jugez pas sans lire le code : un arbitrage écrit depuis les deux
+  rapports seuls est une pièce de monnaie.
 - **Écrire `Closes #N`, `Fixes #N` ou `Resolves #N`**, dans un commit comme
   ailleurs : c'est `Refs #N`, toujours — la livraison ferme la carte, la
   release ferme la feature.
@@ -381,7 +418,7 @@ Cinq sorties, une seule est un succès : **`pret` posé** (`turn-verify.sh` a
 rendu 0, `livraison.md` écrit) ; **refacto petite carvée** (sous-issue
 bloquante, carte `blocked`) ; **`needs-human`** (refacto grande, faille,
 relecteur ou CLI deux fois en échec — jamais un désaccord de maintenabilité
-au plafond, qui finit en carte de suite —, toute décision
+au plafond, que vous arbitrez vous-même —, toute décision
 qu'aucun rôle ne peut prendre — toujours par `card-state.sh "$N" needs-human
 "<le pourquoi, cité>"`, qui commente et pose le marqueur de remise à zéro) ; **prémisse fausse,
 prouvée** — le travail est déjà dans la branche de la feature ou de travail,

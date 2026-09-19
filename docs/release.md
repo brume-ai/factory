@@ -260,10 +260,12 @@ porte refuse un fichier vide.
    rôle, donc un CLI en échec (4) qui a laissé son `.prompt.md` consomme une
    passe ; la passe 2 vérifie les exigés de la passe 1 (`role.sh` lui joint
    son rapport et la réponse du codeur) ; `role.sh` refuse en 5 la passe N+1,
-   sans rien lancer. Un `changements` au plafond ne réveille personne : le
-   reste exigé part dans une **carte de suite** (`suite.md`, que la porte
-   exige) et le code est poussé — un désaccord de maintenabilité n'est ni un
-   choix métier ni une refonte risquée.
+   sans rien lancer, sauf UNE passe N+1 sur `ARBITRAGE: reprise`. Un
+   `changements` au plafond ne réveille personne : **l'orchestrateur juge**
+   (`arbitrage.md` : `reprise` — les points retenus, une passe de plus ;
+   `suite` — carte de suite, `suite.md` ; `ok` — tout écarté, motivé, répété
+   sur la PR) et le code est poussé — un désaccord de maintenabilité n'est ni
+   un choix métier ni une refonte risquée.
 4. **`relecteur-secu`** (Fable 5.1) : `ok` / `faille` → `needs-human` direct,
    sans relance, sans correction. Plus aucun commit de code après lui.
 5. **`writer`** (Haiku 4.5) : seulement si `comportement_documente` **et**

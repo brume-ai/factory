@@ -49,7 +49,10 @@
 #                          head_apres — le résumé que turn-verify relit ET recalcule
 #   analyse.json           pour l'analyste seulement : son bloc JSON final
 #   socle-omis.md          la justification écrite d'une carte doc sans socle (orchestrateur)
-#   suite.md               « #n » puis les exigés restants du relecteur maint au plafond,
+#   arbitrage.md           le jugement de l'orchestrateur sur le désaccord relecteur maint /
+#                          codeur au plafond, point par point ; dernière ligne
+#                          ARBITRAGE: reprise | suite | ok (orchestrateur)
+#   suite.md               « #n » puis les exigés restants après arbitrage « suite »,
 #                          portés par la carte de suite #n (orchestrateur)
 #   livraison.md           le commentaire de livraison (orchestrateur ; la boucle le poste)
 #   pret                   posé par l'orchestrateur quand turn-verify a rendu 0 ; la boucle pousse
@@ -206,19 +209,28 @@ for ext in prompt.md brut stderr md json; do
 done
 
 # LE PLAFOND N, ET IL MORD AVANT TOUT LANCEMENT. Le relecteur maintenabilité a
-# droit à FACTORY_REVIEW_MAX allers-retours (2 par défaut, spec § 4) ; au-delà,
-# rien n'est relancé : ce qui reste exigé part dans une carte de suite et le
-# code est poussé (turn-verify.sh exige `suite.md`). Un désaccord de
-# maintenabilité n'est ni un choix métier ni une refonte risquée — il ne
-# réveille pas un humain. Le refus est ici et pas dans turn-verify seulement,
-# parce qu'un relecteur lancé pour rien coûte un modèle entier — et parce que
-# l'orchestrateur ne doit pas POUVOIR boucler, quoi que dise son prompt. Code 5,
-# distinct de tout le reste.
+# droit à FACTORY_REVIEW_MAX allers-retours (2 par défaut, spec § 4). Au-delà,
+# LE DÉSACCORD EST JUGÉ PAR L'ORCHESTRATEUR, pas par ce script ni par un
+# humain : il lit les deux parties et écrit `arbitrage.md` (dernière ligne
+# `ARBITRAGE: reprise | suite | ok`). `reprise` ouvre EXACTEMENT UNE passe de
+# plus (N+1) : le codeur traite les points retenus, le relecteur les vérifie.
+# Rien d'autre ne rouvre le relecteur — la mécanique borne, le juge tranche,
+# et aucun des deux ne boucle. Le refus est ici et pas dans turn-verify
+# seulement, parce qu'un relecteur lancé pour rien coûte un modèle entier.
+# Code 5, distinct de tout le reste.
 REVIEW_MAX="$(conf_get FACTORY_REVIEW_MAX 2)"
 case "$REVIEW_MAX" in ''|*[!0-9]*|0) echo "role: FACTORY_REVIEW_MAX doit être un entier ≥ 1 (« $REVIEW_MAX »)" >&2; exit 3 ;; esac
+arbitrage_verdict() {  # imprime le verdict d'arbitrage.md (sa dernière ligne non vide), ou rien
+  [ -s "$TURN/arbitrage.md" ] || return 0
+  sed -n 's/^ARBITRAGE: *\([^ ]*\) *$/\1/p' "$TURN/arbitrage.md" | tail -n1
+}
 if [ "$ROLE" = relecteur-maint ] && [ "$K" -gt "$REVIEW_MAX" ]; then
-  echo "role: relecteur-maint a déjà fait $REVIEW_MAX aller(s)-retour(s) sur #$ISSUE (plafond FACTORY_REVIEW_MAX=$REVIEW_MAX) : rien n'est lancé. Ce qui reste exigé va dans une carte de suite (.omc/turn/$ISSUE/suite.md, première ligne #n), puis la sécurité et le push — pas needs-human." >&2
-  exit 5
+  if [ "$K" -eq $((REVIEW_MAX+1)) ] && [ "$(arbitrage_verdict)" = reprise ]; then
+    echo "role: relecteur-maint passe $K, au-delà du plafond FACTORY_REVIEW_MAX=$REVIEW_MAX sur arbitrage « reprise » de l'orchestrateur — la seule passe supplémentaire possible" >&2
+  else
+    echo "role: relecteur-maint a déjà fait $((K-1)) aller(s)-retour(s) sur #$ISSUE (plafond FACTORY_REVIEW_MAX=$REVIEW_MAX) : rien n'est lancé. Le désaccord est à JUGER par l'orchestrateur : .omc/turn/$ISSUE/arbitrage.md, dernière ligne ARBITRAGE: reprise (une passe de plus, une seule) | suite (carte de suite, suite.md) | ok — jamais needs-human." >&2
+    exit 5
+  fi
 fi
 
 # LA PASSE k ≥ 2 DU RELECTEUR MAINTENABILITÉ VÉRIFIE, ELLE NE RELIT PAS À FROID.
@@ -258,9 +270,16 @@ PY
     PASSE+="Votre passe $((K-1)) (jointe ci-dessous) a rendu « changements » ; le codeur y a répondu"
     [ -z "$dernier_codeur" ] || PASSE+=" (sa réponse est jointe : $(basename "$dernier_codeur"))"
     PASSE+=". HEAD était alors \`$prec_head\` ; \`git diff $prec_head..HEAD\` montre ce qui a changé depuis, si cet objet existe encore (le codeur peut avoir amendé son commit) — sinon relisez le diff de la carte sur ces points-là."$'\n\n'
-    PASSE+="Cette passe juge UNE chose : chaque point que vous aviez EXIGÉ est-il traité dans le code, pas dans la parole du codeur ? Tous traités — ou traités autrement, mais le défaut nommé a disparu — c'est \`VERDICT: ok\`, même si vous voyez autre chose. Un exigé ignoré ou traité en façade, c'est \`VERDICT: changements\`, en citant son numéro d'origine et ce qui manque. Ce que vous voyez de nouveau sur du code que vous aviez déjà sous les yeux est une remarque non exigée ; un point non exigé à la passe $((K-1)) ne le devient pas. Seul un défaut que la correction elle-même a introduit peut être exigé."$'\n\n---\n\n'
-    PASSE+="# Entrée : $(basename "$prec_md")"$'\n\n'"$(cat "$prec_md")"
+    PASSE+="Cette passe juge UNE chose : chaque point que vous aviez EXIGÉ est-il traité dans le code, pas dans la parole du codeur ? Tous traités — ou traités autrement, mais le défaut nommé a disparu — c'est \`VERDICT: ok\`, même si vous voyez autre chose. Un exigé ignoré ou traité en façade, c'est \`VERDICT: changements\`, en citant son numéro d'origine et ce qui manque. Ce que vous voyez de nouveau sur du code que vous aviez déjà sous les yeux est une remarque non exigée ; un point non exigé à la passe $((K-1)) ne le devient pas. Seul un défaut que la correction elle-même a introduit peut être exigé."$'\n\n'
+    # La passe ouverte par un arbitrage « reprise » ne vérifie que les points
+    # que l'orchestrateur a RETENUS : les écartés sont écartés, même si le
+    # relecteur les tient toujours pour exigés — c'est le juge qui a tranché.
+    if [ "$K" -gt "$REVIEW_MAX" ]; then
+      PASSE+="Cette passe est ouverte par l'ARBITRAGE de l'orchestrateur (joint : arbitrage.md), qui a jugé le désaccord point par point. Vous ne vérifiez que les points qu'il a RETENUS ; ceux qu'il a écartés le sont, quoi que vous en pensiez encore — ils ne reviennent ni en exigé ni en remarque."$'\n\n'
+    fi
+    PASSE+=$'---\n\n'"# Entrée : $(basename "$prec_md")"$'\n\n'"$(cat "$prec_md")"
     [ -z "$dernier_codeur" ] || PASSE+=$'\n\n---\n\n'"# Entrée : $(basename "$dernier_codeur")"$'\n\n'"$(cat "$dernier_codeur")"
+    [ "$K" -le "$REVIEW_MAX" ] || PASSE+=$'\n\n---\n\n'"# Entrée : arbitrage.md"$'\n\n'"$(cat "$TURN/arbitrage.md")"
   fi
 fi
 # LE SEUIL DE REFACTO EST UNE CLÉ, PAS UN CHIFFRE DANS UN PROMPT : l'analyste
